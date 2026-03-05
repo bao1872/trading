@@ -2411,22 +2411,19 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     md_parts.append(f"### {i}. {stock_name} ({symbol})")
                     md_parts.append("")
                     
-                    # 涨跌幅颜色和箭头
+                    # 涨跌幅颜色和箭头（涨红色，跌绿色）
                     if pct_change > 0:
-                        pct_color = "red"
-                        pct_arrow = "🔺"
+                        pct_arrow = "<font color=\"red\">🔺</font>"
                     elif pct_change < 0:
-                        pct_color = "green"
-                        pct_arrow = "🔻"
+                        pct_arrow = "<font color=\"green\">🔻</font>"
                     else:
-                        pct_color = "gray"
                         pct_arrow = "➖"
                     
-                    pct_display = f"{pct_arrow} {pct_change:+.2f}%"
+                    pct_display = f"{pct_change:+.2f}%"
                     
-                    # 股价显示（去掉 icon，只用颜色）
-                    md_parts.append(f"- **💰 股价**: <font color=\"{price_color}\">{last_close:.2f}</font>")
-                    md_parts.append(f"- **📈 涨跌幅**: <font color=\"{pct_color}\">{pct_display}</font>")
+                    # 股价显示（数字不用颜色）
+                    md_parts.append(f"- **💰 股价**: {last_close:.2f}")
+                    md_parts.append(f"- **📈 涨跌幅**: {pct_arrow} {pct_display}")
                     md_parts.append(f"- **📈 背离**: {type_display}")
                     md_parts.append(f"- **⏰ 周期**: {period_viz}")
                     md_parts.append(f"- **⏳ 年龄**: **{min_age}** 个周期")
