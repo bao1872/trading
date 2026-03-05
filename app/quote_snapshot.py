@@ -2384,16 +2384,22 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                         # 背离类型基础显示
                         base_display = f"{div['period']}{type_emoji}{type_text}"
                         
-                        # 添加带颜色的指标标识
-                        # MACD: 大红色，OBV: 黄色，HIST: 蓝色
+                        # 添加带颜色的指标标识，用符号分隔
+                        # MACD: 大红色 ●，OBV: 黄色 ◆，HIST: 蓝色 ■
                         if indicator:
                             indicator_colors = {
                                 'MACD': '#FF0000',  # 大红色
                                 'OBV': '#FFFF00',   # 黄色
                                 'Hist': '#0000FF',  # 蓝色
                             }
+                            indicator_symbols = {
+                                'MACD': '●',  # 圆点
+                                'OBV': '◆',  # 菱形
+                                'Hist': '■',  # 方块
+                            }
                             color = indicator_colors.get(indicator, '#808080')
-                            period_div_info.append(f"{base_display}<font color=\"{color}\">{indicator}</font>")
+                            symbol = indicator_symbols.get(indicator, '•')
+                            period_div_info.append(f"{base_display} {symbol}<font color=\"{color}\">{indicator}</font>")
                         else:
                             period_div_info.append(base_display)
                     
