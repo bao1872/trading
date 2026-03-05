@@ -8,8 +8,11 @@
 3. 扫描 1 年内人气排名：遍历 1 年内每个交易日的人气排名并打印前 10 名
 
 Usage:
-    # 更新股票概念缓存
+    # 更新股票概念缓存（同时保存到 Excel 和数据库）
     python cores/cache_generator.py --update-cache
+    
+    # 更新股票概念缓存（只保存 Excel，不保存到数据库）
+    python cores/cache_generator.py --update-cache --no-db
     
     # 获取指定日期的人气排名
     python cores/cache_generator.py --date 2024-03-01
@@ -43,17 +46,21 @@ Examples:
     # 示例 2: 扫描 2024 年全年的交易日人气排名
     python cores/cache_generator.py --scan-popularity --end-date 2024-12-31
     
-    # 示例 3: 更新最新的股票概念缓存
+    # 示例 3: 更新最新的股票概念缓存（同时保存到 Excel 和数据库）
     python cores/cache_generator.py --update-cache
+    
+    # 示例 4: 只更新 Excel 文件，不保存到数据库
+    python cores/cache_generator.py --update-cache --no-db
 
 Side Effects:
-    - --update-cache: 会在项目根目录生成/更新 stock_concepts_cache.xlsx 文件
+    - --update-cache: 会生成/更新 stock_concepts_cache.xlsx 文件，并写入数据库 stock_concepts_cache 表（默认）
+    - --update-cache --no-db: 只生成/更新 stock_concepts_cache.xlsx 文件，不写入数据库
     - --date: 仅打印输出，不修改任何文件
     - --date --save-to-db: 将指定日期数据写入数据库 stock_popularity_rank 表
     - --scan-popularity: 仅打印输出，不修改任何文件
     - --scan-popularity --save-to-db: 将所有日期数据写入数据库（默认增量更新）
     - --scan-popularity --save-to-db --no-incremental: 全量覆盖写入数据库
-    - --create-table: 创建数据库表 stock_popularity_rank
+    - --create-table: 创建数据库表 stock_popularity_rank 或 stock_concepts_cache
 
 Dependencies:
     - pywencai: 用于获取问财数据
@@ -142,36 +149,73 @@ def _transform_raw_data(raw_df: pd.DataFrame) -> pd.DataFrame | None:
         
     return cache_df[output_cols]
 
-def update_cache_from_pywencai():
+def save_concepts_to_db(df: pd.DataFrame, session) -> int:
     """
-    使用pywencai自动获取所有A股的概念、人气和市值，并将其保存到Excel文件。
+    将股票概念缓存数据保存到数据库
+    
+    Args:
+        df: 数据 DataFrame
+        session: 数据库会话
+        
+    Returns:
+        写入的行数
     """
-    logger.info("正在通过问财获取所有A股的概念、人气及市值数据...")
+    from app.db import bulk_upsert
+    from sqlalchemy import Table, MetaData
+    
+    if df is None or df.empty:
+        return 0
+    
+    metadata = MetaData()
+    table = Table('stock_concepts_cache', metadata, autoload_with=session.bind)
+    
+    unique_keys = ['ts_code']
+    count = bulk_upsert(session, type('Model', (), {'__tablename__': 'stock_concepts_cache'}), df, unique_keys)
+    
+    logger.info(f"写入股票概念缓存数据 {count} 条")
+    return count
+
+
+def update_cache_from_pywencai(save_to_db: bool = True):
+    """
+    使用 pywencai 自动获取所有 A 股的概念、人气和市值，并将其保存到 Excel 文件和数据库。
+    
+    Args:
+        save_to_db: 是否同时保存到数据库，默认 True
+    """
+    logger.info("正在通过问财获取所有 A 股的概念、人气及市值数据...")
     try:
-        query_text = '非st，主板或创业板或科创板，所属概念，人气排名，流通市值，总市值，行业分类，行业平均PE'
+        query_text = '非 st，主板或创业板或科创板，所属概念，人气排名，流通市值，总市值，行业分类，行业平均 PE'
         res = wc.get(query=query_text, loop=True, sleep=2, cookie=None)
         
         if res is None or res.empty:
-            logger.error("未能从问财获取到数据。可能是Cookie已过期。")
+            logger.error("未能从问财获取到数据。可能是 Cookie 已过期。")
             return
 
         logger.info(f"成功获取到 {len(res)} 条原始数据，正在处理...")
         transformed_df = _transform_raw_data(res)
     
         if transformed_df is not None and not transformed_df.empty:
-            logger.info("正在将缓存数据写入Excel文件")
+            logger.info("正在将缓存数据写入 Excel 文件")
             
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             excel_path = os.path.join(project_root, 'stock_concepts_cache.xlsx')
             
             transformed_df.to_excel(excel_path, index=False, engine='openpyxl')
-            logger.info(f"成功保存数据到: {excel_path}")
+            logger.info(f"成功保存数据到：{excel_path}")
             logger.info(f"共保存 {len(transformed_df)} 条股票数据")
+            
+            if save_to_db:
+                logger.info("正在将缓存数据写入数据库...")
+                from app.db import get_session
+                with get_session() as session:
+                    count = save_concepts_to_db(transformed_df, session)
+                    logger.info(f"成功保存 {count} 条数据到数据库 stock_concepts_cache 表")
         else:
-            logger.warning("数据转换失败或结果为空，未写入Excel文件。")
+            logger.warning("数据转换失败或结果为空，未写入 Excel 文件。")
 
     except Exception as e:
-        logger.error(f"生成概念缓存时发生错误: {e}")
+        logger.error(f"生成概念缓存时发生错误：{e}")
         raise
 
 def get_popularity_rank_by_date(target_date: str):
@@ -406,7 +450,8 @@ if __name__ == '__main__':
         sys.path.insert(0, base_dir)
     
     parser = argparse.ArgumentParser(description="股票概念缓存生成器")
-    parser.add_argument("--update-cache", action="store_true", help="更新股票概念缓存")
+    parser.add_argument("--update-cache", action="store_true", help="更新股票概念缓存（同时保存到 Excel 和数据库）")
+    parser.add_argument("--no-db", action="store_true", help="更新缓存时不保存到数据库（只保存 Excel）")
     parser.add_argument("--scan-popularity", action="store_true", help="扫描 1 年内人气排名")
     parser.add_argument("--end-date", type=str, default=None, help="扫描结束日期，格式 YYYY-MM-DD")
     parser.add_argument("--date", type=str, default=None, help="获取指定日期的人气排名，格式 YYYY-MM-DD")
@@ -421,13 +466,20 @@ if __name__ == '__main__':
         from app.models import get_create_sql
         from sqlalchemy import text
         with get_session() as session:
+            # 创建人气排名表
             sql = get_create_sql("stock_popularity_rank")
             session.execute(text(sql))
             logger.info("已创建表 stock_popularity_rank")
+            
+            # 创建股票概念缓存表
+            sql = get_create_sql("stock_concepts_cache")
+            session.execute(text(sql))
+            logger.info("已创建表 stock_concepts_cache")
         sys.exit(0)
     
     if args.update_cache:
-        update_cache_from_pywencai()
+        save_to_db = not args.no_db
+        update_cache_from_pywencai(save_to_db=save_to_db)
     elif args.scan_popularity:
         scan_popularity_rank_for_year(
             end_date=args.end_date,

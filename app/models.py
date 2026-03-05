@@ -160,6 +160,40 @@ CREATE INDEX IF NOT EXISTS idx_pop_rank_rank ON stock_popularity_rank(rank);
 """
 TABLE_DEFINITIONS["stock_popularity_rank"] = POPULARITY_RANK_TABLE
 
+STOCK_LIST_TABLE = """
+CREATE TABLE IF NOT EXISTS stock_list (
+    id SERIAL PRIMARY KEY,
+    stock_name VARCHAR(50) NOT NULL UNIQUE,
+    ts_code VARCHAR(20),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_stock_list_name ON stock_list(stock_name);
+CREATE INDEX IF NOT EXISTS idx_stock_list_code ON stock_list(ts_code);
+"""
+TABLE_DEFINITIONS["stock_list"] = STOCK_LIST_TABLE
+
+
+STOCK_CONCEPTS_CACHE_TABLE = """
+CREATE TABLE IF NOT EXISTS stock_concepts_cache (
+    id SERIAL PRIMARY KEY,
+    ts_code VARCHAR(20) NOT NULL UNIQUE,
+    name VARCHAR(50) NOT NULL,
+    concepts TEXT,
+    popularity_rank INTEGER,
+    market_cap FLOAT,
+    total_market_cap FLOAT,
+    industry VARCHAR(100),
+    industry_pe FLOAT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_concepts_ts_code ON stock_concepts_cache(ts_code);
+CREATE INDEX IF NOT EXISTS idx_concepts_name ON stock_concepts_cache(name);
+CREATE INDEX IF NOT EXISTS idx_concepts_popularity ON stock_concepts_cache(popularity_rank);
+CREATE INDEX IF NOT EXISTS idx_concepts_industry ON stock_concepts_cache(industry);
+"""
+TABLE_DEFINITIONS["stock_concepts_cache"] = STOCK_CONCEPTS_CACHE_TABLE
+
 
 def get_table_names() -> List[str]:
     """获取所有表名列表"""
