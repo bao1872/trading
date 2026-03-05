@@ -2140,7 +2140,20 @@ def scan_divergence_for_stock(api, symbol: str, stock_name: str) -> Dict:
         'has_divergence': False,
         'last_close': 0.0,  # 最新收盘价
         'pct_change': 0.0,  # 当日涨跌幅（百分比）
+        'div_time': None,  # 背离发生时间
     }
+    
+    # 获取日线数据计算当日涨跌幅
+    try:
+        df_daily = get_kline_data(api, symbol, 'd', 2)
+        if not df_daily.empty and len(df_daily) >= 2:
+            # 使用日线数据计算当日涨跌幅
+            results['last_close'] = float(df_daily['close'].iloc[-1])
+            prev_close = float(df_daily['close'].iloc[-2])  # 昨日收盘价
+            if prev_close > 0:
+                results['pct_change'] = ((results['last_close'] - prev_close) / prev_close) * 100
+    except Exception:
+        pass  # 如果获取日线失败，使用默认值
     
     for period in periods:
         try:
@@ -2182,6 +2195,10 @@ def scan_divergence_for_stock(api, symbol: str, stock_name: str) -> Dict:
                         'indicator': div_indicator,  # 添加指标类型
                     })
                     results['has_divergence'] = True
+                    
+                    # 记录背离时间（用于 5 分钟超时检查）
+                    if div_time and (results['div_time'] is None or div_time > results['div_time']):
+                        results['div_time'] = div_time
         
         except Exception as e:
             print(f"  ⚠️ {stock_name} {period} 周期扫描失败: {e}")
@@ -2268,6 +2285,17 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                 stock_name = result['name']
                 last_close = result.get('last_close', 0)
                 pct_change = result.get('pct_change', 0)  # 获取涨跌幅
+                div_time = result.get('div_time')  # 背离时间
+                
+                # 检查背离时间是否超过 5 分钟（测试时跳过此检查）
+                if div_time and os.getenv('TEST_MODE', 'false').lower() != 'true':
+                    try:
+                        time_diff = datetime.now() - div_time
+                        if time_diff.total_seconds() > 300:  # 5 分钟 = 300 秒
+                            logger.debug(f"跳过超时信号：{symbol} 背离时间 {div_time}，距今 {time_diff.total_seconds():.0f} 秒")
+                            continue
+                    except Exception:
+                        pass
                 
                 # 获取底背离信号
                 for div in result['divergences']:
@@ -2329,12 +2357,19 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     price_emoji = "🔺" if last_close > 0 else "🔻"
                     price_color = "red" if last_close > 0 else "green"
                     
-                    # 背离类型（底背离/顶背离）- 底背离用红色，顶背离用绿色
+                    # 背离类型可视化（底背离用红色，顶背离用绿色）+ 指标类型
                     is_bottom = divs[0]['type'] == 'bottom'
                     type_emoji = "🔴" if is_bottom else "🟢"  # 底背离红色，顶背离绿色
                     type_text = "底背离" if is_bottom else "顶背离"
                     
-                    # 周期可视化（带颜色等级）
+                    # 合并所有指标（去重）
+                    all_indicators = list(set(div.get('indicator', '') for div in divs if div.get('indicator')))
+                    indicator_display = f" [{', '.join(all_indicators)}]" if all_indicators else ""
+                    
+                    # 背离类型显示：🔴 底背离 [MACD]
+                    type_display = f"{type_emoji} {type_text}{indicator_display}"
+                    
+                    # 周期可视化（带颜色等级，添加空格）
                     period_colors = {
                         '60m': '🔴', '30m': '🟠', '15m': '🟡', '5m': '🟢', '1m': '🌸',
                     }
@@ -2359,18 +2394,17 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     
                     md_parts.append(f"- **💰 股价**: <font color=\"{price_color}\">{last_close:.2f}</font> {price_emoji}")
                     md_parts.append(f"- **📈 涨跌幅**: <font color=\"{pct_color}\">{pct_display}</font>")
-                    md_parts.append(f"- **📈 类型**: {type_emoji} {type_text}")
+                    md_parts.append(f"- **📈 背离**: {type_display}")
                     md_parts.append(f"- **⏰ 周期**: {period_viz}")
-                    md_parts.append(f"- **📊 指标**: {indicator_str if indicator_str else '无'}")
                     md_parts.append(f"- **⏳ 年龄**: **{min_age}** 个周期")
                     if time_str:
                         md_parts.append(f"- **🕐 时间**: {time_str}")
                     md_parts.append("")
                     
-                    # 添加分隔线（最后一只股票后不加）
-                    if i < len(stock_signals):
-                        md_parts.append("---")
-                        md_parts.append("")
+                    # 添加分隔线（最后一只股票后不加）- 去掉分隔线
+                    # if i < len(stock_signals):
+                    #     md_parts.append("---")
+                    #     md_parts.append("")
                 
                 # 合并并发送
                 md_text = "\n".join(md_parts)
