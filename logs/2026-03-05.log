@@ -1,0 +1,1774 @@
+2026-03-05 15:01:01 | INFO     | __main__ | 扫描周期：['15m', '60m', 'd', 'w']
+2026-03-05 15:01:01 | INFO     | __main__ | 计算最近 255 个 bar
+2026-03-05 15:01:01 | INFO     | __main__ | 股票池共 5012 只股票
+2026-03-05 15:01:02 | INFO     | __main__ | 表 stock_amp_features 已创建/确认存在
+2026-03-05 15:01:31 | INFO     | __main__ | 洲际油气(600759.SH) 15m: 16 bars, strength=0.980, close_pos=0.389, activity=0.232
+2026-03-05 15:01:34 | INFO     | __main__ | 洲际油气(600759.SH) 60m: 4 bars, strength=0.960, close_pos=1.000, activity=0.392
+2026-03-05 15:01:46 | INFO     | __main__ | 洲际油气(600759.SH) d: 1 bars, strength=0.963, close_pos=1.000, activity=0.423
+2026-03-05 15:01:47 | INFO     | __main__ | 洲际油气(600759.SH) w: 1 bars, strength=0.742, close_pos=1.000, activity=0.458
+2026-03-05 15:01:48 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:01:49 | INFO     | __main__ | 华胜天成(600410.SH) 15m: 16 bars, strength=0.921, close_pos=0.100, activity=0.206
+2026-03-05 15:01:50 | INFO     | __main__ | 华胜天成(600410.SH) 60m: 4 bars, strength=0.920, close_pos=0.162, activity=0.250
+2026-03-05 15:01:51 | INFO     | __main__ | 华胜天成(600410.SH) d: 1 bars, strength=0.942, close_pos=0.519, activity=0.213
+2026-03-05 15:01:52 | INFO     | __main__ | 华胜天成(600410.SH) w: 1 bars, strength=0.952, close_pos=0.541, activity=0.210
+2026-03-05 15:01:52 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:01:53 | INFO     | __main__ | 杭电股份(603618.SH) 15m: 16 bars, strength=0.966, close_pos=0.312, activity=0.162
+2026-03-05 15:01:54 | INFO     | __main__ | 杭电股份(603618.SH) 60m: 4 bars, strength=0.965, close_pos=0.369, activity=0.203
+2026-03-05 15:01:55 | INFO     | __main__ | 杭电股份(603618.SH) d: 1 bars, strength=0.877, close_pos=0.853, activity=0.378
+2026-03-05 15:01:56 | INFO     | __main__ | 杭电股份(603618.SH) w: 1 bars, strength=0.865, close_pos=1.000, activity=0.324
+2026-03-05 15:01:56 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:01:57 | INFO     | __main__ | 中国石油(601857.SH) 15m: 16 bars, strength=0.878, close_pos=0.092, activity=0.217
+2026-03-05 15:01:59 | INFO     | __main__ | 中国石油(601857.SH) 60m: 4 bars, strength=0.856, close_pos=1.000, activity=0.391
+2026-03-05 15:02:00 | INFO     | __main__ | 中国石油(601857.SH) d: 1 bars, strength=0.885, close_pos=1.000, activity=0.368
+2026-03-05 15:02:01 | INFO     | __main__ | 中国石油(601857.SH) w: 1 bars, strength=0.916, close_pos=0.908, activity=0.273
+2026-03-05 15:02:01 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:02 | INFO     | __main__ | 汉缆股份(002498.SZ) 15m: 16 bars, strength=0.911, close_pos=0.529, activity=0.202
+2026-03-05 15:02:03 | INFO     | __main__ | 汉缆股份(002498.SZ) 60m: 4 bars, strength=0.943, close_pos=0.724, activity=0.373
+2026-03-05 15:02:04 | INFO     | __main__ | 汉缆股份(002498.SZ) d: 1 bars, strength=0.935, close_pos=0.802, activity=0.431
+2026-03-05 15:02:05 | INFO     | __main__ | 汉缆股份(002498.SZ) w: 1 bars, strength=0.695, close_pos=1.000, activity=0.492
+2026-03-05 15:02:05 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:06 | INFO     | __main__ | 顺钠股份(000533.SZ) 15m: 16 bars, strength=0.935, close_pos=0.266, activity=0.261
+2026-03-05 15:02:07 | INFO     | __main__ | 顺钠股份(000533.SZ) 60m: 4 bars, strength=0.899, close_pos=1.000, activity=0.337
+2026-03-05 15:02:08 | INFO     | __main__ | 顺钠股份(000533.SZ) d: 1 bars, strength=0.922, close_pos=0.888, activity=0.247
+2026-03-05 15:02:09 | INFO     | __main__ | 顺钠股份(000533.SZ) w: 1 bars, strength=0.929, close_pos=0.907, activity=0.243
+2026-03-05 15:02:10 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:11 | INFO     | __main__ | 通源石油(300164.SZ) 15m: 16 bars, strength=0.969, close_pos=0.114, activity=0.214
+2026-03-05 15:02:11 | INFO     | __main__ | 通源石油(300164.SZ) 60m: 4 bars, strength=0.955, close_pos=0.886, activity=0.535
+2026-03-05 15:02:13 | INFO     | __main__ | 通源石油(300164.SZ) d: 1 bars, strength=0.951, close_pos=0.942, activity=0.480
+2026-03-05 15:02:14 | INFO     | __main__ | 通源石油(300164.SZ) w: 1 bars, strength=0.778, close_pos=1.000, activity=0.332
+2026-03-05 15:02:14 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:15 | INFO     | __main__ | 平潭发展(000592.SZ) 15m: 16 bars, strength=0.928, close_pos=0.041, activity=0.297
+2026-03-05 15:02:17 | INFO     | __main__ | 平潭发展(000592.SZ) 60m: 4 bars, strength=0.779, close_pos=0.393, activity=0.395
+2026-03-05 15:02:18 | INFO     | __main__ | 平潭发展(000592.SZ) d: 1 bars, strength=0.900, close_pos=0.131, activity=0.137
+2026-03-05 15:02:19 | INFO     | __main__ | 平潭发展(000592.SZ) w: 1 bars, strength=0.897, close_pos=0.541, activity=0.497
+2026-03-05 15:02:19 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:21 | INFO     | __main__ | 豫能控股(001896.SZ) 15m: 16 bars, strength=0.980, close_pos=0.000, activity=0.084
+2026-03-05 15:02:22 | INFO     | __main__ | 豫能控股(001896.SZ) 60m: 4 bars, strength=0.981, close_pos=0.000, activity=0.082
+2026-03-05 15:02:23 | INFO     | __main__ | 豫能控股(001896.SZ) d: 1 bars, strength=0.834, close_pos=1.000, activity=0.227
+2026-03-05 15:02:23 | INFO     | __main__ | 豫能控股(001896.SZ) w: 1 bars, strength=0.813, close_pos=1.000, activity=0.218
+2026-03-05 15:02:24 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:25 | INFO     | __main__ | 协鑫集成(002506.SZ) 15m: 16 bars, strength=0.886, close_pos=0.164, activity=0.170
+2026-03-05 15:02:26 | INFO     | __main__ | 协鑫集成(002506.SZ) 60m: 4 bars, strength=0.928, close_pos=0.190, activity=0.186
+2026-03-05 15:02:28 | INFO     | __main__ | 协鑫集成(002506.SZ) d: 1 bars, strength=0.922, close_pos=0.449, activity=0.400
+2026-03-05 15:02:29 | INFO     | __main__ | 协鑫集成(002506.SZ) w: 1 bars, strength=0.788, close_pos=1.000, activity=0.699
+2026-03-05 15:02:29 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:31 | INFO     | __main__ | 金开新能(600821.SH) 15m: 16 bars, strength=0.965, close_pos=0.266, activity=0.267
+2026-03-05 15:02:32 | INFO     | __main__ | 金开新能(600821.SH) 60m: 4 bars, strength=0.968, close_pos=0.330, activity=0.302
+2026-03-05 15:02:33 | INFO     | __main__ | 金开新能(600821.SH) d: 1 bars, strength=0.873, close_pos=1.000, activity=0.559
+2026-03-05 15:02:34 | INFO     | __main__ | 金开新能(600821.SH) w: 1 bars, strength=0.743, close_pos=1.000, activity=0.727
+2026-03-05 15:02:34 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:35 | INFO     | __main__ | 石化油服(600871.SH) 15m: 16 bars, strength=0.922, close_pos=0.018, activity=0.219
+2026-03-05 15:02:36 | INFO     | __main__ | 石化油服(600871.SH) 60m: 4 bars, strength=0.942, close_pos=0.830, activity=0.490
+2026-03-05 15:02:37 | INFO     | __main__ | 石化油服(600871.SH) d: 1 bars, strength=0.939, close_pos=0.887, activity=0.469
+2026-03-05 15:02:38 | INFO     | __main__ | 石化油服(600871.SH) w: 1 bars, strength=0.805, close_pos=1.000, activity=0.408
+2026-03-05 15:02:38 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:39 | INFO     | __main__ | 华工科技(000988.SZ) 15m: 16 bars, strength=0.980, close_pos=0.363, activity=0.390
+2026-03-05 15:02:40 | INFO     | __main__ | 华工科技(000988.SZ) 60m: 4 bars, strength=0.959, close_pos=0.573, activity=0.410
+2026-03-05 15:02:41 | INFO     | __main__ | 华工科技(000988.SZ) d: 1 bars, strength=0.939, close_pos=0.879, activity=0.339
+2026-03-05 15:02:42 | INFO     | __main__ | 华工科技(000988.SZ) w: 1 bars, strength=0.939, close_pos=0.876, activity=0.352
+2026-03-05 15:02:43 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:43 | INFO     | __main__ | 亚盛集团(600108.SH) 15m: 16 bars, strength=0.951, close_pos=0.096, activity=0.285
+2026-03-05 15:02:44 | INFO     | __main__ | 亚盛集团(600108.SH) 60m: 4 bars, strength=0.895, close_pos=0.496, activity=0.462
+2026-03-05 15:02:45 | INFO     | __main__ | 亚盛集团(600108.SH) d: 1 bars, strength=0.815, close_pos=1.000, activity=0.296
+2026-03-05 15:02:46 | INFO     | __main__ | 亚盛集团(600108.SH) w: 1 bars, strength=0.829, close_pos=1.000, activity=0.291
+2026-03-05 15:02:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:48 | INFO     | __main__ | 特变电工(600089.SH) 15m: 16 bars, strength=0.934, close_pos=0.840, activity=0.376
+2026-03-05 15:02:49 | INFO     | __main__ | 特变电工(600089.SH) 60m: 4 bars, strength=0.932, close_pos=0.887, activity=0.389
+2026-03-05 15:02:50 | INFO     | __main__ | 特变电工(600089.SH) d: 1 bars, strength=0.973, close_pos=0.598, activity=0.222
+2026-03-05 15:02:50 | INFO     | __main__ | 特变电工(600089.SH) w: 1 bars, strength=0.954, close_pos=0.770, activity=0.348
+2026-03-05 15:02:51 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:52 | INFO     | __main__ | 航天彩虹(002389.SZ) 15m: 16 bars, strength=0.950, close_pos=0.360, activity=0.222
+2026-03-05 15:02:53 | INFO     | __main__ | 航天彩虹(002389.SZ) 60m: 4 bars, strength=0.877, close_pos=0.817, activity=0.396
+2026-03-05 15:02:54 | INFO     | __main__ | 航天彩虹(002389.SZ) d: 1 bars, strength=0.820, close_pos=0.640, activity=0.233
+2026-03-05 15:02:55 | INFO     | __main__ | 航天彩虹(002389.SZ) w: 1 bars, strength=0.857, close_pos=0.652, activity=0.250
+2026-03-05 15:02:55 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:02:56 | INFO     | __main__ | 中国西电(601179.SH) 15m: 16 bars, strength=0.900, close_pos=0.427, activity=0.163
+2026-03-05 15:02:57 | INFO     | __main__ | 中国西电(601179.SH) 60m: 4 bars, strength=0.937, close_pos=0.455, activity=0.112
+2026-03-05 15:02:58 | INFO     | __main__ | 中国西电(601179.SH) d: 1 bars, strength=0.934, close_pos=0.456, activity=0.111
+2026-03-05 15:02:59 | INFO     | __main__ | 中国西电(601179.SH) w: 1 bars, strength=0.830, close_pos=1.000, activity=0.505
+2026-03-05 15:02:59 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:03:00 | INFO     | __main__ | 川润股份(002272.SZ) 15m: 16 bars, strength=0.955, close_pos=0.478, activity=0.375
+2026-03-05 15:03:01 | INFO     | __main__ | 川润股份(002272.SZ) 60m: 4 bars, strength=0.957, close_pos=0.410, activity=0.340
+2026-03-05 15:03:02 | INFO     | __main__ | 川润股份(002272.SZ) d: 1 bars, strength=0.854, close_pos=0.684, activity=0.366
+2026-03-05 15:03:03 | INFO     | __main__ | 川润股份(002272.SZ) w: 1 bars, strength=0.894, close_pos=0.497, activity=0.246
+2026-03-05 15:03:03 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:03:04 | INFO     | __main__ | 农发种业(600313.SH) 15m: 16 bars, strength=0.927, close_pos=0.000, activity=0.308
+2026-03-05 15:03:05 | INFO     | __main__ | 农发种业(600313.SH) 60m: 4 bars, strength=0.875, close_pos=0.259, activity=0.416
+2026-03-05 15:03:06 | INFO     | __main__ | 农发种业(600313.SH) d: 1 bars, strength=0.823, close_pos=0.631, activity=0.454
+2026-03-05 15:03:07 | INFO     | __main__ | 农发种业(600313.SH) w: 1 bars, strength=0.790, close_pos=1.000, activity=0.766
+2026-03-05 15:03:09 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:03:12 | INFO     | __main__ | 法尔胜(000890.SZ) 15m: 16 bars, strength=0.960, close_pos=0.269, activity=0.197
+2026-03-05 15:03:13 | INFO     | __main__ | 法尔胜(000890.SZ) 60m: 4 bars, strength=0.963, close_pos=0.280, activity=0.191
+2026-03-05 15:03:14 | INFO     | __main__ | 法尔胜(000890.SZ) d: 1 bars, strength=0.892, close_pos=1.000, activity=0.420
+2026-03-05 15:03:15 | INFO     | __main__ | 法尔胜(000890.SZ) w: 1 bars, strength=0.896, close_pos=1.000, activity=0.466
+2026-03-05 15:03:15 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:03:16 | INFO     | __main__ | 山东墨龙(002490.SZ) 15m: 16 bars, strength=0.980, close_pos=0.015, activity=0.066
+2026-03-05 15:03:17 | INFO     | __main__ | 山东墨龙(002490.SZ) 60m: 4 bars, strength=0.863, close_pos=0.812, activity=0.616
+2026-03-05 15:03:18 | INFO     | __main__ | 山东墨龙(002490.SZ) d: 1 bars, strength=0.975, close_pos=1.000, activity=0.189
+2026-03-05 15:03:19 | INFO     | __main__ | 山东墨龙(002490.SZ) w: 1 bars, strength=0.979, close_pos=1.000, activity=0.230
+2026-03-05 15:03:19 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:03:20 | INFO     | __main__ | 佰维存储(688525.SH) 15m: 16 bars, strength=0.886, close_pos=0.173, activity=0.295
+2026-03-05 15:03:21 | INFO     | __main__ | 佰维存储(688525.SH) 60m: 4 bars, strength=0.854, close_pos=0.483, activity=0.318
+2026-03-05 15:03:22 | INFO     | __main__ | 佰维存储(688525.SH) d: 1 bars, strength=0.940, close_pos=0.664, activity=0.419
+2026-03-05 15:03:22 | INFO     | __main__ | 佰维存储(688525.SH) w: 1 bars, strength=0.909, close_pos=0.729, activity=0.375
+2026-03-05 15:03:23 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:03:24 | INFO     | __main__ | 水发燃气(603318.SH) 15m: 16 bars, strength=0.939, close_pos=0.000, activity=0.166
+2026-03-05 15:03:25 | INFO     | __main__ | 水发燃气(603318.SH) 60m: 4 bars, strength=0.858, close_pos=0.384, activity=0.499
+2026-03-05 15:03:26 | INFO     | __main__ | 水发燃气(603318.SH) d: 1 bars, strength=0.700, close_pos=1.000, activity=0.275
+2026-03-05 15:03:27 | INFO     | __main__ | 水发燃气(603318.SH) w: 1 bars, strength=0.667, close_pos=0.931, activity=0.699
+2026-03-05 15:03:27 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:03:28 | INFO     | __main__ | 通光线缆(300265.SZ) 15m: 16 bars, strength=0.916, close_pos=0.331, activity=0.174
+2026-03-05 15:03:29 | INFO     | __main__ | 通光线缆(300265.SZ) 60m: 4 bars, strength=0.924, close_pos=1.000, activity=0.293
+2026-03-05 15:03:30 | INFO     | __main__ | 通光线缆(300265.SZ) d: 1 bars, strength=0.921, close_pos=0.996, activity=0.276
+2026-03-05 15:03:31 | INFO     | __main__ | 通光线缆(300265.SZ) w: 1 bars, strength=0.855, close_pos=1.000, activity=0.528
+2026-03-05 15:03:31 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:03:32 | INFO     | __main__ | 通鼎互联(002491.SZ) 15m: 255 bars, strength=0.945, close_pos=0.321, activity=0.225
+2026-03-05 15:03:33 | INFO     | __main__ | 通鼎互联(002491.SZ) 60m: 255 bars, strength=0.962, close_pos=0.327, activity=0.227
+2026-03-05 15:03:34 | INFO     | __main__ | 通鼎互联(002491.SZ) d: 255 bars, strength=0.859, close_pos=0.913, activity=0.486
+2026-03-05 15:03:35 | INFO     | __main__ | 通鼎互联(002491.SZ) w: 255 bars, strength=0.868, close_pos=1.000, activity=0.324
+2026-03-05 15:03:50 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:03:51 | INFO     | __main__ | 烽火通信(600498.SH) 15m: 16 bars, strength=0.930, close_pos=0.091, activity=0.141
+2026-03-05 15:03:52 | INFO     | __main__ | 烽火通信(600498.SH) 60m: 4 bars, strength=0.953, close_pos=0.642, activity=0.320
+2026-03-05 15:03:53 | INFO     | __main__ | 烽火通信(600498.SH) d: 1 bars, strength=0.953, close_pos=0.659, activity=0.333
+2026-03-05 15:03:55 | INFO     | __main__ | 烽火通信(600498.SH) w: 1 bars, strength=0.870, close_pos=1.000, activity=0.458
+2026-03-05 15:03:55 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:03:56 | INFO     | __main__ | 拓维信息(002261.SZ) 15m: 16 bars, strength=0.901, close_pos=0.127, activity=0.407
+2026-03-05 15:03:57 | INFO     | __main__ | 拓维信息(002261.SZ) 60m: 4 bars, strength=0.906, close_pos=0.111, activity=0.397
+2026-03-05 15:03:58 | INFO     | __main__ | 拓维信息(002261.SZ) d: 1 bars, strength=0.800, close_pos=0.187, activity=0.148
+2026-03-05 15:03:59 | INFO     | __main__ | 拓维信息(002261.SZ) w: 1 bars, strength=0.899, close_pos=0.339, activity=0.261
+2026-03-05 15:04:00 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:01 | INFO     | __main__ | 神马电力(603530.SH) 15m: 16 bars, strength=0.963, close_pos=0.346, activity=0.409
+2026-03-05 15:04:01 | INFO     | __main__ | 神马电力(603530.SH) 60m: 4 bars, strength=0.947, close_pos=0.673, activity=0.379
+2026-03-05 15:04:03 | INFO     | __main__ | 神马电力(603530.SH) d: 1 bars, strength=0.953, close_pos=1.000, activity=0.282
+2026-03-05 15:04:03 | INFO     | __main__ | 神马电力(603530.SH) w: 1 bars, strength=0.932, close_pos=1.000, activity=0.286
+2026-03-05 15:04:03 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:04 | INFO     | __main__ | 智能自控(002877.SZ) 15m: 16 bars, strength=0.838, close_pos=0.443, activity=0.364
+2026-03-05 15:04:05 | INFO     | __main__ | 智能自控(002877.SZ) 60m: 4 bars, strength=0.549, close_pos=1.000, activity=0.448
+2026-03-05 15:04:06 | INFO     | __main__ | 智能自控(002877.SZ) d: 1 bars, strength=0.804, close_pos=1.000, activity=0.397
+2026-03-05 15:04:07 | INFO     | __main__ | 智能自控(002877.SZ) w: 1 bars, strength=0.764, close_pos=1.000, activity=0.388
+2026-03-05 15:04:07 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:08 | INFO     | __main__ | 招商轮船(601872.SH) 15m: 16 bars, strength=0.951, close_pos=0.052, activity=0.212
+2026-03-05 15:04:09 | INFO     | __main__ | 招商轮船(601872.SH) 60m: 4 bars, strength=0.947, close_pos=0.142, activity=0.263
+2026-03-05 15:04:10 | INFO     | __main__ | 招商轮船(601872.SH) d: 1 bars, strength=0.919, close_pos=0.827, activity=0.612
+2026-03-05 15:04:11 | INFO     | __main__ | 招商轮船(601872.SH) w: 1 bars, strength=0.887, close_pos=1.000, activity=0.345
+2026-03-05 15:04:12 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:13 | INFO     | __main__ | 章源钨业(002378.SZ) 15m: 16 bars, strength=0.977, close_pos=0.000, activity=0.105
+2026-03-05 15:04:14 | INFO     | __main__ | 章源钨业(002378.SZ) 60m: 4 bars, strength=0.975, close_pos=0.000, activity=0.129
+2026-03-05 15:04:15 | INFO     | __main__ | 章源钨业(002378.SZ) d: 1 bars, strength=0.956, close_pos=0.753, activity=0.620
+2026-03-05 15:04:16 | INFO     | __main__ | 章源钨业(002378.SZ) w: 1 bars, strength=0.910, close_pos=1.000, activity=0.390
+2026-03-05 15:04:16 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:17 | INFO     | __main__ | 准油股份(002207.SZ) 15m: 16 bars, strength=0.934, close_pos=0.263, activity=0.329
+2026-03-05 15:04:18 | INFO     | __main__ | 准油股份(002207.SZ) 60m: 4 bars, strength=0.943, close_pos=0.942, activity=0.419
+2026-03-05 15:04:19 | INFO     | __main__ | 准油股份(002207.SZ) d: 1 bars, strength=0.945, close_pos=0.958, activity=0.401
+2026-03-05 15:04:20 | INFO     | __main__ | 准油股份(002207.SZ) w: 1 bars, strength=0.907, close_pos=1.000, activity=0.327
+2026-03-05 15:04:21 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:22 | INFO     | __main__ | 积成电子(002339.SZ) 15m: 16 bars, strength=0.870, close_pos=0.406, activity=0.214
+2026-03-05 15:04:23 | INFO     | __main__ | 积成电子(002339.SZ) 60m: 4 bars, strength=0.942, close_pos=0.394, activity=0.214
+2026-03-05 15:04:24 | INFO     | __main__ | 积成电子(002339.SZ) d: 1 bars, strength=0.943, close_pos=0.415, activity=0.228
+2026-03-05 15:04:25 | INFO     | __main__ | 积成电子(002339.SZ) w: 1 bars, strength=0.867, close_pos=1.000, activity=0.442
+2026-03-05 15:04:25 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:26 | INFO     | __main__ | 华银电力(600744.SH) 15m: 16 bars, strength=0.961, close_pos=0.383, activity=0.103
+2026-03-05 15:04:27 | INFO     | __main__ | 华银电力(600744.SH) 60m: 4 bars, strength=0.938, close_pos=0.626, activity=0.226
+2026-03-05 15:04:28 | INFO     | __main__ | 华银电力(600744.SH) d: 1 bars, strength=0.877, close_pos=0.636, activity=0.331
+2026-03-05 15:04:29 | INFO     | __main__ | 华银电力(600744.SH) w: 1 bars, strength=0.879, close_pos=0.599, activity=0.292
+2026-03-05 15:04:29 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:30 | INFO     | __main__ | 保变电气(600550.SH) 15m: 16 bars, strength=0.879, close_pos=0.448, activity=0.213
+2026-03-05 15:04:31 | INFO     | __main__ | 保变电气(600550.SH) 60m: 4 bars, strength=0.962, close_pos=0.590, activity=0.184
+2026-03-05 15:04:32 | INFO     | __main__ | 保变电气(600550.SH) d: 1 bars, strength=0.963, close_pos=0.602, activity=0.190
+2026-03-05 15:04:33 | INFO     | __main__ | 保变电气(600550.SH) w: 1 bars, strength=0.862, close_pos=1.000, activity=0.323
+2026-03-05 15:04:34 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:35 | INFO     | __main__ | 利欧股份(002131.SZ) 15m: 16 bars, strength=0.826, close_pos=0.863, activity=0.690
+2026-03-05 15:04:36 | INFO     | __main__ | 利欧股份(002131.SZ) 60m: 4 bars, strength=0.880, close_pos=0.106, activity=0.188
+2026-03-05 15:04:38 | INFO     | __main__ | 利欧股份(002131.SZ) d: 1 bars, strength=0.893, close_pos=0.466, activity=0.252
+2026-03-05 15:04:39 | INFO     | __main__ | 利欧股份(002131.SZ) w: 1 bars, strength=0.904, close_pos=0.452, activity=0.244
+2026-03-05 15:04:39 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:40 | INFO     | __main__ | 比亚迪(002594.SZ) 15m: 16 bars, strength=0.803, close_pos=0.464, activity=0.445
+2026-03-05 15:04:41 | INFO     | __main__ | 比亚迪(002594.SZ) 60m: 4 bars, strength=0.809, close_pos=0.890, activity=0.684
+2026-03-05 15:04:42 | INFO     | __main__ | 比亚迪(002594.SZ) d: 1 bars, strength=0.897, close_pos=0.939, activity=0.669
+2026-03-05 15:04:43 | INFO     | __main__ | 比亚迪(002594.SZ) w: 1 bars, strength=0.882, close_pos=0.738, activity=0.813
+2026-03-05 15:04:43 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:44 | INFO     | __main__ | 迦南智能(300880.SZ) 15m: 16 bars, strength=0.874, close_pos=0.315, activity=0.593
+2026-03-05 15:04:45 | INFO     | __main__ | 迦南智能(300880.SZ) 60m: 4 bars, strength=0.777, close_pos=1.000, activity=0.379
+2026-03-05 15:04:46 | INFO     | __main__ | 迦南智能(300880.SZ) d: 1 bars, strength=0.808, close_pos=1.000, activity=0.778
+2026-03-05 15:04:46 | INFO     | __main__ | 迦南智能(300880.SZ) w: 1 bars, strength=0.727, close_pos=1.000, activity=0.735
+2026-03-05 15:04:46 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:47 | INFO     | __main__ | 延华智能(002178.SZ) 15m: 16 bars, strength=0.786, close_pos=0.341, activity=0.513
+2026-03-05 15:04:48 | INFO     | __main__ | 延华智能(002178.SZ) 60m: 4 bars, strength=0.472, close_pos=0.866, activity=0.658
+2026-03-05 15:04:49 | INFO     | __main__ | 延华智能(002178.SZ) d: 1 bars, strength=0.692, close_pos=0.880, activity=0.676
+2026-03-05 15:04:50 | INFO     | __main__ | 延华智能(002178.SZ) w: 1 bars, strength=0.708, close_pos=0.230, activity=0.300
+2026-03-05 15:04:50 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:51 | INFO     | __main__ | 东方电气(600875.SH) 15m: 16 bars, strength=0.975, close_pos=0.684, activity=0.322
+2026-03-05 15:04:52 | INFO     | __main__ | 东方电气(600875.SH) 60m: 4 bars, strength=0.973, close_pos=0.635, activity=0.290
+2026-03-05 15:04:53 | INFO     | __main__ | 东方电气(600875.SH) d: 1 bars, strength=0.930, close_pos=1.000, activity=0.310
+2026-03-05 15:04:54 | INFO     | __main__ | 东方电气(600875.SH) w: 1 bars, strength=0.920, close_pos=1.000, activity=0.353
+2026-03-05 15:04:55 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:56 | INFO     | __main__ | 招商南油(601975.SH) 15m: 16 bars, strength=0.935, close_pos=0.165, activity=0.277
+2026-03-05 15:04:57 | INFO     | __main__ | 招商南油(601975.SH) 60m: 4 bars, strength=0.912, close_pos=1.000, activity=0.464
+2026-03-05 15:04:57 | INFO     | __main__ | 招商南油(601975.SH) d: 1 bars, strength=0.907, close_pos=1.000, activity=0.473
+2026-03-05 15:04:58 | INFO     | __main__ | 招商南油(601975.SH) w: 1 bars, strength=0.737, close_pos=1.000, activity=0.293
+2026-03-05 15:04:58 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:04:59 | INFO     | __main__ | 金牛化工(600722.SH) 15m: 16 bars, strength=0.939, close_pos=0.810, activity=0.602
+2026-03-05 15:05:00 | INFO     | __main__ | 金牛化工(600722.SH) 60m: 4 bars, strength=0.958, close_pos=1.000, activity=0.421
+2026-03-05 15:05:02 | INFO     | __main__ | 金牛化工(600722.SH) d: 1 bars, strength=0.954, close_pos=1.000, activity=0.349
+2026-03-05 15:05:03 | INFO     | __main__ | 金牛化工(600722.SH) w: 1 bars, strength=0.887, close_pos=1.000, activity=0.337
+2026-03-05 15:05:03 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:04 | INFO     | __main__ | 神农种业(300189.SZ) 15m: 16 bars, strength=0.890, close_pos=0.000, activity=0.337
+2026-03-05 15:05:05 | INFO     | __main__ | 神农种业(300189.SZ) 60m: 4 bars, strength=0.930, close_pos=0.336, activity=0.260
+2026-03-05 15:05:06 | INFO     | __main__ | 神农种业(300189.SZ) d: 1 bars, strength=0.941, close_pos=0.396, activity=0.300
+2026-03-05 15:05:07 | INFO     | __main__ | 神农种业(300189.SZ) w: 1 bars, strength=0.926, close_pos=0.608, activity=0.352
+2026-03-05 15:05:07 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:08 | INFO     | __main__ | 宏盛华源(601096.SH) 15m: 16 bars, strength=0.880, close_pos=0.527, activity=0.310
+2026-03-05 15:05:09 | INFO     | __main__ | 宏盛华源(601096.SH) 60m: 4 bars, strength=0.954, close_pos=0.364, activity=0.208
+2026-03-05 15:05:10 | INFO     | __main__ | 宏盛华源(601096.SH) d: 1 bars, strength=0.952, close_pos=0.457, activity=0.262
+2026-03-05 15:05:10 | INFO     | __main__ | 宏盛华源(601096.SH) w: 1 bars, strength=0.619, close_pos=1.000, activity=0.513
+2026-03-05 15:05:10 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:11 | INFO     | __main__ | 银星能源(000862.SZ) 15m: 16 bars, strength=0.921, close_pos=0.542, activity=0.607
+2026-03-05 15:05:12 | INFO     | __main__ | 银星能源(000862.SZ) 60m: 4 bars, strength=0.895, close_pos=1.000, activity=0.439
+2026-03-05 15:05:13 | INFO     | __main__ | 银星能源(000862.SZ) d: 1 bars, strength=0.886, close_pos=1.000, activity=0.445
+2026-03-05 15:05:14 | INFO     | __main__ | 银星能源(000862.SZ) w: 1 bars, strength=0.842, close_pos=1.000, activity=0.298
+2026-03-05 15:05:14 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:15 | INFO     | __main__ | 中国石化(600028.SH) 15m: 16 bars, strength=0.745, close_pos=0.184, activity=0.471
+2026-03-05 15:05:16 | INFO     | __main__ | 中国石化(600028.SH) 60m: 4 bars, strength=0.910, close_pos=0.960, activity=0.391
+2026-03-05 15:05:17 | INFO     | __main__ | 中国石化(600028.SH) d: 1 bars, strength=0.907, close_pos=0.942, activity=0.407
+2026-03-05 15:05:18 | INFO     | __main__ | 中国石化(600028.SH) w: 1 bars, strength=0.820, close_pos=0.606, activity=0.332
+2026-03-05 15:05:18 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:19 | INFO     | __main__ | 南山铝业(600219.SH) 15m: 16 bars, strength=0.943, close_pos=0.549, activity=0.426
+2026-03-05 15:05:20 | INFO     | __main__ | 南山铝业(600219.SH) 60m: 4 bars, strength=0.928, close_pos=0.483, activity=0.313
+2026-03-05 15:05:21 | INFO     | __main__ | 南山铝业(600219.SH) d: 1 bars, strength=0.942, close_pos=0.717, activity=0.411
+2026-03-05 15:05:22 | INFO     | __main__ | 南山铝业(600219.SH) w: 1 bars, strength=0.886, close_pos=1.000, activity=0.456
+2026-03-05 15:05:22 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:23 | INFO     | __main__ | 雷科防务(002413.SZ) 15m: 16 bars, strength=0.853, close_pos=0.343, activity=0.377
+2026-03-05 15:05:24 | INFO     | __main__ | 雷科防务(002413.SZ) 60m: 4 bars, strength=0.939, close_pos=0.232, activity=0.186
+2026-03-05 15:05:25 | INFO     | __main__ | 雷科防务(002413.SZ) d: 1 bars, strength=0.937, close_pos=0.240, activity=0.199
+2026-03-05 15:05:26 | INFO     | __main__ | 雷科防务(002413.SZ) w: 1 bars, strength=0.850, close_pos=0.771, activity=0.483
+2026-03-05 15:05:26 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:27 | INFO     | __main__ | 金风科技(002202.SZ) 15m: 16 bars, strength=0.715, close_pos=0.436, activity=0.355
+2026-03-05 15:05:28 | INFO     | __main__ | 金风科技(002202.SZ) 60m: 4 bars, strength=0.866, close_pos=0.222, activity=0.265
+2026-03-05 15:05:29 | INFO     | __main__ | 金风科技(002202.SZ) d: 1 bars, strength=0.944, close_pos=0.590, activity=0.472
+2026-03-05 15:05:30 | INFO     | __main__ | 金风科技(002202.SZ) w: 1 bars, strength=0.941, close_pos=0.625, activity=0.524
+2026-03-05 15:05:30 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:31 | INFO     | __main__ | 卓郎智能(600545.SH) 15m: 16 bars, strength=0.950, close_pos=0.600, activity=0.085
+2026-03-05 15:05:32 | INFO     | __main__ | 卓郎智能(600545.SH) 60m: 4 bars, strength=0.947, close_pos=0.619, activity=0.106
+2026-03-05 15:05:33 | INFO     | __main__ | 卓郎智能(600545.SH) d: 1 bars, strength=0.738, close_pos=0.650, activity=0.279
+2026-03-05 15:05:34 | INFO     | __main__ | 卓郎智能(600545.SH) w: 1 bars, strength=0.866, close_pos=1.000, activity=0.719
+2026-03-05 15:05:34 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:35 | INFO     | __main__ | 三花智控(002050.SZ) 15m: 16 bars, strength=0.942, close_pos=0.807, activity=0.660
+2026-03-05 15:05:36 | INFO     | __main__ | 三花智控(002050.SZ) 60m: 4 bars, strength=0.830, close_pos=0.455, activity=0.533
+2026-03-05 15:05:37 | INFO     | __main__ | 三花智控(002050.SZ) d: 1 bars, strength=0.929, close_pos=0.044, activity=0.215
+2026-03-05 15:05:38 | INFO     | __main__ | 三花智控(002050.SZ) w: 1 bars, strength=0.905, close_pos=0.135, activity=0.223
+2026-03-05 15:05:38 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:39 | INFO     | __main__ | 聚飞光电(300303.SZ) 15m: 16 bars, strength=0.922, close_pos=0.965, activity=0.625
+2026-03-05 15:05:40 | INFO     | __main__ | 聚飞光电(300303.SZ) 60m: 4 bars, strength=0.915, close_pos=1.000, activity=0.431
+2026-03-05 15:05:41 | INFO     | __main__ | 聚飞光电(300303.SZ) d: 1 bars, strength=0.803, close_pos=1.000, activity=0.262
+2026-03-05 15:05:42 | INFO     | __main__ | 聚飞光电(300303.SZ) w: 1 bars, strength=0.790, close_pos=1.000, activity=0.348
+2026-03-05 15:05:42 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:43 | INFO     | __main__ | 东方锆业(002167.SZ) 15m: 16 bars, strength=0.926, close_pos=0.258, activity=0.356
+2026-03-05 15:05:44 | INFO     | __main__ | 东方锆业(002167.SZ) 60m: 4 bars, strength=0.932, close_pos=0.224, activity=0.321
+2026-03-05 15:05:45 | INFO     | __main__ | 东方锆业(002167.SZ) d: 1 bars, strength=0.922, close_pos=0.354, activity=0.167
+2026-03-05 15:05:46 | INFO     | __main__ | 东方锆业(002167.SZ) w: 1 bars, strength=0.932, close_pos=0.366, activity=0.173
+2026-03-05 15:05:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:48 | INFO     | __main__ | 航天发展(000547.SZ) 15m: 16 bars, strength=0.730, close_pos=1.000, activity=0.640
+2026-03-05 15:05:49 | INFO     | __main__ | 航天发展(000547.SZ) 60m: 4 bars, strength=0.923, close_pos=0.084, activity=0.083
+2026-03-05 15:05:50 | INFO     | __main__ | 航天发展(000547.SZ) d: 1 bars, strength=0.933, close_pos=0.126, activity=0.115
+2026-03-05 15:05:51 | INFO     | __main__ | 航天发展(000547.SZ) w: 1 bars, strength=0.836, close_pos=0.540, activity=0.387
+2026-03-05 15:05:51 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:52 | INFO     | __main__ | 安靠智电(300617.SZ) 15m: 16 bars, strength=0.899, close_pos=0.710, activity=0.383
+2026-03-05 15:05:53 | INFO     | __main__ | 安靠智电(300617.SZ) 60m: 4 bars, strength=0.959, close_pos=0.890, activity=0.463
+2026-03-05 15:05:54 | INFO     | __main__ | 安靠智电(300617.SZ) d: 1 bars, strength=0.959, close_pos=0.918, activity=0.448
+2026-03-05 15:05:55 | INFO     | __main__ | 安靠智电(300617.SZ) w: 1 bars, strength=0.788, close_pos=1.000, activity=0.410
+2026-03-05 15:05:55 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:56 | INFO     | __main__ | 中国海油(600938.SH) 15m: 16 bars, strength=0.874, close_pos=0.503, activity=0.484
+2026-03-05 15:05:57 | INFO     | __main__ | 中国海油(600938.SH) 60m: 4 bars, strength=0.924, close_pos=0.878, activity=0.548
+2026-03-05 15:05:58 | INFO     | __main__ | 中国海油(600938.SH) d: 1 bars, strength=0.923, close_pos=0.876, activity=0.531
+2026-03-05 15:05:58 | INFO     | __main__ | 中国海油(600938.SH) w: 1 bars, strength=0.842, close_pos=0.949, activity=0.246
+2026-03-05 15:05:58 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:05:59 | INFO     | __main__ | 润泽科技(300442.SZ) 15m: 16 bars, strength=0.897, close_pos=0.716, activity=0.753
+2026-03-05 15:06:00 | INFO     | __main__ | 润泽科技(300442.SZ) 60m: 4 bars, strength=0.933, close_pos=0.379, activity=0.218
+2026-03-05 15:06:01 | INFO     | __main__ | 润泽科技(300442.SZ) d: 1 bars, strength=0.932, close_pos=0.371, activity=0.240
+2026-03-05 15:06:01 | INFO     | __main__ | 润泽科技(300442.SZ) w: 1 bars, strength=0.857, close_pos=0.856, activity=0.340
+2026-03-05 15:06:02 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:03 | INFO     | __main__ | 国电南瑞(600406.SH) 15m: 16 bars, strength=0.971, close_pos=0.883, activity=0.443
+2026-03-05 15:06:04 | INFO     | __main__ | 国电南瑞(600406.SH) 60m: 4 bars, strength=0.970, close_pos=0.931, activity=0.405
+2026-03-05 15:06:05 | INFO     | __main__ | 国电南瑞(600406.SH) d: 1 bars, strength=0.938, close_pos=1.000, activity=0.348
+2026-03-05 15:06:06 | INFO     | __main__ | 国电南瑞(600406.SH) w: 1 bars, strength=0.717, close_pos=1.000, activity=0.703
+2026-03-05 15:06:06 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:07 | INFO     | __main__ | 桂冠电力(600236.SH) 15m: 16 bars, strength=0.967, close_pos=0.716, activity=0.415
+2026-03-05 15:06:08 | INFO     | __main__ | 桂冠电力(600236.SH) 60m: 4 bars, strength=0.909, close_pos=1.000, activity=0.482
+2026-03-05 15:06:09 | INFO     | __main__ | 桂冠电力(600236.SH) d: 1 bars, strength=0.903, close_pos=1.000, activity=0.481
+2026-03-05 15:06:10 | INFO     | __main__ | 桂冠电力(600236.SH) w: 1 bars, strength=0.833, close_pos=1.000, activity=0.270
+2026-03-05 15:06:10 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:11 | INFO     | __main__ | 中国铝业(601600.SH) 15m: 16 bars, strength=0.953, close_pos=0.468, activity=0.320
+2026-03-05 15:06:12 | INFO     | __main__ | 中国铝业(601600.SH) 60m: 4 bars, strength=0.911, close_pos=0.482, activity=0.245
+2026-03-05 15:06:13 | INFO     | __main__ | 中国铝业(601600.SH) d: 1 bars, strength=0.961, close_pos=0.682, activity=0.412
+2026-03-05 15:06:14 | INFO     | __main__ | 中国铝业(601600.SH) w: 1 bars, strength=0.932, close_pos=0.748, activity=0.425
+2026-03-05 15:06:14 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:15 | INFO     | __main__ | 紫金矿业(601899.SH) 15m: 16 bars, strength=0.915, close_pos=0.793, activity=0.808
+2026-03-05 15:06:16 | INFO     | __main__ | 紫金矿业(601899.SH) 60m: 4 bars, strength=0.924, close_pos=0.000, activity=0.252
+2026-03-05 15:06:17 | INFO     | __main__ | 紫金矿业(601899.SH) d: 1 bars, strength=0.975, close_pos=0.122, activity=0.281
+2026-03-05 15:06:18 | INFO     | __main__ | 紫金矿业(601899.SH) w: 1 bars, strength=0.971, close_pos=0.276, activity=0.413
+2026-03-05 15:06:18 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:19 | INFO     | __main__ | 廊坊发展(600149.SH) 15m: 16 bars, strength=0.885, close_pos=0.718, activity=0.379
+2026-03-05 15:06:20 | INFO     | __main__ | 廊坊发展(600149.SH) 60m: 4 bars, strength=0.931, close_pos=0.927, activity=0.335
+2026-03-05 15:06:21 | INFO     | __main__ | 廊坊发展(600149.SH) d: 1 bars, strength=0.915, close_pos=1.000, activity=0.383
+2026-03-05 15:06:22 | INFO     | __main__ | 廊坊发展(600149.SH) w: 1 bars, strength=0.857, close_pos=0.713, activity=0.297
+2026-03-05 15:06:22 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:23 | INFO     | __main__ | 南网能源(003035.SZ) 15m: 16 bars, strength=0.946, close_pos=0.531, activity=0.223
+2026-03-05 15:06:23 | INFO     | __main__ | 南网能源(003035.SZ) 60m: 4 bars, strength=0.962, close_pos=0.706, activity=0.348
+2026-03-05 15:06:24 | INFO     | __main__ | 南网能源(003035.SZ) d: 1 bars, strength=0.946, close_pos=0.857, activity=0.385
+2026-03-05 15:06:25 | INFO     | __main__ | 南网能源(003035.SZ) w: 1 bars, strength=0.815, close_pos=1.000, activity=0.704
+2026-03-05 15:06:25 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:26 | INFO     | __main__ | 德明利(001309.SZ) 15m: 16 bars, strength=0.829, close_pos=0.189, activity=0.227
+2026-03-05 15:06:27 | INFO     | __main__ | 德明利(001309.SZ) 60m: 4 bars, strength=0.695, close_pos=0.886, activity=0.655
+2026-03-05 15:06:27 | INFO     | __main__ | 德明利(001309.SZ) d: 1 bars, strength=0.881, close_pos=0.137, activity=0.102
+2026-03-05 15:06:28 | INFO     | __main__ | 德明利(001309.SZ) w: 1 bars, strength=0.853, close_pos=0.475, activity=0.346
+2026-03-05 15:06:28 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:29 | INFO     | __main__ | 瑞纳智能(301129.SZ) 15m: 16 bars, strength=0.805, close_pos=0.235, activity=0.506
+2026-03-05 15:06:30 | INFO     | __main__ | 瑞纳智能(301129.SZ) 60m: 4 bars, strength=0.814, close_pos=0.873, activity=0.294
+2026-03-05 15:06:31 | INFO     | __main__ | 瑞纳智能(301129.SZ) d: 1 bars, strength=0.805, close_pos=0.820, activity=0.339
+2026-03-05 15:06:31 | INFO     | __main__ | 瑞纳智能(301129.SZ) w: 1 bars, strength=0.775, close_pos=0.791, activity=0.584
+2026-03-05 15:06:31 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:32 | INFO     | __main__ | 特发信息(000070.SZ) 15m: 16 bars, strength=0.926, close_pos=0.000, activity=0.144
+2026-03-05 15:06:33 | INFO     | __main__ | 特发信息(000070.SZ) 60m: 4 bars, strength=0.927, close_pos=0.000, activity=0.148
+2026-03-05 15:06:34 | INFO     | __main__ | 特发信息(000070.SZ) d: 1 bars, strength=0.954, close_pos=1.000, activity=0.338
+2026-03-05 15:06:35 | INFO     | __main__ | 特发信息(000070.SZ) w: 1 bars, strength=0.954, close_pos=1.000, activity=0.349
+2026-03-05 15:06:35 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:36 | INFO     | __main__ | 宗申动力(001696.SZ) 15m: 16 bars, strength=0.915, close_pos=0.806, activity=0.453
+2026-03-05 15:06:37 | INFO     | __main__ | 宗申动力(001696.SZ) 60m: 4 bars, strength=0.872, close_pos=0.872, activity=0.462
+2026-03-05 15:06:38 | INFO     | __main__ | 宗申动力(001696.SZ) d: 1 bars, strength=0.831, close_pos=1.000, activity=0.721
+2026-03-05 15:06:39 | INFO     | __main__ | 宗申动力(001696.SZ) w: 1 bars, strength=0.899, close_pos=0.178, activity=0.225
+2026-03-05 15:06:39 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:40 | INFO     | __main__ | 亨通光电(600487.SH) 15m: 16 bars, strength=0.968, close_pos=0.505, activity=0.288
+2026-03-05 15:06:41 | INFO     | __main__ | 亨通光电(600487.SH) 60m: 4 bars, strength=0.985, close_pos=0.486, activity=0.280
+2026-03-05 15:06:42 | INFO     | __main__ | 亨通光电(600487.SH) d: 1 bars, strength=0.960, close_pos=0.846, activity=0.405
+2026-03-05 15:06:43 | INFO     | __main__ | 亨通光电(600487.SH) w: 1 bars, strength=0.855, close_pos=1.000, activity=0.433
+2026-03-05 15:06:43 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:44 | INFO     | __main__ | 海峡创新(300300.SZ) 15m: 16 bars, strength=0.939, close_pos=0.265, activity=0.481
+2026-03-05 15:06:45 | INFO     | __main__ | 海峡创新(300300.SZ) 60m: 4 bars, strength=0.788, close_pos=0.741, activity=0.397
+2026-03-05 15:06:46 | INFO     | __main__ | 海峡创新(300300.SZ) d: 1 bars, strength=0.944, close_pos=0.445, activity=0.392
+2026-03-05 15:06:47 | INFO     | __main__ | 海峡创新(300300.SZ) w: 1 bars, strength=0.950, close_pos=0.443, activity=0.382
+2026-03-05 15:06:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:48 | INFO     | __main__ | 悦心健康(002162.SZ) 15m: 16 bars, strength=0.893, close_pos=0.732, activity=0.350
+2026-03-05 15:06:49 | INFO     | __main__ | 悦心健康(002162.SZ) 60m: 4 bars, strength=0.896, close_pos=0.705, activity=0.349
+2026-03-05 15:06:50 | INFO     | __main__ | 悦心健康(002162.SZ) d: 1 bars, strength=0.902, close_pos=0.797, activity=0.257
+2026-03-05 15:06:51 | INFO     | __main__ | 悦心健康(002162.SZ) w: 1 bars, strength=0.920, close_pos=0.846, activity=0.279
+2026-03-05 15:06:51 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:52 | INFO     | __main__ | 中远海能(600026.SH) 15m: 16 bars, strength=0.960, close_pos=0.478, activity=0.263
+2026-03-05 15:06:53 | INFO     | __main__ | 中远海能(600026.SH) 60m: 4 bars, strength=0.959, close_pos=1.000, activity=0.588
+2026-03-05 15:06:54 | INFO     | __main__ | 中远海能(600026.SH) d: 1 bars, strength=0.952, close_pos=1.000, activity=0.603
+2026-03-05 15:06:55 | INFO     | __main__ | 中远海能(600026.SH) w: 1 bars, strength=0.824, close_pos=0.930, activity=0.282
+2026-03-05 15:06:55 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:06:56 | INFO     | __main__ | 岩山科技(002195.SZ) 15m: 255 bars, strength=0.591, close_pos=0.960, activity=0.626
+2026-03-05 15:06:56 | INFO     | __main__ | 岩山科技(002195.SZ) 60m: 255 bars, strength=0.814, close_pos=0.316, activity=0.291
+2026-03-05 15:06:57 | INFO     | __main__ | 岩山科技(002195.SZ) d: 255 bars, strength=0.937, close_pos=0.448, activity=0.277
+2026-03-05 15:06:58 | INFO     | __main__ | 岩山科技(002195.SZ) w: 255 bars, strength=0.946, close_pos=0.471, activity=0.283
+2026-03-05 15:07:08 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:07:09 | INFO     | __main__ | 双杰电气(300444.SZ) 15m: 16 bars, strength=0.868, close_pos=0.291, activity=0.259
+2026-03-05 15:07:10 | INFO     | __main__ | 双杰电气(300444.SZ) 60m: 4 bars, strength=0.935, close_pos=0.567, activity=0.188
+2026-03-05 15:07:11 | INFO     | __main__ | 双杰电气(300444.SZ) d: 1 bars, strength=0.938, close_pos=0.577, activity=0.204
+2026-03-05 15:07:12 | INFO     | __main__ | 双杰电气(300444.SZ) w: 1 bars, strength=0.869, close_pos=1.000, activity=0.475
+2026-03-05 15:07:12 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:13 | INFO     | __main__ | 中曼石油(603619.SH) 15m: 16 bars, strength=0.943, close_pos=0.434, activity=0.550
+2026-03-05 15:07:14 | INFO     | __main__ | 中曼石油(603619.SH) 60m: 4 bars, strength=0.956, close_pos=0.750, activity=0.486
+2026-03-05 15:07:15 | INFO     | __main__ | 中曼石油(603619.SH) d: 1 bars, strength=0.957, close_pos=0.769, activity=0.479
+2026-03-05 15:07:15 | INFO     | __main__ | 中曼石油(603619.SH) w: 1 bars, strength=0.835, close_pos=1.000, activity=0.441
+2026-03-05 15:07:16 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:17 | INFO     | __main__ | 宝丰能源(600989.SH) 15m: 16 bars, strength=0.872, close_pos=0.633, activity=0.518
+2026-03-05 15:07:17 | INFO     | __main__ | 宝丰能源(600989.SH) 60m: 4 bars, strength=0.959, close_pos=0.865, activity=0.631
+2026-03-05 15:07:18 | INFO     | __main__ | 宝丰能源(600989.SH) d: 1 bars, strength=0.951, close_pos=0.818, activity=0.596
+2026-03-05 15:07:19 | INFO     | __main__ | 宝丰能源(600989.SH) w: 1 bars, strength=0.850, close_pos=1.000, activity=0.439
+2026-03-05 15:07:19 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:20 | INFO     | __main__ | 协鑫能科(002015.SZ) 15m: 16 bars, strength=0.932, close_pos=0.301, activity=0.273
+2026-03-05 15:07:21 | INFO     | __main__ | 协鑫能科(002015.SZ) 60m: 4 bars, strength=0.932, close_pos=0.279, activity=0.261
+2026-03-05 15:07:22 | INFO     | __main__ | 协鑫能科(002015.SZ) d: 1 bars, strength=0.882, close_pos=0.848, activity=0.529
+2026-03-05 15:07:23 | INFO     | __main__ | 协鑫能科(002015.SZ) w: 1 bars, strength=0.779, close_pos=0.673, activity=0.422
+2026-03-05 15:07:23 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:24 | INFO     | __main__ | 红太阳(000525.SZ) 15m: 16 bars, strength=0.820, close_pos=0.555, activity=0.405
+2026-03-05 15:07:25 | INFO     | __main__ | 红太阳(000525.SZ) 60m: 4 bars, strength=0.874, close_pos=0.724, activity=0.450
+2026-03-05 15:07:26 | INFO     | __main__ | 红太阳(000525.SZ) d: 1 bars, strength=0.817, close_pos=0.832, activity=0.488
+2026-03-05 15:07:26 | INFO     | __main__ | 红太阳(000525.SZ) w: 1 bars, strength=0.830, close_pos=0.827, activity=0.716
+2026-03-05 15:07:27 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:28 | INFO     | __main__ | 金正大(002470.SZ) 15m: 16 bars, strength=0.944, close_pos=0.471, activity=0.616
+2026-03-05 15:07:28 | INFO     | __main__ | 金正大(002470.SZ) 60m: 4 bars, strength=0.904, close_pos=0.233, activity=0.598
+2026-03-05 15:07:29 | INFO     | __main__ | 金正大(002470.SZ) d: 1 bars, strength=0.834, close_pos=0.602, activity=0.665
+2026-03-05 15:07:30 | INFO     | __main__ | 金正大(002470.SZ) w: 1 bars, strength=0.676, close_pos=0.943, activity=0.643
+2026-03-05 15:07:31 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:32 | INFO     | __main__ | 大北农(002385.SZ) 15m: 16 bars, strength=0.797, close_pos=0.055, activity=0.411
+2026-03-05 15:07:32 | INFO     | __main__ | 大北农(002385.SZ) 60m: 4 bars, strength=0.741, close_pos=0.217, activity=0.454
+2026-03-05 15:07:33 | INFO     | __main__ | 大北农(002385.SZ) d: 1 bars, strength=0.553, close_pos=0.682, activity=0.702
+2026-03-05 15:07:34 | INFO     | __main__ | 大北农(002385.SZ) w: 1 bars, strength=0.926, close_pos=0.844, activity=0.836
+2026-03-05 15:07:35 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:35 | INFO     | __main__ | 江波龙(301308.SZ) 15m: 16 bars, strength=0.782, close_pos=0.821, activity=0.767
+2026-03-05 15:07:36 | INFO     | __main__ | 江波龙(301308.SZ) 60m: 4 bars, strength=0.796, close_pos=0.778, activity=0.738
+2026-03-05 15:07:37 | INFO     | __main__ | 江波龙(301308.SZ) d: 1 bars, strength=0.944, close_pos=0.099, activity=0.109
+2026-03-05 15:07:37 | INFO     | __main__ | 江波龙(301308.SZ) w: 1 bars, strength=0.920, close_pos=0.235, activity=0.190
+2026-03-05 15:07:38 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:39 | INFO     | __main__ | 湖南黄金(002155.SZ) 15m: 16 bars, strength=0.932, close_pos=0.749, activity=0.810
+2026-03-05 15:07:40 | INFO     | __main__ | 湖南黄金(002155.SZ) 60m: 4 bars, strength=0.920, close_pos=0.160, activity=0.201
+2026-03-05 15:07:40 | INFO     | __main__ | 湖南黄金(002155.SZ) d: 1 bars, strength=0.902, close_pos=0.326, activity=0.288
+2026-03-05 15:07:41 | INFO     | __main__ | 湖南黄金(002155.SZ) w: 1 bars, strength=0.909, close_pos=1.000, activity=0.333
+2026-03-05 15:07:42 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:43 | INFO     | __main__ | 湖南白银(002716.SZ) 15m: 16 bars, strength=0.897, close_pos=0.790, activity=0.707
+2026-03-05 15:07:44 | INFO     | __main__ | 湖南白银(002716.SZ) 60m: 4 bars, strength=0.905, close_pos=0.153, activity=0.236
+2026-03-05 15:07:44 | INFO     | __main__ | 湖南白银(002716.SZ) d: 1 bars, strength=0.906, close_pos=0.703, activity=0.576
+2026-03-05 15:07:45 | INFO     | __main__ | 湖南白银(002716.SZ) w: 1 bars, strength=0.902, close_pos=0.734, activity=0.558
+2026-03-05 15:07:45 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:46 | INFO     | __main__ | 国晟科技(603778.SH) 15m: 16 bars, strength=0.754, close_pos=0.389, activity=0.309
+2026-03-05 15:07:47 | INFO     | __main__ | 国晟科技(603778.SH) 60m: 4 bars, strength=0.891, close_pos=0.040, activity=0.091
+2026-03-05 15:07:48 | INFO     | __main__ | 国晟科技(603778.SH) d: 1 bars, strength=0.919, close_pos=0.088, activity=0.124
+2026-03-05 15:07:49 | INFO     | __main__ | 国晟科技(603778.SH) w: 1 bars, strength=0.879, close_pos=0.364, activity=0.312
+2026-03-05 15:07:49 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:50 | INFO     | __main__ | 隆平高科(000998.SZ) 15m: 16 bars, strength=0.842, close_pos=0.049, activity=0.409
+2026-03-05 15:07:51 | INFO     | __main__ | 隆平高科(000998.SZ) 60m: 4 bars, strength=0.821, close_pos=0.542, activity=0.511
+2026-03-05 15:07:52 | INFO     | __main__ | 隆平高科(000998.SZ) d: 1 bars, strength=0.819, close_pos=0.540, activity=0.509
+2026-03-05 15:07:53 | INFO     | __main__ | 隆平高科(000998.SZ) w: 1 bars, strength=0.925, close_pos=0.875, activity=0.813
+2026-03-05 15:07:53 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:07:54 | INFO     | __main__ | 嘉美包装(002969.SZ) 15m: 255 bars, strength=0.912, close_pos=1.000, activity=0.801
+2026-03-05 15:07:55 | INFO     | __main__ | 嘉美包装(002969.SZ) 60m: 255 bars, strength=0.949, close_pos=0.020, activity=0.079
+2026-03-05 15:07:55 | INFO     | __main__ | 嘉美包装(002969.SZ) d: 255 bars, strength=0.950, close_pos=0.009, activity=0.085
+2026-03-05 15:07:56 | INFO     | __main__ | 嘉美包装(002969.SZ) w: 255 bars, strength=0.730, close_pos=0.847, activity=0.683
+2026-03-05 15:08:06 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:08:07 | INFO     | __main__ | 中远海控(601919.SH) 15m: 16 bars, strength=0.858, close_pos=0.322, activity=0.380
+2026-03-05 15:08:08 | INFO     | __main__ | 中远海控(601919.SH) 60m: 4 bars, strength=0.844, close_pos=0.366, activity=0.407
+2026-03-05 15:08:09 | INFO     | __main__ | 中远海控(601919.SH) d: 1 bars, strength=0.669, close_pos=1.000, activity=0.673
+2026-03-05 15:08:10 | INFO     | __main__ | 中远海控(601919.SH) w: 1 bars, strength=0.840, close_pos=0.296, activity=0.202
+2026-03-05 15:08:11 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:08:12 | INFO     | __main__ | 包钢股份(600010.SH) 15m: 16 bars, strength=0.936, close_pos=0.159, activity=0.318
+2026-03-05 15:08:13 | INFO     | __main__ | 包钢股份(600010.SH) 60m: 4 bars, strength=0.934, close_pos=0.174, activity=0.319
+2026-03-05 15:08:13 | INFO     | __main__ | 包钢股份(600010.SH) d: 1 bars, strength=0.872, close_pos=0.733, activity=0.367
+2026-03-05 15:08:14 | INFO     | __main__ | 包钢股份(600010.SH) w: 1 bars, strength=0.891, close_pos=0.759, activity=0.364
+2026-03-05 15:08:15 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:08:16 | INFO     | __main__ | 长江电力(600900.SH) 15m: 16 bars, strength=0.954, close_pos=0.087, activity=0.123
+2026-03-05 15:08:16 | INFO     | __main__ | 长江电力(600900.SH) 60m: 4 bars, strength=0.912, close_pos=1.000, activity=0.582
+2026-03-05 15:08:17 | INFO     | __main__ | 长江电力(600900.SH) d: 1 bars, strength=0.910, close_pos=1.000, activity=0.606
+2026-03-05 15:08:18 | INFO     | __main__ | 长江电力(600900.SH) w: 1 bars, strength=0.946, close_pos=0.125, activity=0.307
+2026-03-05 15:08:19 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:08:19 | INFO     | __main__ | 美丽生态(000010.SZ) 15m: 16 bars, strength=0.913, close_pos=0.220, activity=0.219
+2026-03-05 15:08:20 | INFO     | __main__ | 美丽生态(000010.SZ) 60m: 4 bars, strength=0.860, close_pos=0.420, activity=0.310
+2026-03-05 15:08:21 | INFO     | __main__ | 美丽生态(000010.SZ) d: 1 bars, strength=0.835, close_pos=0.340, activity=0.244
+2026-03-05 15:08:22 | INFO     | __main__ | 美丽生态(000010.SZ) w: 1 bars, strength=0.872, close_pos=0.351, activity=0.246
+2026-03-05 15:08:22 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:08:23 | INFO     | __main__ | 森源电气(002358.SZ) 15m: 16 bars, strength=0.891, close_pos=0.435, activity=0.278
+2026-03-05 15:08:24 | INFO     | __main__ | 森源电气(002358.SZ) 60m: 4 bars, strength=0.938, close_pos=0.499, activity=0.277
+2026-03-05 15:08:25 | INFO     | __main__ | 森源电气(002358.SZ) d: 1 bars, strength=0.941, close_pos=0.532, activity=0.268
+2026-03-05 15:08:26 | INFO     | __main__ | 森源电气(002358.SZ) w: 1 bars, strength=0.838, close_pos=1.000, activity=0.411
+2026-03-05 15:08:26 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:08:27 | INFO     | __main__ | 北京科锐(002350.SZ) 15m: 16 bars, strength=0.968, close_pos=0.430, activity=0.173
+2026-03-05 15:08:28 | INFO     | __main__ | 北京科锐(002350.SZ) 60m: 4 bars, strength=0.944, close_pos=0.685, activity=0.335
+2026-03-05 15:08:29 | INFO     | __main__ | 北京科锐(002350.SZ) d: 1 bars, strength=0.912, close_pos=1.000, activity=0.248
+2026-03-05 15:08:30 | INFO     | __main__ | 北京科锐(002350.SZ) w: 1 bars, strength=0.900, close_pos=1.000, activity=0.335
+2026-03-05 15:08:30 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:08:31 | INFO     | __main__ | 泰嘉股份(002843.SZ) 15m: 255 bars, strength=0.941, close_pos=0.000, activity=0.353
+2026-03-05 15:08:32 | INFO     | __main__ | 泰嘉股份(002843.SZ) 60m: 255 bars, strength=0.939, close_pos=0.007, activity=0.401
+2026-03-05 15:08:32 | INFO     | __main__ | 泰嘉股份(002843.SZ) d: 255 bars, strength=0.540, close_pos=1.000, activity=0.657
+2026-03-05 15:08:33 | INFO     | __main__ | 泰嘉股份(002843.SZ) w: 255 bars, strength=0.850, close_pos=0.356, activity=0.216
+2026-03-05 15:08:43 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:08:45 | INFO     | __main__ | 翔鹭钨业(002842.SZ) 15m: 16 bars, strength=0.958, close_pos=0.097, activity=0.316
+2026-03-05 15:08:46 | INFO     | __main__ | 翔鹭钨业(002842.SZ) 60m: 4 bars, strength=0.986, close_pos=0.060, activity=0.308
+2026-03-05 15:08:47 | INFO     | __main__ | 翔鹭钨业(002842.SZ) d: 1 bars, strength=0.986, close_pos=0.282, activity=0.416
+2026-03-05 15:08:47 | INFO     | __main__ | 翔鹭钨业(002842.SZ) w: 1 bars, strength=0.880, close_pos=1.000, activity=0.380
+2026-03-05 15:08:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:08:48 | INFO     | __main__ | 白云电器(603861.SH) 15m: 16 bars, strength=0.964, close_pos=0.078, activity=0.309
+2026-03-05 15:08:49 | INFO     | __main__ | 白云电器(603861.SH) 60m: 4 bars, strength=0.967, close_pos=0.736, activity=0.408
+2026-03-05 15:08:50 | INFO     | __main__ | 白云电器(603861.SH) d: 1 bars, strength=0.970, close_pos=0.782, activity=0.407
+2026-03-05 15:08:51 | INFO     | __main__ | 白云电器(603861.SH) w: 1 bars, strength=0.889, close_pos=1.000, activity=0.399
+2026-03-05 15:08:51 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:08:52 | INFO     | __main__ | 广汇能源(600256.SH) 15m: 16 bars, strength=0.910, close_pos=0.315, activity=0.371
+2026-03-05 15:08:53 | INFO     | __main__ | 广汇能源(600256.SH) 60m: 4 bars, strength=0.903, close_pos=0.393, activity=0.426
+2026-03-05 15:08:54 | INFO     | __main__ | 广汇能源(600256.SH) d: 1 bars, strength=0.837, close_pos=1.000, activity=0.425
+2026-03-05 15:08:55 | INFO     | __main__ | 广汇能源(600256.SH) w: 1 bars, strength=0.888, close_pos=1.000, activity=0.738
+2026-03-05 15:08:55 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:08:56 | INFO     | __main__ | 厦门钨业(600549.SH) 15m: 16 bars, strength=0.938, close_pos=0.277, activity=0.373
+2026-03-05 15:08:57 | INFO     | __main__ | 厦门钨业(600549.SH) 60m: 4 bars, strength=0.970, close_pos=0.637, activity=0.445
+2026-03-05 15:08:58 | INFO     | __main__ | 厦门钨业(600549.SH) d: 1 bars, strength=0.968, close_pos=0.646, activity=0.418
+2026-03-05 15:08:59 | INFO     | __main__ | 厦门钨业(600549.SH) w: 1 bars, strength=0.956, close_pos=1.000, activity=0.527
+2026-03-05 15:08:59 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:00 | INFO     | __main__ | 中国天楹(000035.SZ) 15m: 16 bars, strength=0.916, close_pos=0.254, activity=0.227
+2026-03-05 15:09:01 | INFO     | __main__ | 中国天楹(000035.SZ) 60m: 4 bars, strength=0.912, close_pos=0.308, activity=0.265
+2026-03-05 15:09:02 | INFO     | __main__ | 中国天楹(000035.SZ) d: 1 bars, strength=0.903, close_pos=0.930, activity=0.385
+2026-03-05 15:09:03 | INFO     | __main__ | 中国天楹(000035.SZ) w: 1 bars, strength=0.855, close_pos=0.983, activity=0.387
+2026-03-05 15:09:03 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:04 | INFO     | __main__ | 白银有色(601212.SH) 15m: 16 bars, strength=0.895, close_pos=0.843, activity=0.795
+2026-03-05 15:09:05 | INFO     | __main__ | 白银有色(601212.SH) 60m: 4 bars, strength=0.901, close_pos=0.141, activity=0.288
+2026-03-05 15:09:06 | INFO     | __main__ | 白银有色(601212.SH) d: 1 bars, strength=0.924, close_pos=0.655, activity=0.521
+2026-03-05 15:09:06 | INFO     | __main__ | 白银有色(601212.SH) w: 1 bars, strength=0.917, close_pos=0.696, activity=0.473
+2026-03-05 15:09:07 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:07 | INFO     | __main__ | 雪人集团(002639.SZ) 15m: 16 bars, strength=0.888, close_pos=0.515, activity=0.386
+2026-03-05 15:09:08 | INFO     | __main__ | 雪人集团(002639.SZ) 60m: 4 bars, strength=0.907, close_pos=0.177, activity=0.216
+2026-03-05 15:09:09 | INFO     | __main__ | 雪人集团(002639.SZ) d: 1 bars, strength=0.954, close_pos=0.761, activity=0.458
+2026-03-05 15:09:10 | INFO     | __main__ | 雪人集团(002639.SZ) w: 1 bars, strength=0.951, close_pos=0.793, activity=0.496
+2026-03-05 15:09:10 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:11 | INFO     | __main__ | 三变科技(002112.SZ) 15m: 16 bars, strength=0.792, close_pos=0.357, activity=0.212
+2026-03-05 15:09:12 | INFO     | __main__ | 三变科技(002112.SZ) 60m: 4 bars, strength=0.925, close_pos=0.182, activity=0.131
+2026-03-05 15:09:13 | INFO     | __main__ | 三变科技(002112.SZ) d: 1 bars, strength=0.928, close_pos=0.175, activity=0.131
+2026-03-05 15:09:14 | INFO     | __main__ | 三变科技(002112.SZ) w: 1 bars, strength=0.831, close_pos=1.000, activity=0.433
+2026-03-05 15:09:15 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:16 | INFO     | __main__ | 中无人机(688297.SH) 15m: 16 bars, strength=0.892, close_pos=0.274, activity=0.271
+2026-03-05 15:09:16 | INFO     | __main__ | 中无人机(688297.SH) 60m: 4 bars, strength=0.850, close_pos=0.662, activity=0.377
+2026-03-05 15:09:17 | INFO     | __main__ | 中无人机(688297.SH) d: 1 bars, strength=0.724, close_pos=0.674, activity=0.283
+2026-03-05 15:09:18 | INFO     | __main__ | 中无人机(688297.SH) w: 1 bars, strength=0.773, close_pos=0.700, activity=0.292
+2026-03-05 15:09:18 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:19 | INFO     | __main__ | 大位科技(600589.SH) 15m: 16 bars, strength=0.847, close_pos=0.981, activity=0.788
+2026-03-05 15:09:20 | INFO     | __main__ | 大位科技(600589.SH) 60m: 4 bars, strength=0.898, close_pos=0.174, activity=0.356
+2026-03-05 15:09:21 | INFO     | __main__ | 大位科技(600589.SH) d: 1 bars, strength=0.898, close_pos=0.236, activity=0.368
+2026-03-05 15:09:22 | INFO     | __main__ | 大位科技(600589.SH) w: 1 bars, strength=0.890, close_pos=0.734, activity=0.386
+2026-03-05 15:09:22 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:23 | INFO     | __main__ | 洛阳钼业(603993.SH) 15m: 16 bars, strength=0.924, close_pos=0.784, activity=0.742
+2026-03-05 15:09:24 | INFO     | __main__ | 洛阳钼业(603993.SH) 60m: 4 bars, strength=0.914, close_pos=0.105, activity=0.298
+2026-03-05 15:09:25 | INFO     | __main__ | 洛阳钼业(603993.SH) d: 1 bars, strength=0.984, close_pos=0.036, activity=0.221
+2026-03-05 15:09:26 | INFO     | __main__ | 洛阳钼业(603993.SH) w: 1 bars, strength=0.975, close_pos=0.177, activity=0.320
+2026-03-05 15:09:26 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:27 | INFO     | __main__ | 中钨高新(000657.SZ) 15m: 16 bars, strength=0.950, close_pos=0.000, activity=0.226
+2026-03-05 15:09:28 | INFO     | __main__ | 中钨高新(000657.SZ) 60m: 4 bars, strength=0.980, close_pos=0.429, activity=0.473
+2026-03-05 15:09:28 | INFO     | __main__ | 中钨高新(000657.SZ) d: 1 bars, strength=0.979, close_pos=0.444, activity=0.453
+2026-03-05 15:09:29 | INFO     | __main__ | 中钨高新(000657.SZ) w: 1 bars, strength=0.952, close_pos=1.000, activity=0.462
+2026-03-05 15:09:30 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:31 | INFO     | __main__ | 新特电气(301120.SZ) 15m: 16 bars, strength=0.907, close_pos=0.646, activity=0.542
+2026-03-05 15:09:32 | INFO     | __main__ | 新特电气(301120.SZ) 60m: 4 bars, strength=0.909, close_pos=0.698, activity=0.542
+2026-03-05 15:09:32 | INFO     | __main__ | 新特电气(301120.SZ) d: 1 bars, strength=0.954, close_pos=0.696, activity=0.228
+2026-03-05 15:09:33 | INFO     | __main__ | 新特电气(301120.SZ) w: 1 bars, strength=0.953, close_pos=0.847, activity=0.279
+2026-03-05 15:09:33 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:34 | INFO     | __main__ | 中远海发(601866.SH) 15m: 16 bars, strength=0.843, close_pos=0.043, activity=0.410
+2026-03-05 15:09:35 | INFO     | __main__ | 中远海发(601866.SH) 60m: 4 bars, strength=0.841, close_pos=0.053, activity=0.426
+2026-03-05 15:09:36 | INFO     | __main__ | 中远海发(601866.SH) d: 1 bars, strength=0.830, close_pos=0.476, activity=0.586
+2026-03-05 15:09:36 | INFO     | __main__ | 中远海发(601866.SH) w: 1 bars, strength=0.726, close_pos=0.909, activity=0.384
+2026-03-05 15:09:37 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:38 | INFO     | __main__ | 西部材料(002149.SZ) 15m: 16 bars, strength=0.793, close_pos=0.868, activity=0.712
+2026-03-05 15:09:38 | INFO     | __main__ | 西部材料(002149.SZ) 60m: 4 bars, strength=0.920, close_pos=0.099, activity=0.094
+2026-03-05 15:09:39 | INFO     | __main__ | 西部材料(002149.SZ) d: 1 bars, strength=0.918, close_pos=0.098, activity=0.094
+2026-03-05 15:09:40 | INFO     | __main__ | 西部材料(002149.SZ) w: 1 bars, strength=0.815, close_pos=1.000, activity=0.282
+2026-03-05 15:09:40 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:41 | INFO     | __main__ | 沐曦股份(688802.SH) 15m: 16 bars, strength=0.669, close_pos=0.561, activity=0.387
+2026-03-05 15:09:41 | INFO     | __main__ | 沐曦股份(688802.SH) 60m: 4 bars, strength=0.885, close_pos=0.987, activity=0.710
+2026-03-05 15:09:41 | WARNING  | __main__ | 沐曦股份(688802.SH) d: 数据不足 (49 bars)
+2026-03-05 15:09:42 | WARNING  | __main__ | 沐曦股份(688802.SH) w: 数据不足 (11 bars)
+2026-03-05 15:09:42 | INFO     | __main__ | 共保存 20 条特征记录到数据库
+2026-03-05 15:09:43 | INFO     | __main__ | 华通线缆(605196.SH) 15m: 16 bars, strength=0.943, close_pos=0.225, activity=0.412
+2026-03-05 15:09:44 | INFO     | __main__ | 华通线缆(605196.SH) 60m: 4 bars, strength=0.965, close_pos=1.000, activity=0.398
+2026-03-05 15:09:45 | INFO     | __main__ | 华通线缆(605196.SH) d: 1 bars, strength=0.985, close_pos=1.000, activity=0.319
+2026-03-05 15:09:45 | INFO     | __main__ | 华通线缆(605196.SH) w: 1 bars, strength=0.983, close_pos=1.000, activity=0.376
+2026-03-05 15:09:46 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:47 | INFO     | __main__ | 铜陵有色(000630.SZ) 15m: 16 bars, strength=0.853, close_pos=0.789, activity=0.721
+2026-03-05 15:09:47 | INFO     | __main__ | 铜陵有色(000630.SZ) 60m: 4 bars, strength=0.915, close_pos=0.316, activity=0.404
+2026-03-05 15:09:48 | INFO     | __main__ | 铜陵有色(000630.SZ) d: 1 bars, strength=0.966, close_pos=0.610, activity=0.560
+2026-03-05 15:09:49 | INFO     | __main__ | 铜陵有色(000630.SZ) w: 1 bars, strength=0.954, close_pos=0.616, activity=0.530
+2026-03-05 15:09:50 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:51 | INFO     | __main__ | 航天电子(600879.SH) 15m: 16 bars, strength=0.686, close_pos=0.886, activity=0.753
+2026-03-05 15:09:52 | INFO     | __main__ | 航天电子(600879.SH) 60m: 4 bars, strength=0.914, close_pos=0.104, activity=0.152
+2026-03-05 15:09:53 | INFO     | __main__ | 航天电子(600879.SH) d: 1 bars, strength=0.914, close_pos=0.139, activity=0.175
+2026-03-05 15:09:54 | INFO     | __main__ | 航天电子(600879.SH) w: 1 bars, strength=0.852, close_pos=0.656, activity=0.532
+2026-03-05 15:09:54 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:55 | INFO     | __main__ | 中国船舶(600150.SH) 15m: 16 bars, strength=0.937, close_pos=0.207, activity=0.139
+2026-03-05 15:09:56 | INFO     | __main__ | 中国船舶(600150.SH) 60m: 4 bars, strength=0.939, close_pos=0.258, activity=0.141
+2026-03-05 15:09:57 | INFO     | __main__ | 中国船舶(600150.SH) d: 1 bars, strength=0.746, close_pos=0.826, activity=0.331
+2026-03-05 15:09:58 | INFO     | __main__ | 中国船舶(600150.SH) w: 1 bars, strength=0.878, close_pos=0.346, activity=0.208
+2026-03-05 15:09:58 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:09:59 | INFO     | __main__ | 中油工程(600339.SH) 15m: 16 bars, strength=0.893, close_pos=0.250, activity=0.436
+2026-03-05 15:10:00 | INFO     | __main__ | 中油工程(600339.SH) 60m: 4 bars, strength=0.914, close_pos=0.880, activity=0.484
+2026-03-05 15:10:01 | INFO     | __main__ | 中油工程(600339.SH) d: 1 bars, strength=0.910, close_pos=0.853, activity=0.461
+2026-03-05 15:10:02 | INFO     | __main__ | 中油工程(600339.SH) w: 1 bars, strength=0.690, close_pos=1.000, activity=0.361
+2026-03-05 15:10:02 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:03 | INFO     | __main__ | 凌玮科技(301373.SZ) 15m: 16 bars, strength=0.939, close_pos=0.579, activity=0.233
+2026-03-05 15:10:04 | INFO     | __main__ | 凌玮科技(301373.SZ) 60m: 4 bars, strength=0.867, close_pos=1.000, activity=0.323
+2026-03-05 15:10:05 | INFO     | __main__ | 凌玮科技(301373.SZ) d: 1 bars, strength=0.878, close_pos=1.000, activity=0.362
+2026-03-05 15:10:05 | INFO     | __main__ | 凌玮科技(301373.SZ) w: 1 bars, strength=0.872, close_pos=1.000, activity=0.398
+2026-03-05 15:10:05 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:06 | INFO     | __main__ | 隆基绿能(601012.SH) 15m: 16 bars, strength=0.882, close_pos=0.432, activity=0.614
+2026-03-05 15:10:07 | INFO     | __main__ | 隆基绿能(601012.SH) 60m: 4 bars, strength=0.891, close_pos=0.455, activity=0.617
+2026-03-05 15:10:08 | INFO     | __main__ | 隆基绿能(601012.SH) d: 1 bars, strength=0.798, close_pos=0.064, activity=0.365
+2026-03-05 15:10:09 | INFO     | __main__ | 隆基绿能(601012.SH) w: 1 bars, strength=0.938, close_pos=0.947, activity=0.805
+2026-03-05 15:10:09 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:10 | INFO     | __main__ | 京泉华(002885.SZ) 15m: 16 bars, strength=0.888, close_pos=0.551, activity=0.240
+2026-03-05 15:10:11 | INFO     | __main__ | 京泉华(002885.SZ) 60m: 4 bars, strength=0.895, close_pos=0.431, activity=0.186
+2026-03-05 15:10:12 | INFO     | __main__ | 京泉华(002885.SZ) d: 1 bars, strength=0.934, close_pos=0.450, activity=0.232
+2026-03-05 15:10:12 | INFO     | __main__ | 京泉华(002885.SZ) w: 1 bars, strength=0.921, close_pos=0.495, activity=0.276
+2026-03-05 15:10:12 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:13 | INFO     | __main__ | 工业富联(601138.SH) 15m: 16 bars, strength=0.644, close_pos=0.684, activity=0.674
+2026-03-05 15:10:14 | INFO     | __main__ | 工业富联(601138.SH) 60m: 4 bars, strength=0.895, close_pos=0.718, activity=0.698
+2026-03-05 15:10:15 | INFO     | __main__ | 工业富联(601138.SH) d: 1 bars, strength=0.886, close_pos=0.041, activity=0.109
+2026-03-05 15:10:15 | INFO     | __main__ | 工业富联(601138.SH) w: 1 bars, strength=0.877, close_pos=0.040, activity=0.108
+2026-03-05 15:10:16 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:16 | INFO     | __main__ | 南京港(002040.SZ) 15m: 16 bars, strength=0.828, close_pos=0.548, activity=0.685
+2026-03-05 15:10:17 | INFO     | __main__ | 南京港(002040.SZ) 60m: 4 bars, strength=0.776, close_pos=0.122, activity=0.466
+2026-03-05 15:10:18 | INFO     | __main__ | 南京港(002040.SZ) d: 1 bars, strength=0.889, close_pos=0.251, activity=0.278
+2026-03-05 15:10:19 | INFO     | __main__ | 南京港(002040.SZ) w: 1 bars, strength=0.906, close_pos=0.282, activity=0.312
+2026-03-05 15:10:19 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:20 | INFO     | __main__ | 超颖电子(603175.SH) 15m: 16 bars, strength=0.904, close_pos=0.404, activity=0.357
+2026-03-05 15:10:20 | INFO     | __main__ | 超颖电子(603175.SH) 60m: 4 bars, strength=0.879, close_pos=0.633, activity=0.379
+2026-03-05 15:10:20 | INFO     | __main__ | 超颖电子(603175.SH) d: 1 bars, strength=0.495, close_pos=0.973, activity=0.376
+2026-03-05 15:10:21 | WARNING  | __main__ | 超颖电子(603175.SH) w: 数据不足 (19 bars)
+2026-03-05 15:10:21 | INFO     | __main__ | 共保存 21 条特征记录到数据库
+2026-03-05 15:10:22 | INFO     | __main__ | 大众公用(600635.SH) 15m: 16 bars, strength=0.837, close_pos=0.373, activity=0.334
+2026-03-05 15:10:22 | INFO     | __main__ | 大众公用(600635.SH) 60m: 4 bars, strength=0.703, close_pos=0.785, activity=0.504
+2026-03-05 15:10:23 | INFO     | __main__ | 大众公用(600635.SH) d: 1 bars, strength=0.887, close_pos=0.244, activity=0.252
+2026-03-05 15:10:24 | INFO     | __main__ | 大众公用(600635.SH) w: 1 bars, strength=0.888, close_pos=0.273, activity=0.267
+2026-03-05 15:10:24 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:25 | INFO     | __main__ | 中天科技(600522.SH) 15m: 16 bars, strength=0.947, close_pos=0.316, activity=0.362
+2026-03-05 15:10:26 | INFO     | __main__ | 中天科技(600522.SH) 60m: 4 bars, strength=0.966, close_pos=0.398, activity=0.430
+2026-03-05 15:10:27 | INFO     | __main__ | 中天科技(600522.SH) d: 1 bars, strength=0.925, close_pos=0.902, activity=0.501
+2026-03-05 15:10:28 | INFO     | __main__ | 中天科技(600522.SH) w: 1 bars, strength=0.843, close_pos=1.000, activity=0.337
+2026-03-05 15:10:28 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:29 | INFO     | __main__ | 万向钱潮(000559.SZ) 15m: 16 bars, strength=0.853, close_pos=0.703, activity=0.600
+2026-03-05 15:10:30 | INFO     | __main__ | 万向钱潮(000559.SZ) 60m: 4 bars, strength=0.838, close_pos=0.119, activity=0.202
+2026-03-05 15:10:31 | INFO     | __main__ | 万向钱潮(000559.SZ) d: 1 bars, strength=0.936, close_pos=0.297, activity=0.375
+2026-03-05 15:10:32 | INFO     | __main__ | 万向钱潮(000559.SZ) w: 1 bars, strength=0.936, close_pos=0.703, activity=0.489
+2026-03-05 15:10:32 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:33 | INFO     | __main__ | 山子高科(000981.SZ) 15m: 16 bars, strength=0.899, close_pos=0.815, activity=0.544
+2026-03-05 15:10:34 | INFO     | __main__ | 山子高科(000981.SZ) 60m: 4 bars, strength=0.830, close_pos=0.084, activity=0.259
+2026-03-05 15:10:34 | INFO     | __main__ | 山子高科(000981.SZ) d: 1 bars, strength=0.904, close_pos=0.262, activity=0.243
+2026-03-05 15:10:35 | INFO     | __main__ | 山子高科(000981.SZ) w: 1 bars, strength=0.897, close_pos=0.309, activity=0.260
+2026-03-05 15:10:35 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:36 | INFO     | __main__ | 北方导航(600435.SH) 15m: 16 bars, strength=0.890, close_pos=0.646, activity=0.527
+2026-03-05 15:10:37 | INFO     | __main__ | 北方导航(600435.SH) 60m: 4 bars, strength=0.884, close_pos=0.552, activity=0.447
+2026-03-05 15:10:38 | INFO     | __main__ | 北方导航(600435.SH) d: 1 bars, strength=0.897, close_pos=0.591, activity=0.376
+2026-03-05 15:10:39 | INFO     | __main__ | 北方导航(600435.SH) w: 1 bars, strength=0.912, close_pos=0.682, activity=0.412
+2026-03-05 15:10:39 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:40 | INFO     | __main__ | 晓程科技(300139.SZ) 15m: 16 bars, strength=0.855, close_pos=0.142, activity=0.356
+2026-03-05 15:10:41 | INFO     | __main__ | 晓程科技(300139.SZ) 60m: 4 bars, strength=0.952, close_pos=0.439, activity=0.319
+2026-03-05 15:10:42 | INFO     | __main__ | 晓程科技(300139.SZ) d: 1 bars, strength=0.948, close_pos=0.444, activity=0.323
+2026-03-05 15:10:43 | INFO     | __main__ | 晓程科技(300139.SZ) w: 1 bars, strength=0.904, close_pos=1.000, activity=0.277
+2026-03-05 15:10:43 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:44 | INFO     | __main__ | 东方财富(300059.SZ) 15m: 16 bars, strength=0.938, close_pos=0.633, activity=0.679
+2026-03-05 15:10:45 | INFO     | __main__ | 东方财富(300059.SZ) 60m: 4 bars, strength=0.903, close_pos=0.077, activity=0.535
+2026-03-05 15:10:46 | INFO     | __main__ | 东方财富(300059.SZ) d: 1 bars, strength=0.902, close_pos=0.191, activity=0.770
+2026-03-05 15:10:47 | INFO     | __main__ | 东方财富(300059.SZ) w: 1 bars, strength=0.763, close_pos=0.090, activity=0.214
+2026-03-05 15:10:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:48 | INFO     | __main__ | 福达合金(603045.SH) 15m: 16 bars, strength=0.928, close_pos=0.795, activity=0.441
+2026-03-05 15:10:49 | INFO     | __main__ | 福达合金(603045.SH) 60m: 4 bars, strength=0.964, close_pos=0.646, activity=0.314
+2026-03-05 15:10:49 | INFO     | __main__ | 福达合金(603045.SH) d: 1 bars, strength=0.964, close_pos=0.647, activity=0.294
+2026-03-05 15:10:50 | INFO     | __main__ | 福达合金(603045.SH) w: 1 bars, strength=0.959, close_pos=1.000, activity=0.470
+2026-03-05 15:10:50 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:51 | INFO     | __main__ | 北方稀土(600111.SH) 15m: 16 bars, strength=0.912, close_pos=0.782, activity=0.754
+2026-03-05 15:10:52 | INFO     | __main__ | 北方稀土(600111.SH) 60m: 4 bars, strength=0.885, close_pos=0.210, activity=0.397
+2026-03-05 15:10:53 | INFO     | __main__ | 北方稀土(600111.SH) d: 1 bars, strength=0.931, close_pos=0.401, activity=0.269
+2026-03-05 15:10:54 | INFO     | __main__ | 北方稀土(600111.SH) w: 1 bars, strength=0.932, close_pos=0.427, activity=0.310
+2026-03-05 15:10:54 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:55 | INFO     | __main__ | 飞龙股份(002536.SZ) 15m: 16 bars, strength=0.949, close_pos=0.458, activity=0.304
+2026-03-05 15:10:56 | INFO     | __main__ | 飞龙股份(002536.SZ) 60m: 4 bars, strength=0.897, close_pos=0.819, activity=0.422
+2026-03-05 15:10:56 | INFO     | __main__ | 飞龙股份(002536.SZ) d: 1 bars, strength=0.946, close_pos=0.793, activity=0.320
+2026-03-05 15:10:57 | INFO     | __main__ | 飞龙股份(002536.SZ) w: 1 bars, strength=0.948, close_pos=0.837, activity=0.324
+2026-03-05 15:10:57 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:10:58 | INFO     | __main__ | 蓝焰控股(000968.SZ) 15m: 16 bars, strength=0.921, close_pos=0.281, activity=0.458
+2026-03-05 15:10:59 | INFO     | __main__ | 蓝焰控股(000968.SZ) 60m: 4 bars, strength=0.920, close_pos=0.310, activity=0.491
+2026-03-05 15:11:00 | INFO     | __main__ | 蓝焰控股(000968.SZ) d: 1 bars, strength=0.901, close_pos=0.902, activity=0.447
+2026-03-05 15:11:01 | INFO     | __main__ | 蓝焰控股(000968.SZ) w: 1 bars, strength=0.730, close_pos=1.000, activity=0.436
+2026-03-05 15:11:01 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:02 | INFO     | __main__ | 合众思壮(002383.SZ) 15m: 16 bars, strength=0.928, close_pos=0.248, activity=0.214
+2026-03-05 15:11:03 | INFO     | __main__ | 合众思壮(002383.SZ) 60m: 4 bars, strength=0.809, close_pos=0.474, activity=0.432
+2026-03-05 15:11:04 | INFO     | __main__ | 合众思壮(002383.SZ) d: 1 bars, strength=0.812, close_pos=0.531, activity=0.445
+2026-03-05 15:11:05 | INFO     | __main__ | 合众思壮(002383.SZ) w: 1 bars, strength=0.855, close_pos=0.635, activity=0.319
+2026-03-05 15:11:05 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:06 | INFO     | __main__ | 润和软件(300339.SZ) 15m: 16 bars, strength=0.877, close_pos=0.296, activity=0.567
+2026-03-05 15:11:07 | INFO     | __main__ | 润和软件(300339.SZ) 60m: 4 bars, strength=0.879, close_pos=0.078, activity=0.694
+2026-03-05 15:11:08 | INFO     | __main__ | 润和软件(300339.SZ) d: 1 bars, strength=0.833, close_pos=0.164, activity=0.667
+2026-03-05 15:11:09 | INFO     | __main__ | 润和软件(300339.SZ) w: 1 bars, strength=0.861, close_pos=0.119, activity=0.353
+2026-03-05 15:11:09 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:10 | INFO     | __main__ | 华如科技(301302.SZ) 15m: 16 bars, strength=0.886, close_pos=0.135, activity=0.243
+2026-03-05 15:11:11 | INFO     | __main__ | 华如科技(301302.SZ) 60m: 4 bars, strength=0.814, close_pos=0.543, activity=0.583
+2026-03-05 15:11:12 | INFO     | __main__ | 华如科技(301302.SZ) d: 1 bars, strength=0.663, close_pos=0.857, activity=0.315
+2026-03-05 15:11:12 | INFO     | __main__ | 华如科技(301302.SZ) w: 1 bars, strength=0.708, close_pos=0.883, activity=0.312
+2026-03-05 15:11:12 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:13 | INFO     | __main__ | 长飞光纤(601869.SH) 15m: 255 bars, strength=0.952, close_pos=0.924, activity=0.793
+2026-03-05 15:11:13 | INFO     | __main__ | 长飞光纤(601869.SH) 60m: 255 bars, strength=0.966, close_pos=0.000, activity=0.107
+2026-03-05 15:11:14 | INFO     | __main__ | 长飞光纤(601869.SH) d: 255 bars, strength=0.948, close_pos=0.765, activity=0.497
+2026-03-05 15:11:14 | INFO     | __main__ | 长飞光纤(601869.SH) w: 255 bars, strength=0.942, close_pos=0.745, activity=0.380
+2026-03-05 15:11:21 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:11:22 | INFO     | __main__ | 中际旭创(300308.SZ) 15m: 16 bars, strength=0.641, close_pos=0.681, activity=0.620
+2026-03-05 15:11:23 | INFO     | __main__ | 中际旭创(300308.SZ) 60m: 4 bars, strength=0.756, close_pos=0.113, activity=0.206
+2026-03-05 15:11:24 | INFO     | __main__ | 中际旭创(300308.SZ) d: 1 bars, strength=0.954, close_pos=0.000, activity=0.011
+2026-03-05 15:11:25 | INFO     | __main__ | 中际旭创(300308.SZ) w: 1 bars, strength=0.952, close_pos=0.006, activity=0.035
+2026-03-05 15:11:25 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:26 | INFO     | __main__ | 蓝色光标(300058.SZ) 15m: 16 bars, strength=0.944, close_pos=0.843, activity=0.747
+2026-03-05 15:11:26 | INFO     | __main__ | 蓝色光标(300058.SZ) 60m: 4 bars, strength=0.943, close_pos=0.621, activity=0.692
+2026-03-05 15:11:27 | INFO     | __main__ | 蓝色光标(300058.SZ) d: 1 bars, strength=0.911, close_pos=0.082, activity=0.267
+2026-03-05 15:11:28 | INFO     | __main__ | 蓝色光标(300058.SZ) w: 1 bars, strength=0.587, close_pos=0.607, activity=0.500
+2026-03-05 15:11:28 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:29 | INFO     | __main__ | 永鼎股份(600105.SH) 15m: 255 bars, strength=0.742, close_pos=0.830, activity=0.661
+2026-03-05 15:11:30 | INFO     | __main__ | 永鼎股份(600105.SH) 60m: 255 bars, strength=0.935, close_pos=0.153, activity=0.128
+2026-03-05 15:11:31 | INFO     | __main__ | 永鼎股份(600105.SH) d: 255 bars, strength=0.974, close_pos=0.384, activity=0.313
+2026-03-05 15:11:31 | INFO     | __main__ | 永鼎股份(600105.SH) w: 255 bars, strength=0.974, close_pos=0.528, activity=0.401
+2026-03-05 15:11:39 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:11:40 | INFO     | __main__ | 三联锻造(001282.SZ) 15m: 16 bars, strength=0.924, close_pos=0.061, activity=0.268
+2026-03-05 15:11:41 | INFO     | __main__ | 三联锻造(001282.SZ) 60m: 4 bars, strength=0.898, close_pos=0.393, activity=0.379
+2026-03-05 15:11:42 | INFO     | __main__ | 三联锻造(001282.SZ) d: 1 bars, strength=0.610, close_pos=0.932, activity=0.659
+2026-03-05 15:11:42 | INFO     | __main__ | 三联锻造(001282.SZ) w: 1 bars, strength=0.600, close_pos=0.730, activity=0.642
+2026-03-05 15:11:43 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:44 | INFO     | __main__ | 立讯精密(002475.SZ) 15m: 16 bars, strength=0.928, close_pos=0.892, activity=0.716
+2026-03-05 15:11:44 | INFO     | __main__ | 立讯精密(002475.SZ) 60m: 4 bars, strength=0.934, close_pos=0.335, activity=0.584
+2026-03-05 15:11:45 | INFO     | __main__ | 立讯精密(002475.SZ) d: 1 bars, strength=0.917, close_pos=0.045, activity=0.630
+2026-03-05 15:11:46 | INFO     | __main__ | 立讯精密(002475.SZ) w: 1 bars, strength=0.805, close_pos=0.006, activity=0.267
+2026-03-05 15:11:46 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:47 | INFO     | __main__ | 中国卫星(600118.SH) 15m: 16 bars, strength=0.814, close_pos=0.992, activity=0.700
+2026-03-05 15:11:48 | INFO     | __main__ | 中国卫星(600118.SH) 60m: 4 bars, strength=0.908, close_pos=0.139, activity=0.210
+2026-03-05 15:11:49 | INFO     | __main__ | 中国卫星(600118.SH) d: 1 bars, strength=0.930, close_pos=0.327, activity=0.389
+2026-03-05 15:11:50 | INFO     | __main__ | 中国卫星(600118.SH) w: 1 bars, strength=0.902, close_pos=0.554, activity=0.491
+2026-03-05 15:11:50 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:51 | INFO     | __main__ | 陕西黑猫(601015.SH) 15m: 16 bars, strength=0.852, close_pos=0.197, activity=0.264
+2026-03-05 15:11:52 | INFO     | __main__ | 陕西黑猫(601015.SH) 60m: 4 bars, strength=0.910, close_pos=0.419, activity=0.399
+2026-03-05 15:11:53 | INFO     | __main__ | 陕西黑猫(601015.SH) d: 1 bars, strength=0.909, close_pos=0.419, activity=0.412
+2026-03-05 15:11:54 | INFO     | __main__ | 陕西黑猫(601015.SH) w: 1 bars, strength=0.851, close_pos=0.921, activity=0.465
+2026-03-05 15:11:54 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:55 | INFO     | __main__ | 新联电子(002546.SZ) 15m: 16 bars, strength=0.943, close_pos=0.014, activity=0.194
+2026-03-05 15:11:56 | INFO     | __main__ | 新联电子(002546.SZ) 60m: 4 bars, strength=0.944, close_pos=0.020, activity=0.199
+2026-03-05 15:11:56 | INFO     | __main__ | 新联电子(002546.SZ) d: 1 bars, strength=0.960, close_pos=1.000, activity=0.503
+2026-03-05 15:11:57 | INFO     | __main__ | 新联电子(002546.SZ) w: 1 bars, strength=0.961, close_pos=1.000, activity=0.483
+2026-03-05 15:11:58 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:11:59 | INFO     | __main__ | 易天股份(300812.SZ) 15m: 16 bars, strength=0.952, close_pos=0.176, activity=0.185
+2026-03-05 15:11:59 | INFO     | __main__ | 易天股份(300812.SZ) 60m: 4 bars, strength=0.949, close_pos=0.211, activity=0.200
+2026-03-05 15:12:00 | INFO     | __main__ | 易天股份(300812.SZ) d: 1 bars, strength=0.893, close_pos=1.000, activity=0.244
+2026-03-05 15:12:01 | INFO     | __main__ | 易天股份(300812.SZ) w: 1 bars, strength=0.879, close_pos=1.000, activity=0.309
+2026-03-05 15:12:01 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:02 | INFO     | __main__ | 泰山石油(000554.SZ) 15m: 16 bars, strength=0.932, close_pos=0.212, activity=0.340
+2026-03-05 15:12:03 | INFO     | __main__ | 泰山石油(000554.SZ) 60m: 4 bars, strength=0.917, close_pos=1.000, activity=0.352
+2026-03-05 15:12:03 | INFO     | __main__ | 泰山石油(000554.SZ) d: 1 bars, strength=0.916, close_pos=1.000, activity=0.355
+2026-03-05 15:12:04 | INFO     | __main__ | 泰山石油(000554.SZ) w: 1 bars, strength=0.853, close_pos=1.000, activity=0.387
+2026-03-05 15:12:05 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:06 | INFO     | __main__ | 云铝股份(000807.SZ) 15m: 16 bars, strength=0.951, close_pos=0.235, activity=0.195
+2026-03-05 15:12:07 | INFO     | __main__ | 云铝股份(000807.SZ) 60m: 4 bars, strength=0.925, close_pos=0.402, activity=0.201
+2026-03-05 15:12:07 | INFO     | __main__ | 云铝股份(000807.SZ) d: 1 bars, strength=0.977, close_pos=0.383, activity=0.187
+2026-03-05 15:12:08 | INFO     | __main__ | 云铝股份(000807.SZ) w: 1 bars, strength=0.938, close_pos=0.643, activity=0.416
+2026-03-05 15:12:08 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:09 | INFO     | __main__ | 泸天化(000912.SZ) 15m: 16 bars, strength=0.825, close_pos=0.425, activity=0.516
+2026-03-05 15:12:10 | INFO     | __main__ | 泸天化(000912.SZ) 60m: 4 bars, strength=0.902, close_pos=0.714, activity=0.602
+2026-03-05 15:12:11 | INFO     | __main__ | 泸天化(000912.SZ) d: 1 bars, strength=0.895, close_pos=0.826, activity=0.569
+2026-03-05 15:12:12 | INFO     | __main__ | 泸天化(000912.SZ) w: 1 bars, strength=0.578, close_pos=1.000, activity=0.696
+2026-03-05 15:12:12 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:13 | INFO     | __main__ | 登海种业(002041.SZ) 15m: 16 bars, strength=0.870, close_pos=0.000, activity=0.352
+2026-03-05 15:12:14 | INFO     | __main__ | 登海种业(002041.SZ) 60m: 4 bars, strength=0.876, close_pos=0.376, activity=0.459
+2026-03-05 15:12:15 | INFO     | __main__ | 登海种业(002041.SZ) d: 1 bars, strength=0.865, close_pos=0.388, activity=0.472
+2026-03-05 15:12:16 | INFO     | __main__ | 登海种业(002041.SZ) w: 1 bars, strength=0.903, close_pos=1.000, activity=0.821
+2026-03-05 15:12:16 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:17 | INFO     | __main__ | 王力安防(605268.SH) 15m: 16 bars, strength=0.924, close_pos=0.314, activity=0.304
+2026-03-05 15:12:18 | INFO     | __main__ | 王力安防(605268.SH) 60m: 4 bars, strength=0.803, close_pos=1.000, activity=0.248
+2026-03-05 15:12:19 | INFO     | __main__ | 王力安防(605268.SH) d: 1 bars, strength=0.924, close_pos=0.993, activity=0.328
+2026-03-05 15:12:19 | INFO     | __main__ | 王力安防(605268.SH) w: 1 bars, strength=0.946, close_pos=1.000, activity=0.380
+2026-03-05 15:12:19 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:20 | INFO     | __main__ | 兆易创新(603986.SH) 15m: 16 bars, strength=0.925, close_pos=0.872, activity=0.728
+2026-03-05 15:12:21 | INFO     | __main__ | 兆易创新(603986.SH) 60m: 4 bars, strength=0.921, close_pos=0.000, activity=0.198
+2026-03-05 15:12:22 | INFO     | __main__ | 兆易创新(603986.SH) d: 1 bars, strength=0.944, close_pos=0.215, activity=0.248
+2026-03-05 15:12:22 | INFO     | __main__ | 兆易创新(603986.SH) w: 1 bars, strength=0.938, close_pos=0.392, activity=0.324
+2026-03-05 15:12:22 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:23 | INFO     | __main__ | 赣能股份(000899.SZ) 15m: 16 bars, strength=0.902, close_pos=0.217, activity=0.267
+2026-03-05 15:12:24 | INFO     | __main__ | 赣能股份(000899.SZ) 60m: 4 bars, strength=0.905, close_pos=0.231, activity=0.276
+2026-03-05 15:12:25 | INFO     | __main__ | 赣能股份(000899.SZ) d: 1 bars, strength=0.818, close_pos=1.000, activity=0.247
+2026-03-05 15:12:26 | INFO     | __main__ | 赣能股份(000899.SZ) w: 1 bars, strength=0.861, close_pos=0.897, activity=0.363
+2026-03-05 15:12:26 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:27 | INFO     | __main__ | 永泰能源(600157.SH) 15m: 16 bars, strength=0.891, close_pos=0.173, activity=0.352
+2026-03-05 15:12:28 | INFO     | __main__ | 永泰能源(600157.SH) 60m: 4 bars, strength=0.892, close_pos=0.174, activity=0.347
+2026-03-05 15:12:29 | INFO     | __main__ | 永泰能源(600157.SH) d: 1 bars, strength=0.896, close_pos=0.767, activity=0.340
+2026-03-05 15:12:30 | INFO     | __main__ | 永泰能源(600157.SH) w: 1 bars, strength=0.845, close_pos=0.757, activity=0.360
+2026-03-05 15:12:30 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:31 | INFO     | __main__ | 四方股份(601126.SH) 15m: 16 bars, strength=0.966, close_pos=0.760, activity=0.306
+2026-03-05 15:12:32 | INFO     | __main__ | 四方股份(601126.SH) 60m: 4 bars, strength=0.969, close_pos=0.796, activity=0.317
+2026-03-05 15:12:32 | INFO     | __main__ | 四方股份(601126.SH) d: 1 bars, strength=0.958, close_pos=1.000, activity=0.436
+2026-03-05 15:12:33 | INFO     | __main__ | 四方股份(601126.SH) w: 1 bars, strength=0.907, close_pos=1.000, activity=0.257
+2026-03-05 15:12:34 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:34 | INFO     | __main__ | 华盛昌(002980.SZ) 15m: 16 bars, strength=0.937, close_pos=0.102, activity=0.251
+2026-03-05 15:12:35 | INFO     | __main__ | 华盛昌(002980.SZ) 60m: 4 bars, strength=0.932, close_pos=0.198, activity=0.315
+2026-03-05 15:12:36 | INFO     | __main__ | 华盛昌(002980.SZ) d: 1 bars, strength=0.755, close_pos=1.000, activity=0.419
+2026-03-05 15:12:36 | INFO     | __main__ | 华盛昌(002980.SZ) w: 1 bars, strength=0.778, close_pos=1.000, activity=0.648
+2026-03-05 15:12:37 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:37 | INFO     | __main__ | 五粮液(000858.SZ) 15m: 16 bars, strength=0.951, close_pos=0.778, activity=0.693
+2026-03-05 15:12:38 | INFO     | __main__ | 五粮液(000858.SZ) 60m: 4 bars, strength=0.952, close_pos=0.516, activity=0.657
+2026-03-05 15:12:39 | INFO     | __main__ | 五粮液(000858.SZ) d: 1 bars, strength=0.958, close_pos=0.379, activity=0.675
+2026-03-05 15:12:40 | INFO     | __main__ | 五粮液(000858.SZ) w: 1 bars, strength=0.923, close_pos=0.149, activity=0.482
+2026-03-05 15:12:40 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:41 | INFO     | __main__ | 新锦动力(300157.SZ) 15m: 16 bars, strength=0.905, close_pos=0.100, activity=0.275
+2026-03-05 15:12:42 | INFO     | __main__ | 新锦动力(300157.SZ) 60m: 4 bars, strength=0.897, close_pos=0.747, activity=0.517
+2026-03-05 15:12:43 | INFO     | __main__ | 新锦动力(300157.SZ) d: 1 bars, strength=0.891, close_pos=0.991, activity=0.264
+2026-03-05 15:12:44 | INFO     | __main__ | 新锦动力(300157.SZ) w: 1 bars, strength=0.912, close_pos=1.000, activity=0.277
+2026-03-05 15:12:44 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:45 | INFO     | __main__ | 巨力索具(002342.SZ) 15m: 16 bars, strength=0.903, close_pos=0.772, activity=0.791
+2026-03-05 15:12:46 | INFO     | __main__ | 巨力索具(002342.SZ) 60m: 4 bars, strength=0.918, close_pos=0.011, activity=0.266
+2026-03-05 15:12:47 | INFO     | __main__ | 巨力索具(002342.SZ) d: 1 bars, strength=0.934, close_pos=0.723, activity=0.473
+2026-03-05 15:12:48 | INFO     | __main__ | 巨力索具(002342.SZ) w: 1 bars, strength=0.933, close_pos=0.743, activity=0.503
+2026-03-05 15:12:48 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:49 | INFO     | __main__ | 闰土股份(002440.SZ) 15m: 16 bars, strength=0.861, close_pos=0.066, activity=0.155
+2026-03-05 15:12:50 | INFO     | __main__ | 闰土股份(002440.SZ) 60m: 4 bars, strength=0.951, close_pos=0.024, activity=0.120
+2026-03-05 15:12:51 | INFO     | __main__ | 闰土股份(002440.SZ) d: 1 bars, strength=0.931, close_pos=0.243, activity=0.266
+2026-03-05 15:12:51 | INFO     | __main__ | 闰土股份(002440.SZ) w: 1 bars, strength=0.773, close_pos=1.000, activity=0.370
+2026-03-05 15:12:52 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:53 | INFO     | __main__ | 风华高科(000636.SZ) 15m: 16 bars, strength=0.844, close_pos=0.077, activity=0.370
+2026-03-05 15:12:53 | INFO     | __main__ | 风华高科(000636.SZ) 60m: 4 bars, strength=0.957, close_pos=0.180, activity=0.512
+2026-03-05 15:12:54 | INFO     | __main__ | 风华高科(000636.SZ) d: 1 bars, strength=0.957, close_pos=0.199, activity=0.541
+2026-03-05 15:12:55 | INFO     | __main__ | 风华高科(000636.SZ) w: 1 bars, strength=0.851, close_pos=1.000, activity=0.412
+2026-03-05 15:12:55 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:12:56 | INFO     | __main__ | 贵州茅台(600519.SH) 15m: 16 bars, strength=0.976, close_pos=0.913, activity=0.858
+2026-03-05 15:12:57 | INFO     | __main__ | 贵州茅台(600519.SH) 60m: 4 bars, strength=0.955, close_pos=0.350, activity=0.583
+2026-03-05 15:12:58 | INFO     | __main__ | 贵州茅台(600519.SH) d: 1 bars, strength=0.636, close_pos=0.464, activity=0.636
+2026-03-05 15:12:59 | INFO     | __main__ | 贵州茅台(600519.SH) w: 1 bars, strength=0.839, close_pos=0.457, activity=0.629
+2026-03-05 15:12:59 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:00 | INFO     | __main__ | 贝肯能源(002828.SZ) 15m: 16 bars, strength=0.877, close_pos=0.246, activity=0.543
+2026-03-05 15:13:01 | INFO     | __main__ | 贝肯能源(002828.SZ) 60m: 4 bars, strength=0.911, close_pos=0.617, activity=0.460
+2026-03-05 15:13:02 | INFO     | __main__ | 贝肯能源(002828.SZ) d: 1 bars, strength=0.901, close_pos=0.603, activity=0.431
+2026-03-05 15:13:02 | INFO     | __main__ | 贝肯能源(002828.SZ) w: 1 bars, strength=0.903, close_pos=1.000, activity=0.358
+2026-03-05 15:13:02 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:03 | INFO     | __main__ | 瑞德智能(301135.SZ) 15m: 16 bars, strength=0.755, close_pos=0.845, activity=0.625
+2026-03-05 15:13:04 | INFO     | __main__ | 瑞德智能(301135.SZ) 60m: 4 bars, strength=0.858, close_pos=0.044, activity=0.197
+2026-03-05 15:13:05 | INFO     | __main__ | 瑞德智能(301135.SZ) d: 1 bars, strength=0.853, close_pos=0.115, activity=0.234
+2026-03-05 15:13:05 | INFO     | __main__ | 瑞德智能(301135.SZ) w: 1 bars, strength=0.849, close_pos=0.317, activity=0.251
+2026-03-05 15:13:05 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:06 | INFO     | __main__ | 中兵红箭(000519.SZ) 15m: 16 bars, strength=0.886, close_pos=0.266, activity=0.432
+2026-03-05 15:13:07 | INFO     | __main__ | 中兵红箭(000519.SZ) 60m: 4 bars, strength=0.886, close_pos=0.305, activity=0.416
+2026-03-05 15:13:08 | INFO     | __main__ | 中兵红箭(000519.SZ) d: 1 bars, strength=0.805, close_pos=0.367, activity=0.312
+2026-03-05 15:13:09 | INFO     | __main__ | 中兵红箭(000519.SZ) w: 1 bars, strength=0.851, close_pos=0.473, activity=0.386
+2026-03-05 15:13:09 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:10 | INFO     | __main__ | 海格通信(002465.SZ) 15m: 16 bars, strength=0.763, close_pos=0.798, activity=0.653
+2026-03-05 15:13:11 | INFO     | __main__ | 海格通信(002465.SZ) 60m: 4 bars, strength=0.822, close_pos=0.164, activity=0.311
+2026-03-05 15:13:12 | INFO     | __main__ | 海格通信(002465.SZ) d: 1 bars, strength=0.818, close_pos=0.165, activity=0.312
+2026-03-05 15:13:13 | INFO     | __main__ | 海格通信(002465.SZ) w: 1 bars, strength=0.795, close_pos=0.680, activity=0.427
+2026-03-05 15:13:13 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:14 | INFO     | __main__ | 京城股份(600860.SH) 15m: 16 bars, strength=0.931, close_pos=0.189, activity=0.217
+2026-03-05 15:13:15 | INFO     | __main__ | 京城股份(600860.SH) 60m: 4 bars, strength=0.881, close_pos=0.885, activity=0.356
+2026-03-05 15:13:16 | INFO     | __main__ | 京城股份(600860.SH) d: 1 bars, strength=0.802, close_pos=0.706, activity=0.271
+2026-03-05 15:13:17 | INFO     | __main__ | 京城股份(600860.SH) w: 1 bars, strength=0.846, close_pos=0.714, activity=0.274
+2026-03-05 15:13:17 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:18 | INFO     | __main__ | 中超控股(002471.SZ) 15m: 16 bars, strength=0.780, close_pos=0.910, activity=0.635
+2026-03-05 15:13:19 | INFO     | __main__ | 中超控股(002471.SZ) 60m: 4 bars, strength=0.926, close_pos=0.083, activity=0.125
+2026-03-05 15:13:19 | INFO     | __main__ | 中超控股(002471.SZ) d: 1 bars, strength=0.929, close_pos=0.747, activity=0.424
+2026-03-05 15:13:20 | INFO     | __main__ | 中超控股(002471.SZ) w: 1 bars, strength=0.938, close_pos=0.784, activity=0.451
+2026-03-05 15:13:20 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:21 | INFO     | __main__ | 中海油服(601808.SH) 15m: 16 bars, strength=0.896, close_pos=0.386, activity=0.421
+2026-03-05 15:13:22 | INFO     | __main__ | 中海油服(601808.SH) 60m: 4 bars, strength=0.894, close_pos=0.405, activity=0.444
+2026-03-05 15:13:23 | INFO     | __main__ | 中海油服(601808.SH) d: 1 bars, strength=0.889, close_pos=0.994, activity=0.522
+2026-03-05 15:13:24 | INFO     | __main__ | 中海油服(601808.SH) w: 1 bars, strength=0.598, close_pos=0.750, activity=0.312
+2026-03-05 15:13:24 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:25 | INFO     | __main__ | 中国中免(601888.SH) 15m: 16 bars, strength=0.945, close_pos=0.886, activity=0.861
+2026-03-05 15:13:26 | INFO     | __main__ | 中国中免(601888.SH) 60m: 4 bars, strength=0.946, close_pos=0.876, activity=0.855
+2026-03-05 15:13:27 | INFO     | __main__ | 中国中免(601888.SH) d: 1 bars, strength=0.923, close_pos=0.000, activity=0.354
+2026-03-05 15:13:28 | INFO     | __main__ | 中国中免(601888.SH) w: 1 bars, strength=0.914, close_pos=0.953, activity=0.761
+2026-03-05 15:13:28 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:29 | INFO     | __main__ | 掌阅科技(603533.SH) 15m: 16 bars, strength=0.907, close_pos=0.871, activity=0.798
+2026-03-05 15:13:30 | INFO     | __main__ | 掌阅科技(603533.SH) 60m: 4 bars, strength=0.823, close_pos=0.167, activity=0.283
+2026-03-05 15:13:31 | INFO     | __main__ | 掌阅科技(603533.SH) d: 1 bars, strength=0.819, close_pos=0.210, activity=0.271
+2026-03-05 15:13:31 | INFO     | __main__ | 掌阅科技(603533.SH) w: 1 bars, strength=0.622, close_pos=0.723, activity=0.349
+2026-03-05 15:13:31 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:32 | INFO     | __main__ | 海兰信(300065.SZ) 15m: 16 bars, strength=0.841, close_pos=0.561, activity=0.605
+2026-03-05 15:13:33 | INFO     | __main__ | 海兰信(300065.SZ) 60m: 4 bars, strength=0.933, close_pos=0.121, activity=0.269
+2026-03-05 15:13:34 | INFO     | __main__ | 海兰信(300065.SZ) d: 1 bars, strength=0.934, close_pos=0.124, activity=0.270
+2026-03-05 15:13:35 | INFO     | __main__ | 海兰信(300065.SZ) w: 1 bars, strength=0.943, close_pos=0.391, activity=0.257
+2026-03-05 15:13:35 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:36 | INFO     | __main__ | 金瑞矿业(600714.SH) 15m: 255 bars, strength=0.943, close_pos=0.534, activity=0.275
+2026-03-05 15:13:36 | INFO     | __main__ | 金瑞矿业(600714.SH) 60m: 255 bars, strength=0.926, close_pos=0.741, activity=0.416
+2026-03-05 15:13:37 | INFO     | __main__ | 金瑞矿业(600714.SH) d: 255 bars, strength=0.902, close_pos=1.000, activity=0.496
+2026-03-05 15:13:38 | INFO     | __main__ | 金瑞矿业(600714.SH) w: 255 bars, strength=0.897, close_pos=1.000, activity=0.212
+2026-03-05 15:13:44 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:13:45 | INFO     | __main__ | 博纳影业(001330.SZ) 15m: 16 bars, strength=0.969, close_pos=0.921, activity=0.926
+2026-03-05 15:13:46 | INFO     | __main__ | 博纳影业(001330.SZ) 60m: 4 bars, strength=0.944, close_pos=0.673, activity=0.791
+2026-03-05 15:13:47 | INFO     | __main__ | 博纳影业(001330.SZ) d: 1 bars, strength=0.919, close_pos=0.031, activity=0.397
+2026-03-05 15:13:47 | INFO     | __main__ | 博纳影业(001330.SZ) w: 1 bars, strength=0.897, close_pos=0.120, activity=0.471
+2026-03-05 15:13:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:48 | INFO     | __main__ | 北化股份(002246.SZ) 15m: 16 bars, strength=0.949, close_pos=0.581, activity=0.395
+2026-03-05 15:13:49 | INFO     | __main__ | 北化股份(002246.SZ) 60m: 4 bars, strength=0.951, close_pos=0.610, activity=0.396
+2026-03-05 15:13:50 | INFO     | __main__ | 北化股份(002246.SZ) d: 1 bars, strength=0.916, close_pos=0.466, activity=0.186
+2026-03-05 15:13:51 | INFO     | __main__ | 北化股份(002246.SZ) w: 1 bars, strength=0.921, close_pos=0.448, activity=0.182
+2026-03-05 15:13:51 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:52 | INFO     | __main__ | 海油工程(600583.SH) 15m: 16 bars, strength=0.889, close_pos=0.148, activity=0.433
+2026-03-05 15:13:53 | INFO     | __main__ | 海油工程(600583.SH) 60m: 4 bars, strength=0.955, close_pos=0.496, activity=0.445
+2026-03-05 15:13:54 | INFO     | __main__ | 海油工程(600583.SH) d: 1 bars, strength=0.954, close_pos=0.488, activity=0.426
+2026-03-05 15:13:55 | INFO     | __main__ | 海油工程(600583.SH) w: 1 bars, strength=0.622, close_pos=0.949, activity=0.345
+2026-03-05 15:13:55 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:56 | INFO     | __main__ | 珈伟新能(300317.SZ) 15m: 16 bars, strength=0.944, close_pos=0.479, activity=0.221
+2026-03-05 15:13:57 | INFO     | __main__ | 珈伟新能(300317.SZ) 60m: 4 bars, strength=0.871, close_pos=1.000, activity=0.542
+2026-03-05 15:13:58 | INFO     | __main__ | 珈伟新能(300317.SZ) d: 1 bars, strength=0.857, close_pos=1.000, activity=0.534
+2026-03-05 15:13:58 | INFO     | __main__ | 珈伟新能(300317.SZ) w: 1 bars, strength=0.809, close_pos=1.000, activity=0.671
+2026-03-05 15:13:58 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:13:59 | INFO     | __main__ | 每日互动(300766.SZ) 15m: 16 bars, strength=0.742, close_pos=0.739, activity=0.691
+2026-03-05 15:14:00 | INFO     | __main__ | 每日互动(300766.SZ) 60m: 4 bars, strength=0.813, close_pos=0.080, activity=0.220
+2026-03-05 15:14:01 | INFO     | __main__ | 每日互动(300766.SZ) d: 1 bars, strength=0.819, close_pos=0.106, activity=0.256
+2026-03-05 15:14:02 | INFO     | __main__ | 每日互动(300766.SZ) w: 1 bars, strength=0.850, close_pos=0.151, activity=0.182
+2026-03-05 15:14:02 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:03 | INFO     | __main__ | 广安爱众(600979.SH) 15m: 16 bars, strength=0.928, close_pos=0.071, activity=0.181
+2026-03-05 15:14:04 | INFO     | __main__ | 广安爱众(600979.SH) 60m: 4 bars, strength=0.880, close_pos=0.371, activity=0.307
+2026-03-05 15:14:04 | INFO     | __main__ | 广安爱众(600979.SH) d: 1 bars, strength=0.837, close_pos=1.000, activity=0.732
+2026-03-05 15:14:05 | INFO     | __main__ | 广安爱众(600979.SH) w: 1 bars, strength=0.817, close_pos=1.000, activity=0.745
+2026-03-05 15:14:05 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:06 | INFO     | __main__ | 首华燃气(300483.SZ) 15m: 16 bars, strength=0.848, close_pos=0.416, activity=0.557
+2026-03-05 15:14:07 | INFO     | __main__ | 首华燃气(300483.SZ) 60m: 4 bars, strength=0.847, close_pos=0.413, activity=0.563
+2026-03-05 15:14:08 | INFO     | __main__ | 首华燃气(300483.SZ) d: 1 bars, strength=0.950, close_pos=1.000, activity=0.317
+2026-03-05 15:14:09 | INFO     | __main__ | 首华燃气(300483.SZ) w: 1 bars, strength=0.949, close_pos=0.994, activity=0.322
+2026-03-05 15:14:09 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:10 | INFO     | __main__ | 红相股份(300427.SZ) 15m: 16 bars, strength=0.771, close_pos=0.378, activity=0.250
+2026-03-05 15:14:11 | INFO     | __main__ | 红相股份(300427.SZ) 60m: 4 bars, strength=0.922, close_pos=0.059, activity=0.135
+2026-03-05 15:14:12 | INFO     | __main__ | 红相股份(300427.SZ) d: 1 bars, strength=0.931, close_pos=0.109, activity=0.156
+2026-03-05 15:14:12 | INFO     | __main__ | 红相股份(300427.SZ) w: 1 bars, strength=0.854, close_pos=0.553, activity=0.454
+2026-03-05 15:14:12 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:13 | INFO     | __main__ | 上海电力(600021.SH) 15m: 16 bars, strength=0.795, close_pos=0.731, activity=0.421
+2026-03-05 15:14:14 | INFO     | __main__ | 上海电力(600021.SH) 60m: 4 bars, strength=0.794, close_pos=0.737, activity=0.403
+2026-03-05 15:14:15 | INFO     | __main__ | 上海电力(600021.SH) d: 1 bars, strength=0.869, close_pos=0.210, activity=0.233
+2026-03-05 15:14:16 | INFO     | __main__ | 上海电力(600021.SH) w: 1 bars, strength=0.872, close_pos=0.205, activity=0.233
+2026-03-05 15:14:16 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:17 | INFO     | __main__ | 江钨装备(600397.SH) 15m: 16 bars, strength=0.948, close_pos=0.782, activity=0.681
+2026-03-05 15:14:18 | INFO     | __main__ | 江钨装备(600397.SH) 60m: 4 bars, strength=0.941, close_pos=0.548, activity=0.636
+2026-03-05 15:14:19 | INFO     | __main__ | 江钨装备(600397.SH) d: 1 bars, strength=0.942, close_pos=0.514, activity=0.592
+2026-03-05 15:14:20 | INFO     | __main__ | 江钨装备(600397.SH) w: 1 bars, strength=0.945, close_pos=1.000, activity=0.417
+2026-03-05 15:14:20 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:21 | INFO     | __main__ | 北大荒(600598.SH) 15m: 16 bars, strength=0.899, close_pos=0.000, activity=0.353
+2026-03-05 15:14:22 | INFO     | __main__ | 北大荒(600598.SH) 60m: 4 bars, strength=0.877, close_pos=0.119, activity=0.433
+2026-03-05 15:14:23 | INFO     | __main__ | 北大荒(600598.SH) d: 1 bars, strength=0.799, close_pos=0.750, activity=0.456
+2026-03-05 15:14:23 | INFO     | __main__ | 北大荒(600598.SH) w: 1 bars, strength=0.854, close_pos=0.698, activity=0.402
+2026-03-05 15:14:24 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:25 | INFO     | __main__ | 金富科技(003018.SZ) 15m: 16 bars, strength=0.961, close_pos=0.221, activity=0.206
+2026-03-05 15:14:25 | INFO     | __main__ | 金富科技(003018.SZ) 60m: 4 bars, strength=0.958, close_pos=0.265, activity=0.237
+2026-03-05 15:14:26 | INFO     | __main__ | 金富科技(003018.SZ) d: 1 bars, strength=0.929, close_pos=1.000, activity=0.538
+2026-03-05 15:14:27 | INFO     | __main__ | 金富科技(003018.SZ) w: 1 bars, strength=0.918, close_pos=1.000, activity=0.532
+2026-03-05 15:14:27 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:28 | INFO     | __main__ | 通富微电(002156.SZ) 15m: 16 bars, strength=0.838, close_pos=0.717, activity=0.692
+2026-03-05 15:14:29 | INFO     | __main__ | 通富微电(002156.SZ) 60m: 4 bars, strength=0.870, close_pos=0.188, activity=0.363
+2026-03-05 15:14:29 | INFO     | __main__ | 通富微电(002156.SZ) d: 1 bars, strength=0.929, close_pos=0.345, activity=0.358
+2026-03-05 15:14:30 | INFO     | __main__ | 通富微电(002156.SZ) w: 1 bars, strength=0.902, close_pos=0.453, activity=0.383
+2026-03-05 15:14:30 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:31 | INFO     | __main__ | 天奇股份(002009.SZ) 15m: 16 bars, strength=0.946, close_pos=1.000, activity=0.788
+2026-03-05 15:14:32 | INFO     | __main__ | 天奇股份(002009.SZ) 60m: 4 bars, strength=0.933, close_pos=0.001, activity=0.275
+2026-03-05 15:14:33 | INFO     | __main__ | 天奇股份(002009.SZ) d: 1 bars, strength=0.935, close_pos=0.000, activity=0.268
+2026-03-05 15:14:34 | INFO     | __main__ | 天奇股份(002009.SZ) w: 1 bars, strength=0.841, close_pos=0.947, activity=0.363
+2026-03-05 15:14:34 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:35 | INFO     | __main__ | 网宿科技(300017.SZ) 15m: 16 bars, strength=0.931, close_pos=0.676, activity=0.765
+2026-03-05 15:14:36 | INFO     | __main__ | 网宿科技(300017.SZ) 60m: 4 bars, strength=0.933, close_pos=0.031, activity=0.250
+2026-03-05 15:14:37 | INFO     | __main__ | 网宿科技(300017.SZ) d: 1 bars, strength=0.933, close_pos=0.050, activity=0.261
+2026-03-05 15:14:38 | INFO     | __main__ | 网宿科技(300017.SZ) w: 1 bars, strength=0.902, close_pos=1.000, activity=0.373
+2026-03-05 15:14:38 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:39 | INFO     | __main__ | 长电科技(600584.SH) 15m: 16 bars, strength=0.854, close_pos=0.465, activity=0.373
+2026-03-05 15:14:40 | INFO     | __main__ | 长电科技(600584.SH) 60m: 4 bars, strength=0.878, close_pos=0.343, activity=0.330
+2026-03-05 15:14:41 | INFO     | __main__ | 长电科技(600584.SH) d: 1 bars, strength=0.878, close_pos=0.350, activity=0.342
+2026-03-05 15:14:41 | INFO     | __main__ | 长电科技(600584.SH) w: 1 bars, strength=0.798, close_pos=0.849, activity=0.386
+2026-03-05 15:14:42 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:43 | INFO     | __main__ | 海油发展(600968.SH) 15m: 16 bars, strength=0.893, close_pos=0.393, activity=0.504
+2026-03-05 15:14:43 | INFO     | __main__ | 海油发展(600968.SH) 60m: 4 bars, strength=0.893, close_pos=0.388, activity=0.511
+2026-03-05 15:14:44 | INFO     | __main__ | 海油发展(600968.SH) d: 1 bars, strength=0.870, close_pos=0.871, activity=0.448
+2026-03-05 15:14:45 | INFO     | __main__ | 海油发展(600968.SH) w: 1 bars, strength=0.909, close_pos=1.000, activity=0.353
+2026-03-05 15:14:45 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:46 | INFO     | __main__ | 云天化(600096.SH) 15m: 16 bars, strength=0.920, close_pos=0.805, activity=0.817
+2026-03-05 15:14:47 | INFO     | __main__ | 云天化(600096.SH) 60m: 4 bars, strength=0.901, close_pos=0.418, activity=0.500
+2026-03-05 15:14:48 | INFO     | __main__ | 云天化(600096.SH) d: 1 bars, strength=0.952, close_pos=0.695, activity=0.386
+2026-03-05 15:14:48 | INFO     | __main__ | 云天化(600096.SH) w: 1 bars, strength=0.939, close_pos=0.823, activity=0.423
+2026-03-05 15:14:49 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:50 | INFO     | __main__ | 和顺石油(603353.SH) 15m: 16 bars, strength=0.837, close_pos=0.296, activity=0.566
+2026-03-05 15:14:50 | INFO     | __main__ | 和顺石油(603353.SH) 60m: 4 bars, strength=0.964, close_pos=0.213, activity=0.575
+2026-03-05 15:14:51 | INFO     | __main__ | 和顺石油(603353.SH) d: 1 bars, strength=0.955, close_pos=0.337, activity=0.565
+2026-03-05 15:14:52 | INFO     | __main__ | 和顺石油(603353.SH) w: 1 bars, strength=0.869, close_pos=0.840, activity=0.402
+2026-03-05 15:14:52 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:53 | INFO     | __main__ | 韩建河山(603616.SH) 15m: 16 bars, strength=0.796, close_pos=0.652, activity=0.743
+2026-03-05 15:14:53 | INFO     | __main__ | 韩建河山(603616.SH) 60m: 4 bars, strength=0.886, close_pos=0.104, activity=0.389
+2026-03-05 15:14:54 | INFO     | __main__ | 韩建河山(603616.SH) d: 1 bars, strength=0.876, close_pos=0.630, activity=0.443
+2026-03-05 15:14:55 | INFO     | __main__ | 韩建河山(603616.SH) w: 1 bars, strength=0.892, close_pos=0.650, activity=0.451
+2026-03-05 15:14:55 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:56 | INFO     | __main__ | 智微智能(001339.SZ) 15m: 16 bars, strength=0.918, close_pos=0.354, activity=0.286
+2026-03-05 15:14:57 | INFO     | __main__ | 智微智能(001339.SZ) 60m: 4 bars, strength=0.909, close_pos=0.445, activity=0.315
+2026-03-05 15:14:58 | INFO     | __main__ | 智微智能(001339.SZ) d: 1 bars, strength=0.853, close_pos=0.469, activity=0.226
+2026-03-05 15:14:58 | INFO     | __main__ | 智微智能(001339.SZ) w: 1 bars, strength=0.909, close_pos=0.456, activity=0.231
+2026-03-05 15:14:58 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:14:59 | INFO     | __main__ | 华天科技(002185.SZ) 15m: 16 bars, strength=0.875, close_pos=0.716, activity=0.687
+2026-03-05 15:15:00 | INFO     | __main__ | 华天科技(002185.SZ) 60m: 4 bars, strength=0.920, close_pos=0.077, activity=0.224
+2026-03-05 15:15:01 | INFO     | __main__ | 华天科技(002185.SZ) d: 1 bars, strength=0.911, close_pos=0.066, activity=0.209
+2026-03-05 15:15:02 | INFO     | __main__ | 华天科技(002185.SZ) w: 1 bars, strength=0.762, close_pos=0.702, activity=0.431
+2026-03-05 15:15:02 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:03 | INFO     | __main__ | 嘉泽新能(601619.SH) 15m: 16 bars, strength=0.895, close_pos=0.208, activity=0.102
+2026-03-05 15:15:04 | INFO     | __main__ | 嘉泽新能(601619.SH) 60m: 4 bars, strength=0.956, close_pos=0.691, activity=0.373
+2026-03-05 15:15:05 | INFO     | __main__ | 嘉泽新能(601619.SH) d: 1 bars, strength=0.955, close_pos=0.738, activity=0.386
+2026-03-05 15:15:05 | INFO     | __main__ | 嘉泽新能(601619.SH) w: 1 bars, strength=0.898, close_pos=1.000, activity=0.426
+2026-03-05 15:15:05 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:06 | INFO     | __main__ | 赤天化(600227.SH) 15m: 16 bars, strength=0.886, close_pos=0.138, activity=0.436
+2026-03-05 15:15:07 | INFO     | __main__ | 赤天化(600227.SH) 60m: 4 bars, strength=0.888, close_pos=0.146, activity=0.439
+2026-03-05 15:15:08 | INFO     | __main__ | 赤天化(600227.SH) d: 1 bars, strength=0.712, close_pos=0.507, activity=0.292
+2026-03-05 15:15:09 | INFO     | __main__ | 赤天化(600227.SH) w: 1 bars, strength=0.751, close_pos=0.509, activity=0.310
+2026-03-05 15:15:09 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:10 | INFO     | __main__ | 长城军工(601606.SH) 15m: 16 bars, strength=0.777, close_pos=0.235, activity=0.497
+2026-03-05 15:15:11 | INFO     | __main__ | 长城军工(601606.SH) 60m: 4 bars, strength=0.786, close_pos=0.223, activity=0.514
+2026-03-05 15:15:12 | INFO     | __main__ | 长城军工(601606.SH) d: 1 bars, strength=0.901, close_pos=0.159, activity=0.238
+2026-03-05 15:15:12 | INFO     | __main__ | 长城军工(601606.SH) w: 1 bars, strength=0.901, close_pos=0.192, activity=0.263
+2026-03-05 15:15:12 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:13 | INFO     | __main__ | 新易盛(300502.SZ) 15m: 16 bars, strength=0.742, close_pos=0.488, activity=0.353
+2026-03-05 15:15:14 | INFO     | __main__ | 新易盛(300502.SZ) 60m: 4 bars, strength=0.738, close_pos=0.930, activity=0.674
+2026-03-05 15:15:15 | INFO     | __main__ | 新易盛(300502.SZ) d: 1 bars, strength=0.929, close_pos=0.082, activity=0.053
+2026-03-05 15:15:16 | INFO     | __main__ | 新易盛(300502.SZ) w: 1 bars, strength=0.936, close_pos=0.595, activity=0.433
+2026-03-05 15:15:16 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:17 | INFO     | __main__ | 中兴通讯(000063.SZ) 15m: 16 bars, strength=0.663, close_pos=0.895, activity=0.635
+2026-03-05 15:15:18 | INFO     | __main__ | 中兴通讯(000063.SZ) 60m: 4 bars, strength=0.768, close_pos=0.689, activity=0.747
+2026-03-05 15:15:19 | INFO     | __main__ | 中兴通讯(000063.SZ) d: 1 bars, strength=0.766, close_pos=0.685, activity=0.746
+2026-03-05 15:15:19 | INFO     | __main__ | 中兴通讯(000063.SZ) w: 1 bars, strength=0.806, close_pos=0.189, activity=0.364
+2026-03-05 15:15:20 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:21 | INFO     | __main__ | 英维克(002837.SZ) 15m: 16 bars, strength=0.875, close_pos=0.640, activity=0.762
+2026-03-05 15:15:21 | INFO     | __main__ | 英维克(002837.SZ) 60m: 4 bars, strength=0.879, close_pos=0.124, activity=0.187
+2026-03-05 15:15:22 | INFO     | __main__ | 英维克(002837.SZ) d: 1 bars, strength=0.923, close_pos=0.172, activity=0.159
+2026-03-05 15:15:23 | INFO     | __main__ | 英维克(002837.SZ) w: 1 bars, strength=0.896, close_pos=0.238, activity=0.143
+2026-03-05 15:15:23 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:24 | INFO     | __main__ | 沪电股份(002463.SZ) 15m: 16 bars, strength=0.920, close_pos=0.845, activity=0.791
+2026-03-05 15:15:25 | INFO     | __main__ | 沪电股份(002463.SZ) 60m: 4 bars, strength=0.781, close_pos=0.179, activity=0.404
+2026-03-05 15:15:26 | INFO     | __main__ | 沪电股份(002463.SZ) d: 1 bars, strength=0.903, close_pos=0.184, activity=0.101
+2026-03-05 15:15:27 | INFO     | __main__ | 沪电股份(002463.SZ) w: 1 bars, strength=0.948, close_pos=0.566, activity=0.372
+2026-03-05 15:15:27 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:28 | INFO     | __main__ | 亚虹医药(688176.SH) 15m: 16 bars, strength=0.903, close_pos=0.175, activity=0.248
+2026-03-05 15:15:29 | INFO     | __main__ | 亚虹医药(688176.SH) 60m: 4 bars, strength=0.837, close_pos=0.702, activity=0.435
+2026-03-05 15:15:30 | INFO     | __main__ | 亚虹医药(688176.SH) d: 1 bars, strength=0.923, close_pos=0.555, activity=0.244
+2026-03-05 15:15:30 | INFO     | __main__ | 亚虹医药(688176.SH) w: 1 bars, strength=0.938, close_pos=0.574, activity=0.250
+2026-03-05 15:15:30 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:31 | INFO     | __main__ | 潜能恒信(300191.SZ) 15m: 255 bars, strength=0.928, close_pos=0.027, activity=0.233
+2026-03-05 15:15:31 | INFO     | __main__ | 潜能恒信(300191.SZ) 60m: 255 bars, strength=0.952, close_pos=0.623, activity=0.556
+2026-03-05 15:15:32 | INFO     | __main__ | 潜能恒信(300191.SZ) d: 255 bars, strength=0.943, close_pos=0.756, activity=0.464
+2026-03-05 15:15:33 | INFO     | __main__ | 潜能恒信(300191.SZ) w: 255 bars, strength=0.836, close_pos=1.000, activity=0.353
+2026-03-05 15:15:40 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:15:41 | INFO     | __main__ | 光迅科技(002281.SZ) 15m: 16 bars, strength=0.944, close_pos=0.375, activity=0.325
+2026-03-05 15:15:41 | INFO     | __main__ | 光迅科技(002281.SZ) 60m: 4 bars, strength=0.955, close_pos=0.308, activity=0.349
+2026-03-05 15:15:42 | INFO     | __main__ | 光迅科技(002281.SZ) d: 1 bars, strength=0.920, close_pos=0.499, activity=0.189
+2026-03-05 15:15:43 | INFO     | __main__ | 光迅科技(002281.SZ) w: 1 bars, strength=0.944, close_pos=0.671, activity=0.291
+2026-03-05 15:15:43 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:44 | INFO     | __main__ | 思源电气(002028.SZ) 15m: 16 bars, strength=0.928, close_pos=0.398, activity=0.179
+2026-03-05 15:15:45 | INFO     | __main__ | 思源电气(002028.SZ) 60m: 4 bars, strength=0.956, close_pos=0.469, activity=0.233
+2026-03-05 15:15:46 | INFO     | __main__ | 思源电气(002028.SZ) d: 1 bars, strength=0.985, close_pos=0.660, activity=0.290
+2026-03-05 15:15:47 | INFO     | __main__ | 思源电气(002028.SZ) w: 1 bars, strength=0.963, close_pos=1.000, activity=0.521
+2026-03-05 15:15:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:48 | INFO     | __main__ | 中科曙光(603019.SH) 15m: 16 bars, strength=0.866, close_pos=0.880, activity=0.691
+2026-03-05 15:15:49 | INFO     | __main__ | 中科曙光(603019.SH) 60m: 4 bars, strength=0.824, close_pos=0.514, activity=0.738
+2026-03-05 15:15:50 | INFO     | __main__ | 中科曙光(603019.SH) d: 1 bars, strength=0.828, close_pos=0.105, activity=0.204
+2026-03-05 15:15:51 | INFO     | __main__ | 中科曙光(603019.SH) w: 1 bars, strength=0.903, close_pos=0.280, activity=0.294
+2026-03-05 15:15:51 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:52 | INFO     | __main__ | 中天火箭(003009.SZ) 15m: 16 bars, strength=0.817, close_pos=0.481, activity=0.404
+2026-03-05 15:15:53 | INFO     | __main__ | 中天火箭(003009.SZ) 60m: 4 bars, strength=0.811, close_pos=0.282, activity=0.362
+2026-03-05 15:15:54 | INFO     | __main__ | 中天火箭(003009.SZ) d: 1 bars, strength=0.908, close_pos=0.493, activity=0.351
+2026-03-05 15:15:54 | INFO     | __main__ | 中天火箭(003009.SZ) w: 1 bars, strength=0.913, close_pos=0.443, activity=0.380
+2026-03-05 15:15:54 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:55 | INFO     | __main__ | 深科技(000021.SZ) 15m: 16 bars, strength=0.865, close_pos=0.796, activity=0.739
+2026-03-05 15:15:56 | INFO     | __main__ | 深科技(000021.SZ) 60m: 4 bars, strength=0.894, close_pos=0.322, activity=0.345
+2026-03-05 15:15:57 | INFO     | __main__ | 深科技(000021.SZ) d: 1 bars, strength=0.905, close_pos=0.511, activity=0.362
+2026-03-05 15:15:57 | INFO     | __main__ | 深科技(000021.SZ) w: 1 bars, strength=0.884, close_pos=0.521, activity=0.362
+2026-03-05 15:15:58 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:15:59 | INFO     | __main__ | 中国卫通(601698.SH) 15m: 16 bars, strength=0.743, close_pos=0.943, activity=0.696
+2026-03-05 15:16:00 | INFO     | __main__ | 中国卫通(601698.SH) 60m: 4 bars, strength=0.847, close_pos=0.197, activity=0.327
+2026-03-05 15:16:01 | INFO     | __main__ | 中国卫通(601698.SH) d: 1 bars, strength=0.845, close_pos=0.235, activity=0.348
+2026-03-05 15:16:01 | INFO     | __main__ | 中国卫通(601698.SH) w: 1 bars, strength=0.805, close_pos=0.884, activity=0.379
+2026-03-05 15:16:01 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:02 | INFO     | __main__ | 南网数字(301638.SZ) 15m: 16 bars, strength=0.940, close_pos=0.411, activity=0.454
+2026-03-05 15:16:02 | INFO     | __main__ | 南网数字(301638.SZ) 60m: 4 bars, strength=0.954, close_pos=0.394, activity=0.464
+2026-03-05 15:16:02 | INFO     | __main__ | 南网数字(301638.SZ) d: 1 bars, strength=0.750, close_pos=0.657, activity=0.397
+2026-03-05 15:16:02 | WARNING  | __main__ | 南网数字(301638.SZ) w: 数据不足 (15 bars)
+2026-03-05 15:16:03 | INFO     | __main__ | 共保存 21 条特征记录到数据库
+2026-03-05 15:16:03 | INFO     | __main__ | 浙文互联(600986.SH) 15m: 16 bars, strength=0.970, close_pos=0.925, activity=0.809
+2026-03-05 15:16:04 | INFO     | __main__ | 浙文互联(600986.SH) 60m: 4 bars, strength=0.969, close_pos=0.931, activity=0.829
+2026-03-05 15:16:05 | INFO     | __main__ | 浙文互联(600986.SH) d: 1 bars, strength=0.854, close_pos=0.334, activity=0.338
+2026-03-05 15:16:06 | INFO     | __main__ | 浙文互联(600986.SH) w: 1 bars, strength=0.880, close_pos=0.385, activity=0.359
+2026-03-05 15:16:06 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:07 | INFO     | __main__ | 中国神华(601088.SH) 15m: 16 bars, strength=0.907, close_pos=0.273, activity=0.220
+2026-03-05 15:16:08 | INFO     | __main__ | 中国神华(601088.SH) 60m: 4 bars, strength=0.816, close_pos=0.755, activity=0.463
+2026-03-05 15:16:09 | INFO     | __main__ | 中国神华(601088.SH) d: 1 bars, strength=0.763, close_pos=1.000, activity=0.320
+2026-03-05 15:16:10 | INFO     | __main__ | 中国神华(601088.SH) w: 1 bars, strength=0.943, close_pos=0.326, activity=0.105
+2026-03-05 15:16:10 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:11 | INFO     | __main__ | 科大讯飞(002230.SZ) 15m: 16 bars, strength=0.946, close_pos=0.673, activity=0.645
+2026-03-05 15:16:12 | INFO     | __main__ | 科大讯飞(002230.SZ) 60m: 4 bars, strength=0.867, close_pos=0.394, activity=0.568
+2026-03-05 15:16:13 | INFO     | __main__ | 科大讯飞(002230.SZ) d: 1 bars, strength=0.779, close_pos=0.116, activity=0.406
+2026-03-05 15:16:14 | INFO     | __main__ | 科大讯飞(002230.SZ) w: 1 bars, strength=0.740, close_pos=0.178, activity=0.427
+2026-03-05 15:16:14 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:15 | INFO     | __main__ | 胜利股份(000407.SZ) 15m: 16 bars, strength=0.797, close_pos=0.123, activity=0.431
+2026-03-05 15:16:16 | INFO     | __main__ | 胜利股份(000407.SZ) 60m: 4 bars, strength=0.749, close_pos=0.259, activity=0.443
+2026-03-05 15:16:17 | INFO     | __main__ | 胜利股份(000407.SZ) d: 1 bars, strength=0.890, close_pos=0.508, activity=0.409
+2026-03-05 15:16:19 | INFO     | __main__ | 胜利股份(000407.SZ) w: 1 bars, strength=0.884, close_pos=0.810, activity=0.635
+2026-03-05 15:16:19 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:22 | INFO     | __main__ | 许继电气(000400.SZ) 15m: 16 bars, strength=0.875, close_pos=1.000, activity=0.367
+2026-03-05 15:16:24 | INFO     | __main__ | 许继电气(000400.SZ) 60m: 4 bars, strength=0.911, close_pos=0.693, activity=0.263
+2026-03-05 15:16:25 | INFO     | __main__ | 许继电气(000400.SZ) d: 1 bars, strength=0.925, close_pos=1.000, activity=0.433
+2026-03-05 15:16:27 | INFO     | __main__ | 许继电气(000400.SZ) w: 1 bars, strength=0.906, close_pos=0.468, activity=0.183
+2026-03-05 15:16:27 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:28 | INFO     | __main__ | 中水渔业(000798.SZ) 15m: 16 bars, strength=0.801, close_pos=0.080, activity=0.258
+2026-03-05 15:16:29 | INFO     | __main__ | 中水渔业(000798.SZ) 60m: 4 bars, strength=0.804, close_pos=0.127, activity=0.293
+2026-03-05 15:16:30 | INFO     | __main__ | 中水渔业(000798.SZ) d: 1 bars, strength=0.871, close_pos=0.398, activity=0.420
+2026-03-05 15:16:31 | INFO     | __main__ | 中水渔业(000798.SZ) w: 1 bars, strength=0.871, close_pos=0.426, activity=0.475
+2026-03-05 15:16:31 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:33 | INFO     | __main__ | 意华股份(002897.SZ) 15m: 16 bars, strength=0.948, close_pos=0.497, activity=0.368
+2026-03-05 15:16:35 | INFO     | __main__ | 意华股份(002897.SZ) 60m: 4 bars, strength=0.946, close_pos=0.513, activity=0.375
+2026-03-05 15:16:36 | INFO     | __main__ | 意华股份(002897.SZ) d: 1 bars, strength=0.909, close_pos=1.000, activity=0.297
+2026-03-05 15:16:37 | INFO     | __main__ | 意华股份(002897.SZ) w: 1 bars, strength=0.841, close_pos=1.000, activity=0.321
+2026-03-05 15:16:37 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:38 | INFO     | __main__ | 黄河旋风(600172.SH) 15m: 16 bars, strength=0.945, close_pos=0.462, activity=0.239
+2026-03-05 15:16:40 | INFO     | __main__ | 黄河旋风(600172.SH) 60m: 4 bars, strength=0.964, close_pos=0.441, activity=0.229
+2026-03-05 15:16:42 | INFO     | __main__ | 黄河旋风(600172.SH) d: 1 bars, strength=0.930, close_pos=0.821, activity=0.471
+2026-03-05 15:16:42 | INFO     | __main__ | 黄河旋风(600172.SH) w: 1 bars, strength=0.918, close_pos=1.000, activity=0.322
+2026-03-05 15:16:43 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:44 | INFO     | __main__ | 诚邦股份(603316.SH) 15m: 16 bars, strength=0.855, close_pos=0.428, activity=0.433
+2026-03-05 15:16:45 | INFO     | __main__ | 诚邦股份(603316.SH) 60m: 4 bars, strength=0.562, close_pos=1.000, activity=0.652
+2026-03-05 15:16:45 | INFO     | __main__ | 诚邦股份(603316.SH) d: 1 bars, strength=0.953, close_pos=0.161, activity=0.109
+2026-03-05 15:16:46 | INFO     | __main__ | 诚邦股份(603316.SH) w: 1 bars, strength=0.956, close_pos=0.142, activity=0.109
+2026-03-05 15:16:46 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:47 | INFO     | __main__ | 胜宏科技(300476.SZ) 15m: 16 bars, strength=0.872, close_pos=0.623, activity=0.676
+2026-03-05 15:16:48 | INFO     | __main__ | 胜宏科技(300476.SZ) 60m: 4 bars, strength=0.768, close_pos=0.125, activity=0.356
+2026-03-05 15:16:49 | INFO     | __main__ | 胜宏科技(300476.SZ) d: 1 bars, strength=0.963, close_pos=0.027, activity=0.051
+2026-03-05 15:16:50 | INFO     | __main__ | 胜宏科技(300476.SZ) w: 1 bars, strength=0.966, close_pos=0.209, activity=0.194
+2026-03-05 15:16:50 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:51 | INFO     | __main__ | 亚星锚链(601890.SH) 15m: 16 bars, strength=0.884, close_pos=0.761, activity=0.666
+2026-03-05 15:16:52 | INFO     | __main__ | 亚星锚链(601890.SH) 60m: 4 bars, strength=0.865, close_pos=0.059, activity=0.342
+2026-03-05 15:16:53 | INFO     | __main__ | 亚星锚链(601890.SH) d: 1 bars, strength=0.910, close_pos=0.764, activity=0.264
+2026-03-05 15:16:54 | INFO     | __main__ | 亚星锚链(601890.SH) w: 1 bars, strength=0.917, close_pos=0.793, activity=0.290
+2026-03-05 15:16:54 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:55 | INFO     | __main__ | 锡业股份(000960.SZ) 15m: 16 bars, strength=0.941, close_pos=0.799, activity=0.858
+2026-03-05 15:16:56 | INFO     | __main__ | 锡业股份(000960.SZ) 60m: 4 bars, strength=0.920, close_pos=0.331, activity=0.342
+2026-03-05 15:16:57 | INFO     | __main__ | 锡业股份(000960.SZ) d: 1 bars, strength=0.965, close_pos=0.612, activity=0.523
+2026-03-05 15:16:58 | INFO     | __main__ | 锡业股份(000960.SZ) w: 1 bars, strength=0.952, close_pos=0.703, activity=0.558
+2026-03-05 15:16:58 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:16:59 | INFO     | __main__ | 太阳电缆(002300.SZ) 15m: 16 bars, strength=0.872, close_pos=0.602, activity=0.267
+2026-03-05 15:17:00 | INFO     | __main__ | 太阳电缆(002300.SZ) 60m: 4 bars, strength=0.852, close_pos=0.608, activity=0.264
+2026-03-05 15:17:01 | INFO     | __main__ | 太阳电缆(002300.SZ) d: 1 bars, strength=0.879, close_pos=0.809, activity=0.537
+2026-03-05 15:17:02 | INFO     | __main__ | 太阳电缆(002300.SZ) w: 1 bars, strength=0.873, close_pos=0.780, activity=0.502
+2026-03-05 15:17:02 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:03 | INFO     | __main__ | 红星发展(600367.SH) 15m: 16 bars, strength=0.908, close_pos=0.226, activity=0.303
+2026-03-05 15:17:04 | INFO     | __main__ | 红星发展(600367.SH) 60m: 4 bars, strength=0.906, close_pos=0.358, activity=0.403
+2026-03-05 15:17:05 | INFO     | __main__ | 红星发展(600367.SH) d: 1 bars, strength=0.937, close_pos=1.000, activity=0.267
+2026-03-05 15:17:06 | INFO     | __main__ | 红星发展(600367.SH) w: 1 bars, strength=0.940, close_pos=1.000, activity=0.262
+2026-03-05 15:17:07 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:08 | INFO     | __main__ | 兖矿能源(600188.SH) 15m: 16 bars, strength=0.953, close_pos=0.796, activity=0.418
+2026-03-05 15:17:09 | INFO     | __main__ | 兖矿能源(600188.SH) 60m: 4 bars, strength=0.951, close_pos=0.771, activity=0.424
+2026-03-05 15:17:10 | INFO     | __main__ | 兖矿能源(600188.SH) d: 1 bars, strength=0.869, close_pos=1.000, activity=0.535
+2026-03-05 15:17:11 | INFO     | __main__ | 兖矿能源(600188.SH) w: 1 bars, strength=0.898, close_pos=1.000, activity=0.772
+2026-03-05 15:17:11 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:13 | INFO     | __main__ | 天孚通信(300394.SZ) 15m: 16 bars, strength=0.953, close_pos=0.000, activity=0.134
+2026-03-05 15:17:14 | INFO     | __main__ | 天孚通信(300394.SZ) 60m: 4 bars, strength=0.963, close_pos=0.000, activity=0.159
+2026-03-05 15:17:14 | INFO     | __main__ | 天孚通信(300394.SZ) d: 1 bars, strength=0.943, close_pos=0.633, activity=0.302
+2026-03-05 15:17:15 | INFO     | __main__ | 天孚通信(300394.SZ) w: 1 bars, strength=0.931, close_pos=0.653, activity=0.257
+2026-03-05 15:17:15 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:16 | INFO     | __main__ | 巨轮智能(002031.SZ) 15m: 16 bars, strength=0.894, close_pos=0.848, activity=0.688
+2026-03-05 15:17:17 | INFO     | __main__ | 巨轮智能(002031.SZ) 60m: 4 bars, strength=0.864, close_pos=0.378, activity=0.565
+2026-03-05 15:17:18 | INFO     | __main__ | 巨轮智能(002031.SZ) d: 1 bars, strength=0.740, close_pos=0.080, activity=0.134
+2026-03-05 15:17:19 | INFO     | __main__ | 巨轮智能(002031.SZ) w: 1 bars, strength=0.861, close_pos=0.327, activity=0.337
+2026-03-05 15:17:19 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:21 | INFO     | __main__ | 富临运业(002357.SZ) 15m: 16 bars, strength=0.929, close_pos=0.325, activity=0.194
+2026-03-05 15:17:22 | INFO     | __main__ | 富临运业(002357.SZ) 60m: 4 bars, strength=0.967, close_pos=0.447, activity=0.259
+2026-03-05 15:17:23 | INFO     | __main__ | 富临运业(002357.SZ) d: 1 bars, strength=0.967, close_pos=0.533, activity=0.296
+2026-03-05 15:17:24 | INFO     | __main__ | 富临运业(002357.SZ) w: 1 bars, strength=0.941, close_pos=1.000, activity=0.338
+2026-03-05 15:17:24 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:25 | INFO     | __main__ | 惠博普(002554.SZ) 15m: 16 bars, strength=0.853, close_pos=0.094, activity=0.329
+2026-03-05 15:17:26 | INFO     | __main__ | 惠博普(002554.SZ) 60m: 4 bars, strength=0.912, close_pos=0.445, activity=0.384
+2026-03-05 15:17:27 | INFO     | __main__ | 惠博普(002554.SZ) d: 1 bars, strength=0.909, close_pos=0.460, activity=0.370
+2026-03-05 15:17:27 | INFO     | __main__ | 惠博普(002554.SZ) w: 1 bars, strength=0.915, close_pos=1.000, activity=0.437
+2026-03-05 15:17:28 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:29 | INFO     | __main__ | 神剑股份(002361.SZ) 15m: 16 bars, strength=0.911, close_pos=1.000, activity=0.713
+2026-03-05 15:17:29 | INFO     | __main__ | 神剑股份(002361.SZ) 60m: 4 bars, strength=0.858, close_pos=0.184, activity=0.254
+2026-03-05 15:17:30 | INFO     | __main__ | 神剑股份(002361.SZ) d: 1 bars, strength=0.906, close_pos=0.667, activity=0.677
+2026-03-05 15:17:31 | INFO     | __main__ | 神剑股份(002361.SZ) w: 1 bars, strength=0.914, close_pos=0.667, activity=0.647
+2026-03-05 15:17:32 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:33 | INFO     | __main__ | 上海电气(601727.SH) 15m: 16 bars, strength=0.702, close_pos=0.573, activity=0.306
+2026-03-05 15:17:34 | INFO     | __main__ | 上海电气(601727.SH) 60m: 4 bars, strength=0.533, close_pos=1.000, activity=0.674
+2026-03-05 15:17:35 | INFO     | __main__ | 上海电气(601727.SH) d: 1 bars, strength=0.785, close_pos=0.465, activity=0.365
+2026-03-05 15:17:36 | INFO     | __main__ | 上海电气(601727.SH) w: 1 bars, strength=0.838, close_pos=0.271, activity=0.215
+2026-03-05 15:17:36 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:37 | INFO     | __main__ | 再升科技(603601.SH) 15m: 16 bars, strength=0.917, close_pos=0.938, activity=0.792
+2026-03-05 15:17:38 | INFO     | __main__ | 再升科技(603601.SH) 60m: 4 bars, strength=0.884, close_pos=0.147, activity=0.153
+2026-03-05 15:17:39 | INFO     | __main__ | 再升科技(603601.SH) d: 1 bars, strength=0.882, close_pos=0.153, activity=0.158
+2026-03-05 15:17:39 | INFO     | __main__ | 再升科技(603601.SH) w: 1 bars, strength=0.877, close_pos=0.504, activity=0.459
+2026-03-05 15:17:40 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:41 | INFO     | __main__ | 万华化学(600309.SH) 15m: 16 bars, strength=0.845, close_pos=0.877, activity=0.725
+2026-03-05 15:17:41 | INFO     | __main__ | 万华化学(600309.SH) 60m: 4 bars, strength=0.971, close_pos=0.224, activity=0.243
+2026-03-05 15:17:43 | INFO     | __main__ | 万华化学(600309.SH) d: 1 bars, strength=0.971, close_pos=0.215, activity=0.244
+2026-03-05 15:17:44 | INFO     | __main__ | 万华化学(600309.SH) w: 1 bars, strength=0.811, close_pos=0.757, activity=0.405
+2026-03-05 15:17:44 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:45 | INFO     | __main__ | 川发龙蟒(002312.SZ) 15m: 16 bars, strength=0.837, close_pos=0.646, activity=0.618
+2026-03-05 15:17:46 | INFO     | __main__ | 川发龙蟒(002312.SZ) 60m: 4 bars, strength=0.854, close_pos=0.485, activity=0.522
+2026-03-05 15:17:47 | INFO     | __main__ | 川发龙蟒(002312.SZ) d: 1 bars, strength=0.840, close_pos=0.502, activity=0.519
+2026-03-05 15:17:47 | INFO     | __main__ | 川发龙蟒(002312.SZ) w: 1 bars, strength=0.748, close_pos=0.282, activity=0.354
+2026-03-05 15:17:48 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:48 | INFO     | __main__ | TCL中环(002129.SZ) 15m: 16 bars, strength=0.942, close_pos=0.764, activity=0.715
+2026-03-05 15:17:49 | INFO     | __main__ | TCL中环(002129.SZ) 60m: 4 bars, strength=0.943, close_pos=0.771, activity=0.714
+2026-03-05 15:17:51 | INFO     | __main__ | TCL中环(002129.SZ) d: 1 bars, strength=0.851, close_pos=0.055, activity=0.458
+2026-03-05 15:17:52 | INFO     | __main__ | TCL中环(002129.SZ) w: 1 bars, strength=0.921, close_pos=0.943, activity=0.798
+2026-03-05 15:17:53 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:54 | INFO     | __main__ | 翠微股份(603123.SH) 15m: 16 bars, strength=0.764, close_pos=0.631, activity=0.435
+2026-03-05 15:17:55 | INFO     | __main__ | 翠微股份(603123.SH) 60m: 4 bars, strength=0.745, close_pos=0.638, activity=0.410
+2026-03-05 15:17:56 | INFO     | __main__ | 翠微股份(603123.SH) d: 1 bars, strength=0.870, close_pos=0.261, activity=0.267
+2026-03-05 15:17:57 | INFO     | __main__ | 翠微股份(603123.SH) w: 1 bars, strength=0.885, close_pos=0.272, activity=0.280
+2026-03-05 15:17:57 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:17:59 | INFO     | __main__ | 云南锗业(002428.SZ) 15m: 16 bars, strength=0.889, close_pos=0.192, activity=0.333
+2026-03-05 15:17:59 | INFO     | __main__ | 云南锗业(002428.SZ) 60m: 4 bars, strength=0.902, close_pos=0.543, activity=0.380
+2026-03-05 15:18:00 | INFO     | __main__ | 云南锗业(002428.SZ) d: 1 bars, strength=0.923, close_pos=0.903, activity=0.462
+2026-03-05 15:18:02 | INFO     | __main__ | 云南锗业(002428.SZ) w: 1 bars, strength=0.926, close_pos=0.863, activity=0.313
+2026-03-05 15:18:02 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:03 | INFO     | __main__ | 潍柴动力(000338.SZ) 15m: 16 bars, strength=0.857, close_pos=0.309, activity=0.300
+2026-03-05 15:18:04 | INFO     | __main__ | 潍柴动力(000338.SZ) 60m: 4 bars, strength=0.964, close_pos=0.139, activity=0.173
+2026-03-05 15:18:05 | INFO     | __main__ | 潍柴动力(000338.SZ) d: 1 bars, strength=0.961, close_pos=0.251, activity=0.254
+2026-03-05 15:18:06 | INFO     | __main__ | 潍柴动力(000338.SZ) w: 1 bars, strength=0.774, close_pos=1.000, activity=0.263
+2026-03-05 15:18:06 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:07 | INFO     | __main__ | 六国化工(600470.SH) 15m: 16 bars, strength=0.883, close_pos=0.137, activity=0.406
+2026-03-05 15:18:08 | INFO     | __main__ | 六国化工(600470.SH) 60m: 4 bars, strength=0.883, close_pos=0.146, activity=0.405
+2026-03-05 15:18:09 | INFO     | __main__ | 六国化工(600470.SH) d: 1 bars, strength=0.859, close_pos=0.601, activity=0.677
+2026-03-05 15:18:10 | INFO     | __main__ | 六国化工(600470.SH) w: 1 bars, strength=0.822, close_pos=0.748, activity=0.335
+2026-03-05 15:18:10 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:11 | INFO     | __main__ | 东山精密(002384.SZ) 15m: 16 bars, strength=0.959, close_pos=0.000, activity=0.197
+2026-03-05 15:18:13 | INFO     | __main__ | 东山精密(002384.SZ) 60m: 4 bars, strength=0.948, close_pos=0.243, activity=0.363
+2026-03-05 15:18:14 | INFO     | __main__ | 东山精密(002384.SZ) d: 1 bars, strength=0.927, close_pos=0.481, activity=0.191
+2026-03-05 15:18:15 | INFO     | __main__ | 东山精密(002384.SZ) w: 1 bars, strength=0.952, close_pos=0.609, activity=0.258
+2026-03-05 15:18:15 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:16 | INFO     | __main__ | 广电电气(601616.SH) 15m: 16 bars, strength=0.830, close_pos=0.429, activity=0.270
+2026-03-05 15:18:17 | INFO     | __main__ | 广电电气(601616.SH) 60m: 4 bars, strength=0.852, close_pos=0.365, activity=0.363
+2026-03-05 15:18:18 | INFO     | __main__ | 广电电气(601616.SH) d: 1 bars, strength=0.852, close_pos=0.419, activity=0.399
+2026-03-05 15:18:19 | INFO     | __main__ | 广电电气(601616.SH) w: 1 bars, strength=0.777, close_pos=0.837, activity=0.420
+2026-03-05 15:18:19 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:20 | INFO     | __main__ | 龙洲股份(002682.SZ) 15m: 16 bars, strength=0.798, close_pos=0.601, activity=0.803
+2026-03-05 15:18:21 | INFO     | __main__ | 龙洲股份(002682.SZ) 60m: 4 bars, strength=0.858, close_pos=0.574, activity=0.793
+2026-03-05 15:18:22 | INFO     | __main__ | 龙洲股份(002682.SZ) d: 1 bars, strength=0.823, close_pos=0.516, activity=0.768
+2026-03-05 15:18:23 | INFO     | __main__ | 龙洲股份(002682.SZ) w: 1 bars, strength=0.776, close_pos=0.432, activity=0.419
+2026-03-05 15:18:23 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:24 | INFO     | __main__ | 合锻智能(603011.SH) 15m: 16 bars, strength=0.689, close_pos=0.539, activity=0.318
+2026-03-05 15:18:25 | INFO     | __main__ | 合锻智能(603011.SH) 60m: 4 bars, strength=0.765, close_pos=0.382, activity=0.385
+2026-03-05 15:18:26 | INFO     | __main__ | 合锻智能(603011.SH) d: 1 bars, strength=0.967, close_pos=0.295, activity=0.197
+2026-03-05 15:18:27 | INFO     | __main__ | 合锻智能(603011.SH) w: 1 bars, strength=0.965, close_pos=0.349, activity=0.222
+2026-03-05 15:18:27 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:28 | INFO     | __main__ | 阳光电源(300274.SZ) 15m: 16 bars, strength=0.617, close_pos=0.622, activity=0.631
+2026-03-05 15:18:29 | INFO     | __main__ | 阳光电源(300274.SZ) 60m: 4 bars, strength=0.902, close_pos=0.560, activity=0.633
+2026-03-05 15:18:30 | INFO     | __main__ | 阳光电源(300274.SZ) d: 1 bars, strength=0.907, close_pos=0.550, activity=0.629
+2026-03-05 15:18:31 | INFO     | __main__ | 阳光电源(300274.SZ) w: 1 bars, strength=0.894, close_pos=0.043, activity=0.143
+2026-03-05 15:18:32 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:33 | INFO     | __main__ | 孩子王(301078.SZ) 15m: 16 bars, strength=0.913, close_pos=0.600, activity=0.819
+2026-03-05 15:18:34 | INFO     | __main__ | 孩子王(301078.SZ) 60m: 4 bars, strength=0.643, close_pos=0.000, activity=0.675
+2026-03-05 15:18:34 | INFO     | __main__ | 孩子王(301078.SZ) d: 1 bars, strength=0.859, close_pos=0.330, activity=0.713
+2026-03-05 15:18:35 | INFO     | __main__ | 孩子王(301078.SZ) w: 1 bars, strength=0.846, close_pos=0.336, activity=0.703
+2026-03-05 15:18:35 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:36 | INFO     | __main__ | 牧原股份(002714.SZ) 15m: 255 bars, strength=0.817, close_pos=0.230, activity=0.269
+2026-03-05 15:18:36 | INFO     | __main__ | 牧原股份(002714.SZ) 60m: 255 bars, strength=0.807, close_pos=0.692, activity=0.601
+2026-03-05 15:18:37 | INFO     | __main__ | 牧原股份(002714.SZ) d: 255 bars, strength=0.862, close_pos=0.755, activity=0.661
+2026-03-05 15:18:38 | INFO     | __main__ | 牧原股份(002714.SZ) w: 255 bars, strength=0.796, close_pos=0.088, activity=0.300
+2026-03-05 15:18:46 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:18:47 | INFO     | __main__ | 敦煌种业(600354.SH) 15m: 16 bars, strength=0.800, close_pos=0.000, activity=0.453
+2026-03-05 15:18:48 | INFO     | __main__ | 敦煌种业(600354.SH) 60m: 4 bars, strength=0.770, close_pos=0.365, activity=0.480
+2026-03-05 15:18:49 | INFO     | __main__ | 敦煌种业(600354.SH) d: 1 bars, strength=0.847, close_pos=0.350, activity=0.268
+2026-03-05 15:18:50 | INFO     | __main__ | 敦煌种业(600354.SH) w: 1 bars, strength=0.874, close_pos=0.358, activity=0.317
+2026-03-05 15:18:50 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:51 | INFO     | __main__ | 锋龙股份(002931.SZ) 15m: 16 bars, strength=0.927, close_pos=0.892, activity=0.869
+2026-03-05 15:18:52 | INFO     | __main__ | 锋龙股份(002931.SZ) 60m: 4 bars, strength=0.919, close_pos=0.881, activity=0.871
+2026-03-05 15:18:53 | INFO     | __main__ | 锋龙股份(002931.SZ) d: 1 bars, strength=0.915, close_pos=0.095, activity=0.179
+2026-03-05 15:18:54 | INFO     | __main__ | 锋龙股份(002931.SZ) w: 1 bars, strength=0.767, close_pos=1.000, activity=0.026
+2026-03-05 15:18:54 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:55 | INFO     | __main__ | 百川股份(002455.SZ) 15m: 16 bars, strength=0.897, close_pos=0.630, activity=0.632
+2026-03-05 15:18:56 | INFO     | __main__ | 百川股份(002455.SZ) 60m: 4 bars, strength=0.923, close_pos=0.000, activity=0.195
+2026-03-05 15:18:56 | INFO     | __main__ | 百川股份(002455.SZ) d: 1 bars, strength=0.893, close_pos=0.261, activity=0.394
+2026-03-05 15:18:57 | INFO     | __main__ | 百川股份(002455.SZ) w: 1 bars, strength=0.604, close_pos=1.000, activity=0.618
+2026-03-05 15:18:58 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:18:59 | INFO     | __main__ | 利通电子(603629.SH) 15m: 16 bars, strength=0.943, close_pos=0.008, activity=0.115
+2026-03-05 15:19:00 | INFO     | __main__ | 利通电子(603629.SH) 60m: 4 bars, strength=0.968, close_pos=0.019, activity=0.142
+2026-03-05 15:19:01 | INFO     | __main__ | 利通电子(603629.SH) d: 1 bars, strength=0.944, close_pos=0.421, activity=0.382
+2026-03-05 15:19:01 | INFO     | __main__ | 利通电子(603629.SH) w: 1 bars, strength=0.800, close_pos=1.000, activity=0.295
+2026-03-05 15:19:01 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:02 | INFO     | __main__ | 格力电器(000651.SZ) 15m: 16 bars, strength=0.934, close_pos=0.842, activity=0.755
+2026-03-05 15:19:03 | INFO     | __main__ | 格力电器(000651.SZ) 60m: 4 bars, strength=0.926, close_pos=0.739, activity=0.720
+2026-03-05 15:19:04 | INFO     | __main__ | 格力电器(000651.SZ) d: 1 bars, strength=0.921, close_pos=0.235, activity=0.607
+2026-03-05 15:19:05 | INFO     | __main__ | 格力电器(000651.SZ) w: 1 bars, strength=0.840, close_pos=0.263, activity=0.721
+2026-03-05 15:19:05 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:06 | INFO     | __main__ | 德石股份(301158.SZ) 15m: 16 bars, strength=0.819, close_pos=0.195, activity=0.424
+2026-03-05 15:19:07 | INFO     | __main__ | 德石股份(301158.SZ) 60m: 4 bars, strength=0.814, close_pos=0.208, activity=0.443
+2026-03-05 15:19:08 | INFO     | __main__ | 德石股份(301158.SZ) d: 1 bars, strength=0.934, close_pos=1.000, activity=0.427
+2026-03-05 15:19:08 | INFO     | __main__ | 德石股份(301158.SZ) w: 1 bars, strength=0.941, close_pos=1.000, activity=0.422
+2026-03-05 15:19:08 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:09 | INFO     | __main__ | 杉杉股份(600884.SH) 15m: 16 bars, strength=0.822, close_pos=0.711, activity=0.683
+2026-03-05 15:19:10 | INFO     | __main__ | 杉杉股份(600884.SH) 60m: 4 bars, strength=0.649, close_pos=0.421, activity=0.370
+2026-03-05 15:19:11 | INFO     | __main__ | 杉杉股份(600884.SH) d: 1 bars, strength=0.919, close_pos=0.207, activity=0.170
+2026-03-05 15:19:12 | INFO     | __main__ | 杉杉股份(600884.SH) w: 1 bars, strength=0.913, close_pos=0.201, activity=0.166
+2026-03-05 15:19:13 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:13 | INFO     | __main__ | 中远海特(600428.SH) 15m: 16 bars, strength=0.890, close_pos=0.129, activity=0.319
+2026-03-05 15:19:14 | INFO     | __main__ | 中远海特(600428.SH) 60m: 4 bars, strength=0.897, close_pos=0.479, activity=0.454
+2026-03-05 15:19:15 | INFO     | __main__ | 中远海特(600428.SH) d: 1 bars, strength=0.919, close_pos=1.000, activity=0.436
+2026-03-05 15:19:17 | INFO     | __main__ | 中远海特(600428.SH) w: 1 bars, strength=0.861, close_pos=1.000, activity=0.348
+2026-03-05 15:19:17 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:18 | INFO     | __main__ | 连云港(601008.SH) 15m: 16 bars, strength=0.856, close_pos=0.624, activity=0.675
+2026-03-05 15:19:18 | INFO     | __main__ | 连云港(601008.SH) 60m: 4 bars, strength=0.614, close_pos=0.136, activity=0.447
+2026-03-05 15:19:19 | INFO     | __main__ | 连云港(601008.SH) d: 1 bars, strength=0.883, close_pos=0.771, activity=0.776
+2026-03-05 15:19:20 | INFO     | __main__ | 连云港(601008.SH) w: 1 bars, strength=0.770, close_pos=0.142, activity=0.424
+2026-03-05 15:19:20 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:21 | INFO     | __main__ | 五洲新春(603667.SH) 15m: 16 bars, strength=0.957, close_pos=0.786, activity=0.712
+2026-03-05 15:19:22 | INFO     | __main__ | 五洲新春(603667.SH) 60m: 4 bars, strength=0.938, close_pos=0.648, activity=0.633
+2026-03-05 15:19:23 | INFO     | __main__ | 五洲新春(603667.SH) d: 1 bars, strength=0.909, close_pos=0.329, activity=0.518
+2026-03-05 15:19:24 | INFO     | __main__ | 五洲新春(603667.SH) w: 1 bars, strength=0.898, close_pos=0.429, activity=0.286
+2026-03-05 15:19:24 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:25 | INFO     | __main__ | 银河电子(002519.SZ) 15m: 16 bars, strength=0.923, close_pos=0.910, activity=0.681
+2026-03-05 15:19:26 | INFO     | __main__ | 银河电子(002519.SZ) 60m: 4 bars, strength=0.918, close_pos=0.131, activity=0.315
+2026-03-05 15:19:27 | INFO     | __main__ | 银河电子(002519.SZ) d: 1 bars, strength=0.919, close_pos=0.178, activity=0.325
+2026-03-05 15:19:28 | INFO     | __main__ | 银河电子(002519.SZ) w: 1 bars, strength=0.709, close_pos=0.699, activity=0.451
+2026-03-05 15:19:28 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:29 | INFO     | __main__ | 歌尔股份(002241.SZ) 15m: 16 bars, strength=0.924, close_pos=0.875, activity=0.773
+2026-03-05 15:19:30 | INFO     | __main__ | 歌尔股份(002241.SZ) 60m: 4 bars, strength=0.871, close_pos=0.478, activity=0.785
+2026-03-05 15:19:31 | INFO     | __main__ | 歌尔股份(002241.SZ) d: 1 bars, strength=0.843, close_pos=0.281, activity=0.696
+2026-03-05 15:19:32 | INFO     | __main__ | 歌尔股份(002241.SZ) w: 1 bars, strength=0.838, close_pos=0.057, activity=0.324
+2026-03-05 15:19:32 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:33 | INFO     | __main__ | 汇金通(603577.SH) 15m: 16 bars, strength=0.833, close_pos=0.304, activity=0.271
+2026-03-05 15:19:34 | INFO     | __main__ | 汇金通(603577.SH) 60m: 4 bars, strength=0.909, close_pos=0.731, activity=0.302
+2026-03-05 15:19:35 | INFO     | __main__ | 汇金通(603577.SH) d: 1 bars, strength=0.910, close_pos=0.735, activity=0.416
+2026-03-05 15:19:35 | INFO     | __main__ | 汇金通(603577.SH) w: 1 bars, strength=0.921, close_pos=0.774, activity=0.405
+2026-03-05 15:19:36 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:37 | INFO     | __main__ | 航天动力(600343.SH) 15m: 255 bars, strength=0.784, close_pos=0.893, activity=0.651
+2026-03-05 15:19:37 | INFO     | __main__ | 航天动力(600343.SH) 60m: 255 bars, strength=0.835, close_pos=0.087, activity=0.156
+2026-03-05 15:19:38 | INFO     | __main__ | 航天动力(600343.SH) d: 255 bars, strength=0.885, close_pos=0.246, activity=0.325
+2026-03-05 15:19:39 | INFO     | __main__ | 航天动力(600343.SH) w: 255 bars, strength=0.879, close_pos=0.348, activity=0.394
+2026-03-05 15:19:48 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:19:52 | INFO     | __main__ | 锌业股份(000751.SZ) 15m: 16 bars, strength=0.907, close_pos=0.744, activity=0.713
+2026-03-05 15:19:54 | INFO     | __main__ | 锌业股份(000751.SZ) 60m: 4 bars, strength=0.916, close_pos=0.302, activity=0.315
+2026-03-05 15:19:55 | INFO     | __main__ | 锌业股份(000751.SZ) d: 1 bars, strength=0.909, close_pos=1.000, activity=0.552
+2026-03-05 15:19:56 | INFO     | __main__ | 锌业股份(000751.SZ) w: 1 bars, strength=0.907, close_pos=1.000, activity=0.532
+2026-03-05 15:19:57 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:19:58 | INFO     | __main__ | 宁波海运(600798.SH) 15m: 16 bars, strength=0.824, close_pos=0.165, activity=0.486
+2026-03-05 15:19:59 | INFO     | __main__ | 宁波海运(600798.SH) 60m: 4 bars, strength=0.823, close_pos=0.170, activity=0.503
+2026-03-05 15:19:59 | INFO     | __main__ | 宁波海运(600798.SH) d: 1 bars, strength=0.790, close_pos=0.586, activity=0.452
+2026-03-05 15:20:01 | INFO     | __main__ | 宁波海运(600798.SH) w: 1 bars, strength=0.800, close_pos=0.362, activity=0.471
+2026-03-05 15:20:01 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:02 | INFO     | __main__ | 农业银行(601288.SH) 15m: 16 bars, strength=0.906, close_pos=0.442, activity=0.190
+2026-03-05 15:20:04 | INFO     | __main__ | 农业银行(601288.SH) 60m: 4 bars, strength=0.966, close_pos=1.000, activity=0.745
+2026-03-05 15:20:05 | INFO     | __main__ | 农业银行(601288.SH) d: 1 bars, strength=0.961, close_pos=0.923, activity=0.715
+2026-03-05 15:20:06 | INFO     | __main__ | 农业银行(601288.SH) w: 1 bars, strength=0.979, close_pos=0.110, activity=0.399
+2026-03-05 15:20:06 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:07 | INFO     | __main__ | 太阳能(000591.SZ) 15m: 255 bars, strength=0.868, close_pos=0.766, activity=0.528
+2026-03-05 15:20:08 | INFO     | __main__ | 太阳能(000591.SZ) 60m: 255 bars, strength=0.936, close_pos=0.566, activity=0.220
+2026-03-05 15:20:09 | INFO     | __main__ | 太阳能(000591.SZ) d: 255 bars, strength=0.934, close_pos=0.530, activity=0.201
+2026-03-05 15:20:09 | INFO     | __main__ | 太阳能(000591.SZ) w: 255 bars, strength=0.901, close_pos=1.000, activity=0.795
+2026-03-05 15:20:18 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:20:19 | INFO     | __main__ | 浪潮信息(000977.SZ) 15m: 16 bars, strength=0.901, close_pos=0.694, activity=0.630
+2026-03-05 15:20:20 | INFO     | __main__ | 浪潮信息(000977.SZ) 60m: 4 bars, strength=0.810, close_pos=0.412, activity=0.695
+2026-03-05 15:20:21 | INFO     | __main__ | 浪潮信息(000977.SZ) d: 1 bars, strength=0.827, close_pos=0.105, activity=0.230
+2026-03-05 15:20:22 | INFO     | __main__ | 浪潮信息(000977.SZ) w: 1 bars, strength=0.890, close_pos=0.120, activity=0.254
+2026-03-05 15:20:22 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:23 | INFO     | __main__ | 德业股份(605117.SH) 15m: 16 bars, strength=0.934, close_pos=0.069, activity=0.190
+2026-03-05 15:20:24 | INFO     | __main__ | 德业股份(605117.SH) 60m: 4 bars, strength=0.919, close_pos=0.550, activity=0.550
+2026-03-05 15:20:25 | INFO     | __main__ | 德业股份(605117.SH) d: 1 bars, strength=0.933, close_pos=0.974, activity=0.269
+2026-03-05 15:20:25 | INFO     | __main__ | 德业股份(605117.SH) w: 1 bars, strength=0.811, close_pos=1.000, activity=0.614
+2026-03-05 15:20:25 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:26 | INFO     | __main__ | 浙江世宝(002703.SZ) 15m: 16 bars, strength=0.843, close_pos=0.337, activity=0.372
+2026-03-05 15:20:27 | INFO     | __main__ | 浙江世宝(002703.SZ) 60m: 4 bars, strength=0.840, close_pos=0.359, activity=0.373
+2026-03-05 15:20:28 | INFO     | __main__ | 浙江世宝(002703.SZ) d: 1 bars, strength=0.820, close_pos=0.323, activity=0.265
+2026-03-05 15:20:29 | INFO     | __main__ | 浙江世宝(002703.SZ) w: 1 bars, strength=0.891, close_pos=0.887, activity=0.336
+2026-03-05 15:20:29 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:30 | INFO     | __main__ | 中信证券(600030.SH) 15m: 16 bars, strength=0.940, close_pos=0.572, activity=0.640
+2026-03-05 15:20:31 | INFO     | __main__ | 中信证券(600030.SH) 60m: 4 bars, strength=0.925, close_pos=0.253, activity=0.465
+2026-03-05 15:20:32 | INFO     | __main__ | 中信证券(600030.SH) d: 1 bars, strength=0.792, close_pos=0.000, activity=0.751
+2026-03-05 15:20:33 | INFO     | __main__ | 中信证券(600030.SH) w: 1 bars, strength=0.771, close_pos=0.210, activity=0.414
+2026-03-05 15:20:33 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:34 | INFO     | __main__ | 双良节能(600481.SH) 15m: 16 bars, strength=0.935, close_pos=0.585, activity=0.667
+2026-03-05 15:20:35 | INFO     | __main__ | 双良节能(600481.SH) 60m: 4 bars, strength=0.932, close_pos=0.570, activity=0.654
+2026-03-05 15:20:36 | INFO     | __main__ | 双良节能(600481.SH) d: 1 bars, strength=0.877, close_pos=0.000, activity=0.322
+2026-03-05 15:20:37 | INFO     | __main__ | 双良节能(600481.SH) w: 1 bars, strength=0.817, close_pos=0.363, activity=0.415
+2026-03-05 15:20:37 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:38 | INFO     | __main__ | 光线传媒(300251.SZ) 15m: 16 bars, strength=0.979, close_pos=0.971, activity=0.904
+2026-03-05 15:20:39 | INFO     | __main__ | 光线传媒(300251.SZ) 60m: 4 bars, strength=0.886, close_pos=0.592, activity=0.737
+2026-03-05 15:20:40 | INFO     | __main__ | 光线传媒(300251.SZ) d: 1 bars, strength=0.738, close_pos=0.124, activity=0.304
+2026-03-05 15:20:41 | INFO     | __main__ | 光线传媒(300251.SZ) w: 1 bars, strength=0.790, close_pos=0.208, activity=0.451
+2026-03-05 15:20:41 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:42 | INFO     | __main__ | 信维通信(300136.SZ) 15m: 16 bars, strength=0.879, close_pos=0.372, activity=0.642
+2026-03-05 15:20:43 | INFO     | __main__ | 信维通信(300136.SZ) 60m: 4 bars, strength=0.909, close_pos=0.104, activity=0.212
+2026-03-05 15:20:44 | INFO     | __main__ | 信维通信(300136.SZ) d: 1 bars, strength=0.916, close_pos=0.159, activity=0.267
+2026-03-05 15:20:45 | INFO     | __main__ | 信维通信(300136.SZ) w: 1 bars, strength=0.861, close_pos=0.531, activity=0.572
+2026-03-05 15:20:45 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:46 | INFO     | __main__ | 科陆电子(002121.SZ) 15m: 16 bars, strength=0.894, close_pos=0.278, activity=0.250
+2026-03-05 15:20:47 | INFO     | __main__ | 科陆电子(002121.SZ) 60m: 4 bars, strength=0.891, close_pos=0.450, activity=0.256
+2026-03-05 15:20:49 | INFO     | __main__ | 科陆电子(002121.SZ) d: 1 bars, strength=0.933, close_pos=0.525, activity=0.338
+2026-03-05 15:20:50 | INFO     | __main__ | 科陆电子(002121.SZ) w: 1 bars, strength=0.929, close_pos=0.324, activity=0.209
+2026-03-05 15:20:50 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:51 | INFO     | __main__ | 江龙船艇(300589.SZ) 15m: 16 bars, strength=0.809, close_pos=0.456, activity=0.687
+2026-03-05 15:20:52 | INFO     | __main__ | 江龙船艇(300589.SZ) 60m: 4 bars, strength=0.764, close_pos=0.030, activity=0.335
+2026-03-05 15:20:53 | INFO     | __main__ | 江龙船艇(300589.SZ) d: 1 bars, strength=0.829, close_pos=0.318, activity=0.430
+2026-03-05 15:20:54 | INFO     | __main__ | 江龙船艇(300589.SZ) w: 1 bars, strength=0.795, close_pos=0.458, activity=0.465
+2026-03-05 15:20:54 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:20:55 | INFO     | __main__ | 远东股份(600869.SH) 15m: 255 bars, strength=0.892, close_pos=0.849, activity=0.738
+2026-03-05 15:20:56 | INFO     | __main__ | 远东股份(600869.SH) 60m: 255 bars, strength=0.969, close_pos=0.063, activity=0.201
+2026-03-05 15:20:56 | INFO     | __main__ | 远东股份(600869.SH) d: 255 bars, strength=0.967, close_pos=0.173, activity=0.240
+2026-03-05 15:20:57 | INFO     | __main__ | 远东股份(600869.SH) w: 255 bars, strength=0.931, close_pos=0.830, activity=0.485
+2026-03-05 15:21:06 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:21:07 | INFO     | __main__ | 昆仑万维(300418.SZ) 15m: 16 bars, strength=0.880, close_pos=0.545, activity=0.643
+2026-03-05 15:21:08 | INFO     | __main__ | 昆仑万维(300418.SZ) 60m: 4 bars, strength=0.817, close_pos=0.058, activity=0.320
+2026-03-05 15:21:09 | INFO     | __main__ | 昆仑万维(300418.SZ) d: 1 bars, strength=0.892, close_pos=0.386, activity=0.517
+2026-03-05 15:21:10 | INFO     | __main__ | 昆仑万维(300418.SZ) w: 1 bars, strength=0.869, close_pos=0.430, activity=0.468
+2026-03-05 15:21:10 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:11 | INFO     | __main__ | 格林美(002340.SZ) 15m: 16 bars, strength=0.877, close_pos=0.715, activity=0.753
+2026-03-05 15:21:12 | INFO     | __main__ | 格林美(002340.SZ) 60m: 4 bars, strength=0.873, close_pos=0.112, activity=0.238
+2026-03-05 15:21:13 | INFO     | __main__ | 格林美(002340.SZ) d: 1 bars, strength=0.924, close_pos=0.412, activity=0.336
+2026-03-05 15:21:14 | INFO     | __main__ | 格林美(002340.SZ) w: 1 bars, strength=0.906, close_pos=0.453, activity=0.355
+2026-03-05 15:21:14 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:15 | INFO     | __main__ | 风语筑(603466.SH) 15m: 16 bars, strength=0.877, close_pos=1.000, activity=0.809
+2026-03-05 15:21:16 | INFO     | __main__ | 风语筑(603466.SH) 60m: 4 bars, strength=0.746, close_pos=0.210, activity=0.406
+2026-03-05 15:21:17 | INFO     | __main__ | 风语筑(603466.SH) d: 1 bars, strength=0.631, close_pos=0.500, activity=0.424
+2026-03-05 15:21:18 | INFO     | __main__ | 风语筑(603466.SH) w: 1 bars, strength=0.840, close_pos=0.881, activity=0.698
+2026-03-05 15:21:18 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:19 | INFO     | __main__ | 红宝丽(002165.SZ) 15m: 16 bars, strength=0.919, close_pos=0.702, activity=0.765
+2026-03-05 15:21:20 | INFO     | __main__ | 红宝丽(002165.SZ) 60m: 4 bars, strength=0.887, close_pos=0.000, activity=0.281
+2026-03-05 15:21:21 | INFO     | __main__ | 红宝丽(002165.SZ) d: 1 bars, strength=0.886, close_pos=0.015, activity=0.288
+2026-03-05 15:21:22 | INFO     | __main__ | 红宝丽(002165.SZ) w: 1 bars, strength=0.875, close_pos=0.315, activity=0.288
+2026-03-05 15:21:22 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:23 | INFO     | __main__ | 洪兴股份(001209.SZ) 15m: 16 bars, strength=0.969, close_pos=0.774, activity=0.824
+2026-03-05 15:21:24 | INFO     | __main__ | 洪兴股份(001209.SZ) 60m: 4 bars, strength=0.744, close_pos=0.000, activity=0.476
+2026-03-05 15:21:25 | INFO     | __main__ | 洪兴股份(001209.SZ) d: 1 bars, strength=0.856, close_pos=0.300, activity=0.376
+2026-03-05 15:21:25 | INFO     | __main__ | 洪兴股份(001209.SZ) w: 1 bars, strength=0.860, close_pos=0.313, activity=0.416
+2026-03-05 15:21:25 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:26 | INFO     | __main__ | 三孚股份(603938.SH) 15m: 16 bars, strength=0.928, close_pos=0.547, activity=0.395
+2026-03-05 15:21:27 | INFO     | __main__ | 三孚股份(603938.SH) 60m: 4 bars, strength=0.934, close_pos=0.518, activity=0.362
+2026-03-05 15:21:28 | INFO     | __main__ | 三孚股份(603938.SH) d: 1 bars, strength=0.911, close_pos=0.997, activity=0.482
+2026-03-05 15:21:28 | INFO     | __main__ | 三孚股份(603938.SH) w: 1 bars, strength=0.906, close_pos=0.957, activity=0.435
+2026-03-05 15:21:28 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:29 | INFO     | __main__ | 赛力斯(601127.SH) 15m: 16 bars, strength=0.951, close_pos=0.487, activity=0.558
+2026-03-05 15:21:30 | INFO     | __main__ | 赛力斯(601127.SH) 60m: 4 bars, strength=0.948, close_pos=0.343, activity=0.565
+2026-03-05 15:21:31 | INFO     | __main__ | 赛力斯(601127.SH) d: 1 bars, strength=0.942, close_pos=0.425, activity=0.736
+2026-03-05 15:21:32 | INFO     | __main__ | 赛力斯(601127.SH) w: 1 bars, strength=0.884, close_pos=0.092, activity=0.083
+2026-03-05 15:21:32 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:33 | INFO     | __main__ | 江西铜业(600362.SH) 15m: 16 bars, strength=0.853, close_pos=0.916, activity=0.774
+2026-03-05 15:21:34 | INFO     | __main__ | 江西铜业(600362.SH) 60m: 4 bars, strength=0.873, close_pos=0.046, activity=0.223
+2026-03-05 15:21:35 | INFO     | __main__ | 江西铜业(600362.SH) d: 1 bars, strength=0.967, close_pos=0.110, activity=0.305
+2026-03-05 15:21:36 | INFO     | __main__ | 江西铜业(600362.SH) w: 1 bars, strength=0.949, close_pos=0.339, activity=0.445
+2026-03-05 15:21:36 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:37 | INFO     | __main__ | 神开股份(002278.SZ) 15m: 16 bars, strength=0.793, close_pos=0.622, activity=0.733
+2026-03-05 15:21:38 | INFO     | __main__ | 神开股份(002278.SZ) 60m: 4 bars, strength=0.888, close_pos=0.239, activity=0.390
+2026-03-05 15:21:39 | INFO     | __main__ | 神开股份(002278.SZ) d: 1 bars, strength=0.964, close_pos=0.323, activity=0.262
+2026-03-05 15:21:40 | INFO     | __main__ | 神开股份(002278.SZ) w: 1 bars, strength=0.967, close_pos=0.367, activity=0.284
+2026-03-05 15:21:41 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:42 | INFO     | __main__ | 金钼股份(601958.SH) 15m: 16 bars, strength=0.943, close_pos=0.220, activity=0.392
+2026-03-05 15:21:43 | INFO     | __main__ | 金钼股份(601958.SH) 60m: 4 bars, strength=0.951, close_pos=0.601, activity=0.467
+2026-03-05 15:21:44 | INFO     | __main__ | 金钼股份(601958.SH) d: 1 bars, strength=0.948, close_pos=0.585, activity=0.453
+2026-03-05 15:21:45 | INFO     | __main__ | 金钼股份(601958.SH) w: 1 bars, strength=0.921, close_pos=1.000, activity=0.462
+2026-03-05 15:21:45 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:46 | INFO     | __main__ | 卓胜微(300782.SZ) 15m: 16 bars, strength=0.898, close_pos=0.562, activity=0.463
+2026-03-05 15:21:47 | INFO     | __main__ | 卓胜微(300782.SZ) 60m: 4 bars, strength=0.829, close_pos=0.726, activity=0.416
+2026-03-05 15:21:48 | INFO     | __main__ | 卓胜微(300782.SZ) d: 1 bars, strength=0.670, close_pos=0.965, activity=0.736
+2026-03-05 15:21:48 | INFO     | __main__ | 卓胜微(300782.SZ) w: 1 bars, strength=0.915, close_pos=0.853, activity=0.796
+2026-03-05 15:21:48 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:50 | INFO     | __main__ | 中国能建(601868.SH) 15m: 16 bars, strength=0.939, close_pos=0.785, activity=0.331
+2026-03-05 15:21:51 | INFO     | __main__ | 中国能建(601868.SH) 60m: 4 bars, strength=0.938, close_pos=0.784, activity=0.326
+2026-03-05 15:21:52 | INFO     | __main__ | 中国能建(601868.SH) d: 1 bars, strength=0.747, close_pos=1.000, activity=0.437
+2026-03-05 15:21:52 | INFO     | __main__ | 中国能建(601868.SH) w: 1 bars, strength=0.767, close_pos=0.913, activity=0.458
+2026-03-05 15:21:52 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:53 | INFO     | __main__ | 恒瑞医药(600276.SH) 15m: 16 bars, strength=0.952, close_pos=0.833, activity=0.701
+2026-03-05 15:21:55 | INFO     | __main__ | 恒瑞医药(600276.SH) 60m: 4 bars, strength=0.894, close_pos=0.553, activity=0.628
+2026-03-05 15:21:55 | INFO     | __main__ | 恒瑞医药(600276.SH) d: 1 bars, strength=0.882, close_pos=0.133, activity=0.631
+2026-03-05 15:21:56 | INFO     | __main__ | 恒瑞医药(600276.SH) w: 1 bars, strength=0.856, close_pos=0.000, activity=0.346
+2026-03-05 15:21:57 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:21:58 | INFO     | __main__ | 中国核电(601985.SH) 15m: 16 bars, strength=0.921, close_pos=0.410, activity=0.323
+2026-03-05 15:21:59 | INFO     | __main__ | 中国核电(601985.SH) 60m: 4 bars, strength=0.791, close_pos=1.000, activity=0.712
+2026-03-05 15:22:00 | INFO     | __main__ | 中国核电(601985.SH) d: 1 bars, strength=0.904, close_pos=0.779, activity=0.753
+2026-03-05 15:22:01 | INFO     | __main__ | 中国核电(601985.SH) w: 1 bars, strength=0.904, close_pos=0.769, activity=0.757
+2026-03-05 15:22:01 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:02 | INFO     | __main__ | 凯美特气(002549.SZ) 15m: 16 bars, strength=0.785, close_pos=0.000, activity=0.422
+2026-03-05 15:22:03 | INFO     | __main__ | 凯美特气(002549.SZ) 60m: 4 bars, strength=0.756, close_pos=0.097, activity=0.454
+2026-03-05 15:22:05 | INFO     | __main__ | 凯美特气(002549.SZ) d: 1 bars, strength=0.940, close_pos=0.173, activity=0.274
+2026-03-05 15:22:06 | INFO     | __main__ | 凯美特气(002549.SZ) w: 1 bars, strength=0.936, close_pos=0.024, activity=0.148
+2026-03-05 15:22:06 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:07 | INFO     | __main__ | 四方达(300179.SZ) 15m: 16 bars, strength=0.902, close_pos=0.325, activity=0.238
+2026-03-05 15:22:09 | INFO     | __main__ | 四方达(300179.SZ) 60m: 4 bars, strength=0.932, close_pos=0.773, activity=0.506
+2026-03-05 15:22:10 | INFO     | __main__ | 四方达(300179.SZ) d: 1 bars, strength=0.935, close_pos=0.771, activity=0.493
+2026-03-05 15:22:10 | INFO     | __main__ | 四方达(300179.SZ) w: 1 bars, strength=0.891, close_pos=1.000, activity=0.330
+2026-03-05 15:22:11 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:12 | INFO     | __main__ | 卧龙电驱(600580.SH) 15m: 16 bars, strength=0.929, close_pos=0.838, activity=0.691
+2026-03-05 15:22:13 | INFO     | __main__ | 卧龙电驱(600580.SH) 60m: 4 bars, strength=0.859, close_pos=0.270, activity=0.704
+2026-03-05 15:22:14 | INFO     | __main__ | 卧龙电驱(600580.SH) d: 1 bars, strength=0.935, close_pos=0.087, activity=0.192
+2026-03-05 15:22:16 | INFO     | __main__ | 卧龙电驱(600580.SH) w: 1 bars, strength=0.937, close_pos=0.107, activity=0.214
+2026-03-05 15:22:16 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:17 | INFO     | __main__ | 昇辉科技(300423.SZ) 15m: 16 bars, strength=0.848, close_pos=0.407, activity=0.340
+2026-03-05 15:22:18 | INFO     | __main__ | 昇辉科技(300423.SZ) 60m: 4 bars, strength=0.820, close_pos=1.000, activity=0.351
+2026-03-05 15:22:19 | INFO     | __main__ | 昇辉科技(300423.SZ) d: 1 bars, strength=0.917, close_pos=1.000, activity=0.393
+2026-03-05 15:22:20 | INFO     | __main__ | 昇辉科技(300423.SZ) w: 1 bars, strength=0.863, close_pos=1.000, activity=0.601
+2026-03-05 15:22:20 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:21 | INFO     | __main__ | 天壕能源(300332.SZ) 15m: 16 bars, strength=0.851, close_pos=0.174, activity=0.427
+2026-03-05 15:22:22 | INFO     | __main__ | 天壕能源(300332.SZ) 60m: 4 bars, strength=0.783, close_pos=0.386, activity=0.549
+2026-03-05 15:22:23 | INFO     | __main__ | 天壕能源(300332.SZ) d: 1 bars, strength=0.739, close_pos=0.767, activity=0.421
+2026-03-05 15:22:24 | INFO     | __main__ | 天壕能源(300332.SZ) w: 1 bars, strength=0.880, close_pos=1.000, activity=0.787
+2026-03-05 15:22:24 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:25 | INFO     | __main__ | 杭钢股份(600126.SH) 15m: 16 bars, strength=0.950, close_pos=0.715, activity=0.705
+2026-03-05 15:22:26 | INFO     | __main__ | 杭钢股份(600126.SH) 60m: 4 bars, strength=0.788, close_pos=0.032, activity=0.335
+2026-03-05 15:22:27 | INFO     | __main__ | 杭钢股份(600126.SH) d: 1 bars, strength=0.782, close_pos=0.048, activity=0.319
+2026-03-05 15:22:28 | INFO     | __main__ | 杭钢股份(600126.SH) w: 1 bars, strength=0.758, close_pos=0.131, activity=0.260
+2026-03-05 15:22:29 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:30 | INFO     | __main__ | 兴业银锡(000426.SZ) 15m: 16 bars, strength=0.897, close_pos=0.774, activity=0.823
+2026-03-05 15:22:31 | INFO     | __main__ | 兴业银锡(000426.SZ) 60m: 4 bars, strength=0.910, close_pos=0.123, activity=0.299
+2026-03-05 15:22:32 | INFO     | __main__ | 兴业银锡(000426.SZ) d: 1 bars, strength=0.981, close_pos=0.237, activity=0.375
+2026-03-05 15:22:33 | INFO     | __main__ | 兴业银锡(000426.SZ) w: 1 bars, strength=0.976, close_pos=0.328, activity=0.384
+2026-03-05 15:22:33 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:34 | INFO     | __main__ | 科大智能(300222.SZ) 15m: 16 bars, strength=0.820, close_pos=0.538, activity=0.527
+2026-03-05 15:22:35 | INFO     | __main__ | 科大智能(300222.SZ) 60m: 4 bars, strength=0.785, close_pos=0.758, activity=0.325
+2026-03-05 15:22:37 | INFO     | __main__ | 科大智能(300222.SZ) d: 1 bars, strength=0.771, close_pos=0.793, activity=0.333
+2026-03-05 15:22:37 | INFO     | __main__ | 科大智能(300222.SZ) w: 1 bars, strength=0.834, close_pos=0.329, activity=0.230
+2026-03-05 15:22:38 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:39 | INFO     | __main__ | 美利云(000815.SZ) 15m: 16 bars, strength=0.707, close_pos=1.000, activity=0.686
+2026-03-05 15:22:40 | INFO     | __main__ | 美利云(000815.SZ) 60m: 4 bars, strength=0.898, close_pos=0.390, activity=0.318
+2026-03-05 15:22:41 | INFO     | __main__ | 美利云(000815.SZ) d: 1 bars, strength=0.907, close_pos=0.393, activity=0.320
+2026-03-05 15:22:42 | INFO     | __main__ | 美利云(000815.SZ) w: 1 bars, strength=0.793, close_pos=0.444, activity=0.269
+2026-03-05 15:22:42 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:44 | INFO     | __main__ | 粤桂股份(000833.SZ) 15m: 16 bars, strength=0.887, close_pos=0.136, activity=0.184
+2026-03-05 15:22:45 | INFO     | __main__ | 粤桂股份(000833.SZ) 60m: 4 bars, strength=0.890, close_pos=0.137, activity=0.185
+2026-03-05 15:22:46 | INFO     | __main__ | 粤桂股份(000833.SZ) d: 1 bars, strength=0.934, close_pos=0.500, activity=0.287
+2026-03-05 15:22:47 | INFO     | __main__ | 粤桂股份(000833.SZ) w: 1 bars, strength=0.910, close_pos=0.650, activity=0.371
+2026-03-05 15:22:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:22:48 | INFO     | __main__ | 中孚实业(600595.SH) 15m: 255 bars, strength=0.930, close_pos=0.391, activity=0.495
+2026-03-05 15:22:49 | INFO     | __main__ | 中孚实业(600595.SH) 60m: 255 bars, strength=0.888, close_pos=0.266, activity=0.281
+2026-03-05 15:22:49 | INFO     | __main__ | 中孚实业(600595.SH) d: 255 bars, strength=0.976, close_pos=0.311, activity=0.332
+2026-03-05 15:22:50 | INFO     | __main__ | 中孚实业(600595.SH) w: 255 bars, strength=0.967, close_pos=0.632, activity=0.410
+2026-03-05 15:23:09 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:23:10 | INFO     | __main__ | 电投绿能(000875.SZ) 15m: 16 bars, strength=0.906, close_pos=0.318, activity=0.182
+2026-03-05 15:23:11 | INFO     | __main__ | 电投绿能(000875.SZ) 60m: 4 bars, strength=0.942, close_pos=0.656, activity=0.367
+2026-03-05 15:23:12 | INFO     | __main__ | 电投绿能(000875.SZ) d: 1 bars, strength=0.940, close_pos=0.682, activity=0.362
+2026-03-05 15:23:13 | INFO     | __main__ | 电投绿能(000875.SZ) w: 1 bars, strength=0.765, close_pos=1.000, activity=0.393
+2026-03-05 15:23:13 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:23:14 | INFO     | __main__ | 金健米业(600127.SH) 15m: 16 bars, strength=0.835, close_pos=0.124, activity=0.432
+2026-03-05 15:23:15 | INFO     | __main__ | 金健米业(600127.SH) 60m: 4 bars, strength=0.782, close_pos=0.280, activity=0.523
+2026-03-05 15:23:16 | INFO     | __main__ | 金健米业(600127.SH) d: 1 bars, strength=0.474, close_pos=0.426, activity=0.455
+2026-03-05 15:23:17 | INFO     | __main__ | 金健米业(600127.SH) w: 1 bars, strength=0.858, close_pos=0.890, activity=0.754
+2026-03-05 15:23:17 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:23:18 | INFO     | __main__ | 晋控电力(000767.SZ) 15m: 16 bars, strength=0.940, close_pos=0.483, activity=0.207
+2026-03-05 15:23:19 | INFO     | __main__ | 晋控电力(000767.SZ) 60m: 4 bars, strength=0.946, close_pos=0.793, activity=0.378
+2026-03-05 15:23:20 | INFO     | __main__ | 晋控电力(000767.SZ) d: 1 bars, strength=0.922, close_pos=0.950, activity=0.478
+2026-03-05 15:23:21 | INFO     | __main__ | 晋控电力(000767.SZ) w: 1 bars, strength=0.829, close_pos=1.000, activity=0.429
+2026-03-05 15:23:21 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:23:22 | INFO     | __main__ | 乐山电力(600644.SH) 15m: 16 bars, strength=0.951, close_pos=0.422, activity=0.187
+2026-03-05 15:23:23 | INFO     | __main__ | 乐山电力(600644.SH) 60m: 4 bars, strength=0.941, close_pos=0.581, activity=0.244
+2026-03-05 15:23:24 | INFO     | __main__ | 乐山电力(600644.SH) d: 1 bars, strength=0.872, close_pos=1.000, activity=0.480
+2026-03-05 15:23:25 | INFO     | __main__ | 乐山电力(600644.SH) w: 1 bars, strength=0.781, close_pos=0.368, activity=0.342
+2026-03-05 15:23:25 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:23:26 | INFO     | __main__ | 川金诺(300505.SZ) 15m: 255 bars, strength=0.830, close_pos=0.691, activity=0.680
+2026-03-05 15:23:27 | INFO     | __main__ | 川金诺(300505.SZ) 60m: 255 bars, strength=0.916, close_pos=0.447, activity=0.581
+2026-03-05 15:23:28 | INFO     | __main__ | 川金诺(300505.SZ) d: 255 bars, strength=0.937, close_pos=1.000, activity=0.397
+2026-03-05 15:23:28 | INFO     | __main__ | 川金诺(300505.SZ) w: 255 bars, strength=0.943, close_pos=1.000, activity=0.437
+2026-03-05 15:23:40 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:23:41 | INFO     | __main__ | 数据港(603881.SH) 15m: 16 bars, strength=0.874, close_pos=0.888, activity=0.808
+2026-03-05 15:23:42 | INFO     | __main__ | 数据港(603881.SH) 60m: 4 bars, strength=0.871, close_pos=0.000, activity=0.274
+2026-03-05 15:23:43 | INFO     | __main__ | 数据港(603881.SH) d: 1 bars, strength=0.871, close_pos=0.000, activity=0.291
+2026-03-05 15:23:43 | INFO     | __main__ | 数据港(603881.SH) w: 1 bars, strength=0.865, close_pos=0.213, activity=0.190
+2026-03-05 15:23:43 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:23:44 | INFO     | __main__ | 宁德时代(300750.SZ) 15m: 16 bars, strength=0.839, close_pos=0.991, activity=0.739
+2026-03-05 15:23:45 | INFO     | __main__ | 宁德时代(300750.SZ) 60m: 4 bars, strength=0.836, close_pos=0.942, activity=0.719
+2026-03-05 15:23:47 | INFO     | __main__ | 宁德时代(300750.SZ) d: 1 bars, strength=0.875, close_pos=0.229, activity=0.308
+2026-03-05 15:23:47 | INFO     | __main__ | 宁德时代(300750.SZ) w: 1 bars, strength=0.933, close_pos=0.224, activity=0.322
+2026-03-05 15:23:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:23:48 | INFO     | __main__ | 三六零(601360.SH) 15m: 16 bars, strength=0.962, close_pos=0.874, activity=0.715
+2026-03-05 15:23:49 | INFO     | __main__ | 三六零(601360.SH) 60m: 4 bars, strength=0.927, close_pos=0.539, activity=0.559
+2026-03-05 15:23:51 | INFO     | __main__ | 三六零(601360.SH) d: 1 bars, strength=0.751, close_pos=0.107, activity=0.460
+2026-03-05 15:23:52 | INFO     | __main__ | 三六零(601360.SH) w: 1 bars, strength=0.775, close_pos=0.831, activity=0.717
+2026-03-05 15:23:52 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:23:53 | INFO     | __main__ | 天创时尚(603608.SH) 15m: 16 bars, strength=0.855, close_pos=0.715, activity=0.332
+2026-03-05 15:23:54 | INFO     | __main__ | 天创时尚(603608.SH) 60m: 4 bars, strength=0.918, close_pos=0.356, activity=0.177
+2026-03-05 15:23:55 | INFO     | __main__ | 天创时尚(603608.SH) d: 1 bars, strength=0.984, close_pos=0.967, activity=0.456
+2026-03-05 15:23:56 | INFO     | __main__ | 天创时尚(603608.SH) w: 1 bars, strength=0.983, close_pos=0.952, activity=0.442
+2026-03-05 15:23:56 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:23:57 | INFO     | __main__ | 东材科技(601208.SH) 15m: 16 bars, strength=0.895, close_pos=0.765, activity=0.820
+2026-03-05 15:23:58 | INFO     | __main__ | 东材科技(601208.SH) 60m: 4 bars, strength=0.902, close_pos=0.327, activity=0.217
+2026-03-05 15:23:58 | INFO     | __main__ | 东材科技(601208.SH) d: 1 bars, strength=0.954, close_pos=0.484, activity=0.314
+2026-03-05 15:23:59 | INFO     | __main__ | 东材科技(601208.SH) w: 1 bars, strength=0.949, close_pos=0.471, activity=0.281
+2026-03-05 15:24:00 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:01 | INFO     | __main__ | 中油资本(000617.SZ) 15m: 16 bars, strength=0.726, close_pos=0.830, activity=0.703
+2026-03-05 15:24:02 | INFO     | __main__ | 中油资本(000617.SZ) 60m: 4 bars, strength=0.720, close_pos=0.707, activity=0.741
+2026-03-05 15:24:03 | INFO     | __main__ | 中油资本(000617.SZ) d: 1 bars, strength=0.796, close_pos=0.736, activity=0.746
+2026-03-05 15:24:04 | INFO     | __main__ | 中油资本(000617.SZ) w: 1 bars, strength=0.843, close_pos=0.264, activity=0.343
+2026-03-05 15:24:04 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:05 | INFO     | __main__ | 中国动力(600482.SH) 15m: 16 bars, strength=0.940, close_pos=0.403, activity=0.166
+2026-03-05 15:24:06 | INFO     | __main__ | 中国动力(600482.SH) 60m: 4 bars, strength=0.977, close_pos=0.753, activity=0.323
+2026-03-05 15:24:07 | INFO     | __main__ | 中国动力(600482.SH) d: 1 bars, strength=0.977, close_pos=0.785, activity=0.330
+2026-03-05 15:24:08 | INFO     | __main__ | 中国动力(600482.SH) w: 1 bars, strength=0.848, close_pos=1.000, activity=0.287
+2026-03-05 15:24:08 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:09 | INFO     | __main__ | 杰瑞股份(002353.SZ) 15m: 16 bars, strength=0.960, close_pos=0.323, activity=0.206
+2026-03-05 15:24:10 | INFO     | __main__ | 杰瑞股份(002353.SZ) 60m: 4 bars, strength=0.967, close_pos=0.270, activity=0.187
+2026-03-05 15:24:11 | INFO     | __main__ | 杰瑞股份(002353.SZ) d: 1 bars, strength=0.967, close_pos=1.000, activity=0.372
+2026-03-05 15:24:12 | INFO     | __main__ | 杰瑞股份(002353.SZ) w: 1 bars, strength=0.949, close_pos=1.000, activity=0.332
+2026-03-05 15:24:12 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:13 | INFO     | __main__ | 三祥新材(603663.SH) 15m: 16 bars, strength=0.932, close_pos=0.125, activity=0.226
+2026-03-05 15:24:14 | INFO     | __main__ | 三祥新材(603663.SH) 60m: 4 bars, strength=0.927, close_pos=1.000, activity=0.316
+2026-03-05 15:24:15 | INFO     | __main__ | 三祥新材(603663.SH) d: 1 bars, strength=0.962, close_pos=1.000, activity=0.341
+2026-03-05 15:24:16 | INFO     | __main__ | 三祥新材(603663.SH) w: 1 bars, strength=0.962, close_pos=1.000, activity=0.346
+2026-03-05 15:24:16 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:17 | INFO     | __main__ | 乾照光电(300102.SZ) 15m: 16 bars, strength=0.827, close_pos=0.953, activity=0.673
+2026-03-05 15:24:18 | INFO     | __main__ | 乾照光电(300102.SZ) 60m: 4 bars, strength=0.955, close_pos=0.034, activity=0.143
+2026-03-05 15:24:20 | INFO     | __main__ | 乾照光电(300102.SZ) d: 1 bars, strength=0.955, close_pos=0.047, activity=0.156
+2026-03-05 15:24:21 | INFO     | __main__ | 乾照光电(300102.SZ) w: 1 bars, strength=0.864, close_pos=0.914, activity=0.525
+2026-03-05 15:24:21 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:22 | INFO     | __main__ | 四川黄金(001337.SZ) 15m: 16 bars, strength=0.876, close_pos=0.249, activity=0.338
+2026-03-05 15:24:23 | INFO     | __main__ | 四川黄金(001337.SZ) 60m: 4 bars, strength=0.880, close_pos=0.374, activity=0.387
+2026-03-05 15:24:24 | INFO     | __main__ | 四川黄金(001337.SZ) d: 1 bars, strength=0.861, close_pos=0.298, activity=0.280
+2026-03-05 15:24:24 | INFO     | __main__ | 四川黄金(001337.SZ) w: 1 bars, strength=0.766, close_pos=1.000, activity=0.427
+2026-03-05 15:24:24 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:25 | INFO     | __main__ | 中来股份(300393.SZ) 15m: 16 bars, strength=0.944, close_pos=0.034, activity=0.127
+2026-03-05 15:24:26 | INFO     | __main__ | 中来股份(300393.SZ) 60m: 4 bars, strength=0.938, close_pos=0.790, activity=0.353
+2026-03-05 15:24:27 | INFO     | __main__ | 中来股份(300393.SZ) d: 1 bars, strength=0.938, close_pos=0.793, activity=0.362
+2026-03-05 15:24:28 | INFO     | __main__ | 中来股份(300393.SZ) w: 1 bars, strength=0.889, close_pos=1.000, activity=0.729
+2026-03-05 15:24:28 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:29 | INFO     | __main__ | 宏和科技(603256.SH) 15m: 16 bars, strength=0.958, close_pos=0.694, activity=0.724
+2026-03-05 15:24:30 | INFO     | __main__ | 宏和科技(603256.SH) 60m: 4 bars, strength=0.964, close_pos=0.000, activity=0.195
+2026-03-05 15:24:31 | INFO     | __main__ | 宏和科技(603256.SH) d: 1 bars, strength=0.946, close_pos=0.297, activity=0.455
+2026-03-05 15:24:31 | INFO     | __main__ | 宏和科技(603256.SH) w: 1 bars, strength=0.939, close_pos=0.512, activity=0.219
+2026-03-05 15:24:32 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:33 | INFO     | __main__ | 中国稀土(000831.SZ) 15m: 16 bars, strength=0.838, close_pos=0.655, activity=0.684
+2026-03-05 15:24:34 | INFO     | __main__ | 中国稀土(000831.SZ) 60m: 4 bars, strength=0.913, close_pos=0.219, activity=0.327
+2026-03-05 15:24:35 | INFO     | __main__ | 中国稀土(000831.SZ) d: 1 bars, strength=0.938, close_pos=0.462, activity=0.313
+2026-03-05 15:24:35 | INFO     | __main__ | 中国稀土(000831.SZ) w: 1 bars, strength=0.938, close_pos=0.492, activity=0.341
+2026-03-05 15:24:36 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:37 | INFO     | __main__ | 华菱线缆(001208.SZ) 15m: 16 bars, strength=0.664, close_pos=0.880, activity=0.568
+2026-03-05 15:24:37 | INFO     | __main__ | 华菱线缆(001208.SZ) 60m: 4 bars, strength=0.842, close_pos=0.130, activity=0.186
+2026-03-05 15:24:38 | INFO     | __main__ | 华菱线缆(001208.SZ) d: 1 bars, strength=0.862, close_pos=0.793, activity=0.729
+2026-03-05 15:24:39 | INFO     | __main__ | 华菱线缆(001208.SZ) w: 1 bars, strength=0.871, close_pos=0.844, activity=0.679
+2026-03-05 15:24:39 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:40 | INFO     | __main__ | 盛和资源(600392.SH) 15m: 16 bars, strength=0.937, close_pos=0.839, activity=0.865
+2026-03-05 15:24:41 | INFO     | __main__ | 盛和资源(600392.SH) 60m: 4 bars, strength=0.937, close_pos=0.024, activity=0.391
+2026-03-05 15:24:42 | INFO     | __main__ | 盛和资源(600392.SH) d: 1 bars, strength=0.932, close_pos=0.443, activity=0.222
+2026-03-05 15:24:43 | INFO     | __main__ | 盛和资源(600392.SH) w: 1 bars, strength=0.930, close_pos=0.469, activity=0.264
+2026-03-05 15:24:43 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:44 | INFO     | __main__ | 中国长城(000066.SZ) 15m: 16 bars, strength=0.787, close_pos=0.827, activity=0.700
+2026-03-05 15:24:45 | INFO     | __main__ | 中国长城(000066.SZ) 60m: 4 bars, strength=0.682, close_pos=0.112, activity=0.439
+2026-03-05 15:24:46 | INFO     | __main__ | 中国长城(000066.SZ) d: 1 bars, strength=0.675, close_pos=0.147, activity=0.447
+2026-03-05 15:24:47 | INFO     | __main__ | 中国长城(000066.SZ) w: 1 bars, strength=0.769, close_pos=0.215, activity=0.337
+2026-03-05 15:24:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:48 | INFO     | __main__ | 闽东电力(000993.SZ) 15m: 16 bars, strength=0.950, close_pos=0.431, activity=0.222
+2026-03-05 15:24:49 | INFO     | __main__ | 闽东电力(000993.SZ) 60m: 4 bars, strength=0.950, close_pos=0.501, activity=0.271
+2026-03-05 15:24:50 | INFO     | __main__ | 闽东电力(000993.SZ) d: 1 bars, strength=0.886, close_pos=0.810, activity=0.493
+2026-03-05 15:24:51 | INFO     | __main__ | 闽东电力(000993.SZ) w: 1 bars, strength=0.885, close_pos=0.782, activity=0.449
+2026-03-05 15:24:51 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:52 | INFO     | __main__ | 万胜智能(300882.SZ) 15m: 16 bars, strength=0.838, close_pos=1.000, activity=0.426
+2026-03-05 15:24:53 | INFO     | __main__ | 万胜智能(300882.SZ) 60m: 4 bars, strength=0.848, close_pos=1.000, activity=0.448
+2026-03-05 15:24:54 | INFO     | __main__ | 万胜智能(300882.SZ) d: 1 bars, strength=0.911, close_pos=0.718, activity=0.433
+2026-03-05 15:24:55 | INFO     | __main__ | 万胜智能(300882.SZ) w: 1 bars, strength=0.889, close_pos=0.726, activity=0.434
+2026-03-05 15:24:55 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:24:56 | INFO     | __main__ | 永辉超市(601933.SH) 15m: 16 bars, strength=0.975, close_pos=0.987, activity=0.710
+2026-03-05 15:24:57 | INFO     | __main__ | 永辉超市(601933.SH) 60m: 4 bars, strength=0.976, close_pos=0.977, activity=0.742
+2026-03-05 15:24:58 | INFO     | __main__ | 永辉超市(601933.SH) d: 1 bars, strength=0.924, close_pos=0.490, activity=0.722
+2026-03-05 15:24:59 | INFO     | __main__ | 永辉超市(601933.SH) w: 1 bars, strength=0.731, close_pos=0.072, activity=0.281
+2026-03-05 15:24:59 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:00 | INFO     | __main__ | 常山北明(000158.SZ) 15m: 16 bars, strength=0.684, close_pos=0.625, activity=0.710
+2026-03-05 15:25:01 | INFO     | __main__ | 常山北明(000158.SZ) 60m: 4 bars, strength=0.818, close_pos=0.711, activity=0.780
+2026-03-05 15:25:02 | INFO     | __main__ | 常山北明(000158.SZ) d: 1 bars, strength=0.888, close_pos=0.703, activity=0.773
+2026-03-05 15:25:03 | INFO     | __main__ | 常山北明(000158.SZ) w: 1 bars, strength=0.862, close_pos=0.186, activity=0.341
+2026-03-05 15:25:04 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:05 | INFO     | __main__ | 威领股份(002667.SZ) 15m: 16 bars, strength=0.900, close_pos=0.179, activity=0.155
+2026-03-05 15:25:07 | INFO     | __main__ | 威领股份(002667.SZ) 60m: 4 bars, strength=0.939, close_pos=0.516, activity=0.254
+2026-03-05 15:25:08 | INFO     | __main__ | 威领股份(002667.SZ) d: 1 bars, strength=0.933, close_pos=0.584, activity=0.246
+2026-03-05 15:25:09 | INFO     | __main__ | 威领股份(002667.SZ) w: 1 bars, strength=0.890, close_pos=0.861, activity=0.278
+2026-03-05 15:25:09 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:14 | INFO     | __main__ | 天山铝业(002532.SZ) 15m: 16 bars, strength=0.916, close_pos=0.273, activity=0.344
+2026-03-05 15:25:15 | INFO     | __main__ | 天山铝业(002532.SZ) 60m: 4 bars, strength=0.909, close_pos=0.393, activity=0.284
+2026-03-05 15:25:16 | INFO     | __main__ | 天山铝业(002532.SZ) d: 1 bars, strength=0.980, close_pos=0.539, activity=0.385
+2026-03-05 15:25:17 | INFO     | __main__ | 天山铝业(002532.SZ) w: 1 bars, strength=0.959, close_pos=0.600, activity=0.469
+2026-03-05 15:25:17 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:18 | INFO     | __main__ | 航发动力(600893.SH) 15m: 16 bars, strength=0.914, close_pos=0.120, activity=0.199
+2026-03-05 15:25:19 | INFO     | __main__ | 航发动力(600893.SH) 60m: 4 bars, strength=0.965, close_pos=0.467, activity=0.468
+2026-03-05 15:25:20 | INFO     | __main__ | 航发动力(600893.SH) d: 1 bars, strength=0.960, close_pos=0.536, activity=0.510
+2026-03-05 15:25:21 | INFO     | __main__ | 航发动力(600893.SH) w: 1 bars, strength=0.762, close_pos=1.000, activity=0.325
+2026-03-05 15:25:21 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:22 | INFO     | __main__ | 中国平安(601318.SH) 15m: 16 bars, strength=0.965, close_pos=0.972, activity=0.750
+2026-03-05 15:25:23 | INFO     | __main__ | 中国平安(601318.SH) 60m: 4 bars, strength=0.965, close_pos=0.974, activity=0.734
+2026-03-05 15:25:24 | INFO     | __main__ | 中国平安(601318.SH) d: 1 bars, strength=0.913, close_pos=0.057, activity=0.468
+2026-03-05 15:25:25 | INFO     | __main__ | 中国平安(601318.SH) w: 1 bars, strength=0.915, close_pos=0.258, activity=0.323
+2026-03-05 15:25:25 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:26 | INFO     | __main__ | 大族激光(002008.SZ) 15m: 16 bars, strength=0.936, close_pos=0.086, activity=0.113
+2026-03-05 15:25:27 | INFO     | __main__ | 大族激光(002008.SZ) 60m: 4 bars, strength=0.935, close_pos=0.154, activity=0.147
+2026-03-05 15:25:28 | INFO     | __main__ | 大族激光(002008.SZ) d: 1 bars, strength=0.929, close_pos=1.000, activity=0.268
+2026-03-05 15:25:29 | INFO     | __main__ | 大族激光(002008.SZ) w: 1 bars, strength=0.896, close_pos=1.000, activity=0.304
+2026-03-05 15:25:29 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:30 | INFO     | __main__ | 天通股份(600330.SH) 15m: 16 bars, strength=0.864, close_pos=0.025, activity=0.157
+2026-03-05 15:25:31 | INFO     | __main__ | 天通股份(600330.SH) 60m: 4 bars, strength=0.929, close_pos=0.346, activity=0.382
+2026-03-05 15:25:32 | INFO     | __main__ | 天通股份(600330.SH) d: 1 bars, strength=0.938, close_pos=0.734, activity=0.392
+2026-03-05 15:25:33 | INFO     | __main__ | 天通股份(600330.SH) w: 1 bars, strength=0.927, close_pos=0.730, activity=0.327
+2026-03-05 15:25:33 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:34 | INFO     | __main__ | 招商银行(600036.SH) 15m: 16 bars, strength=0.632, close_pos=0.978, activity=0.624
+2026-03-05 15:25:35 | INFO     | __main__ | 招商银行(600036.SH) 60m: 4 bars, strength=0.888, close_pos=0.850, activity=0.644
+2026-03-05 15:25:37 | INFO     | __main__ | 招商银行(600036.SH) d: 1 bars, strength=0.881, close_pos=0.837, activity=0.635
+2026-03-05 15:25:38 | INFO     | __main__ | 招商银行(600036.SH) w: 1 bars, strength=0.841, close_pos=0.010, activity=0.216
+2026-03-05 15:25:39 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:40 | INFO     | __main__ | 御银股份(002177.SZ) 15m: 16 bars, strength=0.918, close_pos=0.005, activity=0.321
+2026-03-05 15:25:41 | INFO     | __main__ | 御银股份(002177.SZ) 60m: 4 bars, strength=0.917, close_pos=0.000, activity=0.301
+2026-03-05 15:25:42 | INFO     | __main__ | 御银股份(002177.SZ) d: 1 bars, strength=0.898, close_pos=0.395, activity=0.248
+2026-03-05 15:25:43 | INFO     | __main__ | 御银股份(002177.SZ) w: 1 bars, strength=0.922, close_pos=0.436, activity=0.272
+2026-03-05 15:25:43 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:44 | INFO     | __main__ | 圣晖集成(603163.SH) 15m: 16 bars, strength=0.974, close_pos=0.392, activity=0.670
+2026-03-05 15:25:46 | INFO     | __main__ | 圣晖集成(603163.SH) 60m: 4 bars, strength=0.980, close_pos=0.000, activity=0.335
+2026-03-05 15:25:47 | INFO     | __main__ | 圣晖集成(603163.SH) d: 1 bars, strength=0.975, close_pos=0.000, activity=0.326
+2026-03-05 15:25:47 | INFO     | __main__ | 圣晖集成(603163.SH) w: 1 bars, strength=0.939, close_pos=0.672, activity=0.403
+2026-03-05 15:25:47 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:48 | INFO     | __main__ | 赣锋锂业(002460.SZ) 15m: 16 bars, strength=0.930, close_pos=0.789, activity=0.769
+2026-03-05 15:25:49 | INFO     | __main__ | 赣锋锂业(002460.SZ) 60m: 4 bars, strength=0.683, close_pos=0.154, activity=0.369
+2026-03-05 15:25:50 | INFO     | __main__ | 赣锋锂业(002460.SZ) d: 1 bars, strength=0.941, close_pos=0.062, activity=0.114
+2026-03-05 15:25:52 | INFO     | __main__ | 赣锋锂业(002460.SZ) w: 1 bars, strength=0.933, close_pos=0.137, activity=0.146
+2026-03-05 15:25:52 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:54 | INFO     | __main__ | 湖北宜化(000422.SZ) 15m: 16 bars, strength=0.878, close_pos=0.132, activity=0.304
+2026-03-05 15:25:55 | INFO     | __main__ | 湖北宜化(000422.SZ) 60m: 4 bars, strength=0.899, close_pos=0.495, activity=0.498
+2026-03-05 15:25:56 | INFO     | __main__ | 湖北宜化(000422.SZ) d: 1 bars, strength=0.874, close_pos=0.486, activity=0.462
+2026-03-05 15:25:57 | INFO     | __main__ | 湖北宜化(000422.SZ) w: 1 bars, strength=0.837, close_pos=0.882, activity=0.329
+2026-03-05 15:25:58 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:25:59 | INFO     | __main__ | 华脉科技(603042.SH) 15m: 16 bars, strength=0.869, close_pos=0.256, activity=0.169
+2026-03-05 15:26:00 | INFO     | __main__ | 华脉科技(603042.SH) 60m: 4 bars, strength=0.887, close_pos=0.788, activity=0.432
+2026-03-05 15:26:01 | INFO     | __main__ | 华脉科技(603042.SH) d: 1 bars, strength=0.888, close_pos=0.581, activity=0.232
+2026-03-05 15:26:01 | INFO     | __main__ | 华脉科技(603042.SH) w: 1 bars, strength=0.899, close_pos=0.591, activity=0.226
+2026-03-05 15:26:01 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:02 | INFO     | __main__ | 大有能源(600403.SH) 15m: 16 bars, strength=0.593, close_pos=0.588, activity=0.691
+2026-03-05 15:26:03 | INFO     | __main__ | 大有能源(600403.SH) 60m: 4 bars, strength=0.704, close_pos=0.631, activity=0.678
+2026-03-05 15:26:05 | INFO     | __main__ | 大有能源(600403.SH) d: 1 bars, strength=0.879, close_pos=0.362, activity=0.543
+2026-03-05 15:26:06 | INFO     | __main__ | 大有能源(600403.SH) w: 1 bars, strength=0.878, close_pos=0.414, activity=0.585
+2026-03-05 15:26:06 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:07 | INFO     | __main__ | 科瑞技术(002957.SZ) 15m: 16 bars, strength=0.831, close_pos=0.133, activity=0.234
+2026-03-05 15:26:09 | INFO     | __main__ | 科瑞技术(002957.SZ) 60m: 4 bars, strength=0.933, close_pos=0.351, activity=0.427
+2026-03-05 15:26:10 | INFO     | __main__ | 科瑞技术(002957.SZ) d: 1 bars, strength=0.935, close_pos=0.942, activity=0.405
+2026-03-05 15:26:10 | INFO     | __main__ | 科瑞技术(002957.SZ) w: 1 bars, strength=0.916, close_pos=0.955, activity=0.395
+2026-03-05 15:26:10 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:11 | INFO     | __main__ | 百利电气(600468.SH) 15m: 16 bars, strength=0.816, close_pos=1.000, activity=0.453
+2026-03-05 15:26:12 | INFO     | __main__ | 百利电气(600468.SH) 60m: 4 bars, strength=0.816, close_pos=1.000, activity=0.425
+2026-03-05 15:26:13 | INFO     | __main__ | 百利电气(600468.SH) d: 1 bars, strength=0.854, close_pos=0.596, activity=0.320
+2026-03-05 15:26:14 | INFO     | __main__ | 百利电气(600468.SH) w: 1 bars, strength=0.866, close_pos=0.631, activity=0.339
+2026-03-05 15:26:15 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:16 | INFO     | __main__ | 和邦生物(603077.SH) 15m: 16 bars, strength=0.896, close_pos=0.782, activity=0.690
+2026-03-05 15:26:17 | INFO     | __main__ | 和邦生物(603077.SH) 60m: 4 bars, strength=0.854, close_pos=0.187, activity=0.443
+2026-03-05 15:26:19 | INFO     | __main__ | 和邦生物(603077.SH) d: 1 bars, strength=0.943, close_pos=0.970, activity=0.380
+2026-03-05 15:26:20 | INFO     | __main__ | 和邦生物(603077.SH) w: 1 bars, strength=0.918, close_pos=0.926, activity=0.406
+2026-03-05 15:26:21 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:22 | INFO     | __main__ | 九安医疗(002432.SZ) 15m: 16 bars, strength=0.895, close_pos=0.400, activity=0.339
+2026-03-05 15:26:23 | INFO     | __main__ | 九安医疗(002432.SZ) 60m: 4 bars, strength=0.887, close_pos=0.465, activity=0.407
+2026-03-05 15:26:24 | INFO     | __main__ | 九安医疗(002432.SZ) d: 1 bars, strength=0.795, close_pos=1.000, activity=0.391
+2026-03-05 15:26:25 | INFO     | __main__ | 九安医疗(002432.SZ) w: 1 bars, strength=0.828, close_pos=0.137, activity=0.159
+2026-03-05 15:26:25 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:26 | INFO     | __main__ | 新天然气(603393.SH) 15m: 16 bars, strength=0.938, close_pos=0.307, activity=0.316
+2026-03-05 15:26:27 | INFO     | __main__ | 新天然气(603393.SH) 60m: 4 bars, strength=0.940, close_pos=0.315, activity=0.337
+2026-03-05 15:26:28 | INFO     | __main__ | 新天然气(603393.SH) d: 1 bars, strength=0.813, close_pos=1.000, activity=0.493
+2026-03-05 15:26:28 | INFO     | __main__ | 新天然气(603393.SH) w: 1 bars, strength=0.681, close_pos=0.871, activity=0.335
+2026-03-05 15:26:29 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:30 | INFO     | __main__ | 神火股份(000933.SZ) 15m: 16 bars, strength=0.970, close_pos=0.292, activity=0.311
+2026-03-05 15:26:31 | INFO     | __main__ | 神火股份(000933.SZ) 60m: 4 bars, strength=0.927, close_pos=0.746, activity=0.335
+2026-03-05 15:26:32 | INFO     | __main__ | 神火股份(000933.SZ) d: 1 bars, strength=0.971, close_pos=0.846, activity=0.349
+2026-03-05 15:26:32 | INFO     | __main__ | 神火股份(000933.SZ) w: 1 bars, strength=0.926, close_pos=0.907, activity=0.409
+2026-03-05 15:26:33 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:34 | INFO     | __main__ | 四川长虹(600839.SH) 15m: 16 bars, strength=0.913, close_pos=0.759, activity=0.693
+2026-03-05 15:26:34 | INFO     | __main__ | 四川长虹(600839.SH) 60m: 4 bars, strength=0.607, close_pos=0.545, activity=0.713
+2026-03-05 15:26:35 | INFO     | __main__ | 四川长虹(600839.SH) d: 1 bars, strength=0.611, close_pos=0.643, activity=0.742
+2026-03-05 15:26:36 | INFO     | __main__ | 四川长虹(600839.SH) w: 1 bars, strength=0.917, close_pos=0.128, activity=0.317
+2026-03-05 15:26:37 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:37 | INFO     | __main__ | 新金路(000510.SZ) 15m: 16 bars, strength=0.955, close_pos=0.908, activity=0.875
+2026-03-05 15:26:38 | INFO     | __main__ | 新金路(000510.SZ) 60m: 4 bars, strength=0.977, close_pos=0.193, activity=0.204
+2026-03-05 15:26:40 | INFO     | __main__ | 新金路(000510.SZ) d: 1 bars, strength=0.976, close_pos=0.205, activity=0.211
+2026-03-05 15:26:40 | INFO     | __main__ | 新金路(000510.SZ) w: 1 bars, strength=0.884, close_pos=1.000, activity=0.503
+2026-03-05 15:26:41 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:42 | INFO     | __main__ | 美锦能源(000723.SZ) 15m: 16 bars, strength=0.862, close_pos=0.321, activity=0.371
+2026-03-05 15:26:43 | INFO     | __main__ | 美锦能源(000723.SZ) 60m: 4 bars, strength=0.820, close_pos=0.463, activity=0.418
+2026-03-05 15:26:44 | INFO     | __main__ | 美锦能源(000723.SZ) d: 1 bars, strength=0.782, close_pos=0.610, activity=0.367
+2026-03-05 15:26:45 | INFO     | __main__ | 美锦能源(000723.SZ) w: 1 bars, strength=0.929, close_pos=1.000, activity=0.843
+2026-03-05 15:26:45 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:26:46 | INFO     | __main__ | 菲利华(300395.SZ) 15m: 255 bars, strength=0.845, close_pos=0.760, activity=0.747
+2026-03-05 15:26:47 | INFO     | __main__ | 菲利华(300395.SZ) 60m: 255 bars, strength=0.830, close_pos=0.591, activity=0.301
+2026-03-05 15:26:47 | INFO     | __main__ | 菲利华(300395.SZ) d: 255 bars, strength=0.934, close_pos=0.595, activity=0.288
+2026-03-05 15:26:48 | INFO     | __main__ | 菲利华(300395.SZ) w: 255 bars, strength=0.938, close_pos=0.679, activity=0.340
+2026-03-05 15:26:56 | INFO     | __main__ | 共保存 1020 条特征记录到数据库
+2026-03-05 15:26:57 | INFO     | __main__ | 宏柏新材(605366.SH) 15m: 16 bars, strength=0.959, close_pos=0.514, activity=0.408
+2026-03-05 15:26:58 | INFO     | __main__ | 宏柏新材(605366.SH) 60m: 4 bars, strength=0.960, close_pos=0.531, activity=0.416
+2026-03-05 15:26:59 | INFO     | __main__ | 宏柏新材(605366.SH) d: 1 bars, strength=0.922, close_pos=1.000, activity=0.466
+2026-03-05 15:27:00 | INFO     | __main__ | 宏柏新材(605366.SH) w: 1 bars, strength=0.834, close_pos=1.000, activity=0.775
+2026-03-05 15:27:00 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:27:01 | INFO     | __main__ | 香农芯创(300475.SZ) 15m: 16 bars, strength=0.726, close_pos=0.493, activity=0.670
+2026-03-05 15:27:02 | INFO     | __main__ | 香农芯创(300475.SZ) 60m: 4 bars, strength=0.838, close_pos=0.593, activity=0.678
+2026-03-05 15:27:02 | INFO     | __main__ | 香农芯创(300475.SZ) d: 1 bars, strength=0.933, close_pos=0.050, activity=0.111
+2026-03-05 15:27:03 | INFO     | __main__ | 香农芯创(300475.SZ) w: 1 bars, strength=0.919, close_pos=0.110, activity=0.163
+2026-03-05 15:27:04 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:27:05 | INFO     | __main__ | 顺丰控股(002352.SZ) 15m: 16 bars, strength=0.952, close_pos=0.772, activity=0.524
+2026-03-05 15:27:06 | INFO     | __main__ | 顺丰控股(002352.SZ) 60m: 4 bars, strength=0.962, close_pos=0.776, activity=0.547
+2026-03-05 15:27:07 | INFO     | __main__ | 顺丰控股(002352.SZ) d: 1 bars, strength=0.922, close_pos=0.623, activity=0.816
+2026-03-05 15:27:08 | INFO     | __main__ | 顺丰控股(002352.SZ) w: 1 bars, strength=0.842, close_pos=0.562, activity=0.724
+2026-03-05 15:27:08 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:27:09 | INFO     | __main__ | 横店影视(603103.SH) 15m: 16 bars, strength=0.950, close_pos=0.950, activity=0.910
+2026-03-05 15:27:11 | INFO     | __main__ | 横店影视(603103.SH) 60m: 4 bars, strength=0.950, close_pos=0.926, activity=0.890
+2026-03-05 15:27:12 | INFO     | __main__ | 横店影视(603103.SH) d: 1 bars, strength=0.856, close_pos=0.019, activity=0.398
+2026-03-05 15:27:12 | INFO     | __main__ | 横店影视(603103.SH) w: 1 bars, strength=0.793, close_pos=0.754, activity=0.192
+2026-03-05 15:27:12 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:27:13 | INFO     | __main__ | 恒生电子(600570.SH) 15m: 16 bars, strength=0.936, close_pos=0.838, activity=0.748
+2026-03-05 15:27:14 | INFO     | __main__ | 恒生电子(600570.SH) 60m: 4 bars, strength=0.922, close_pos=0.151, activity=0.473
+2026-03-05 15:27:15 | INFO     | __main__ | 恒生电子(600570.SH) d: 1 bars, strength=0.729, close_pos=0.277, activity=0.667
+2026-03-05 15:27:17 | INFO     | __main__ | 恒生电子(600570.SH) w: 1 bars, strength=0.863, close_pos=0.658, activity=0.716
+2026-03-05 15:27:18 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:27:19 | INFO     | __main__ | 泸州老窖(000568.SZ) 15m: 16 bars, strength=0.987, close_pos=0.620, activity=0.673
+2026-03-05 15:27:20 | INFO     | __main__ | 泸州老窖(000568.SZ) 60m: 4 bars, strength=0.986, close_pos=0.622, activity=0.660
+2026-03-05 15:27:21 | INFO     | __main__ | 泸州老窖(000568.SZ) d: 1 bars, strength=0.858, close_pos=0.174, activity=0.713
+2026-03-05 15:27:22 | INFO     | __main__ | 泸州老窖(000568.SZ) w: 1 bars, strength=0.890, close_pos=0.439, activity=0.753
+2026-03-05 15:27:23 | INFO     | __main__ | 共保存 22 条特征记录到数据库
+2026-03-05 15:27:24 | INFO     | __main__ | 誉帆科技(001396.SZ) 15m: 16 bars, strength=0.881, close_pos=0.101, activity=0.471
+2026-03-05 15:27:24 | INFO     | __main__ | 誉帆科技(001396.SZ) 60m: 4 bars, strength=0.881, close_pos=0.101, activity=0.461
+2026-03-05 15:27:24 | WARNING  | __main__ | 誉帆科技(001396.SZ) d: 数据不足 (40 bars)
+2026-03-05 15:27:24 | WARNING  | __main__ | 誉帆科技(001396.SZ) w: 数据不足 (9 bars)
+2026-03-05 15:27:25 | INFO     | __main__ | 共保存 20 条特征记录到数据库
+2026-03-05 15:27:26 | INFO     | __main__ | 起帆电缆(605222.SH) 15m: 16 bars, strength=0.814, close_pos=0.357, activity=0.572
+2026-03-05 15:27:27 | INFO     | __main__ | 起帆电缆(605222.SH) 60m: 4 bars, strength=0.930, close_pos=0.281, activity=0.217
+2026-03-05 15:27:29 | INFO     | __main__ | 起帆电缆(605222.SH) d: 1 bars, strength=0.919, close_pos=0.373, activity=0.243
+2026-03-05 15:27:29 | INFO     | __main__ | 起帆电缆(605222.SH) w: 1 bars, strength=0.885, close_pos=0.735, activity=0.425
+2026-03-05 15:27:30 | INFO     | __main__ | 共保存 22 条特征记录到数据库

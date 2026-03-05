@@ -1,0 +1,335 @@
+2026-03-05 13:31:43,067 - scheduler - INFO - ============================================================
+2026-03-05 13:31:43,067 - scheduler - INFO - 统一任务调度器启动
+2026-03-05 13:31:43,067 - scheduler - INFO - ============================================================
+2026-03-05 13:31:43,071 - scheduler - INFO - 调度器初始化完成
+2026-03-05 13:31:43,071 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 13:31:43,071 - scheduler - INFO - 注册任务：背离扫描 (trigger=cron, params={'minute': '*/5', 'hour': '9-11,13-15', 'day_of_week': 'mon-fri'})
+2026-03-05 13:31:43,071 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 13:31:43,072 - scheduler - INFO - 注册任务：临时文件清理 (trigger=cron, params={'hour': 17, 'minute': 0, 'day_of_week': 'mon-fri'})
+2026-03-05 13:31:43,072 - scheduler - INFO - 已注册 2 个任务
+2026-03-05 13:31:43,072 - scheduler - INFO - 任务列表：['背离扫描', '临时文件清理']
+2026-03-05 13:31:43,072 - scheduler - INFO - 启动调度器...
+2026-03-05 13:31:43,072 - apscheduler.scheduler - INFO - Added job "背离扫描" to job store "default"
+2026-03-05 13:31:43,072 - apscheduler.scheduler - INFO - Added job "临时文件清理" to job store "default"
+2026-03-05 13:31:43,072 - apscheduler.scheduler - INFO - Scheduler started
+2026-03-05 13:31:46,537 - scheduler - INFO - 收到信号 15，准备优雅退出...
+2026-03-05 13:35:00,088 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 13:35:00 CST)" (scheduled at 2026-03-05 13:35:00+08:00)
+2026-03-05 13:35:00,959 - numexpr.utils - INFO - NumExpr defaulting to 8 threads.
+2026-03-05 13:35:01,192 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 13:37:06,217 - scheduler - INFO - 背离扫描完成，发现 8 只有背离信号的股票
+2026-03-05 13:37:06,218 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 13:40:00 CST)" executed successfully
+2026-03-05 13:37:06,221 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 13:40:00,081 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 13:45:00 CST)" (scheduled at 2026-03-05 13:40:00+08:00)
+2026-03-05 13:40:00,097 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 13:42:43,342 - scheduler - INFO - 背离扫描完成，发现 12 只有背离信号的股票
+2026-03-05 13:42:43,345 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 13:45:00 CST)" executed successfully
+2026-03-05 13:42:43,347 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 13:45:00,004 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 13:50:00 CST)" (scheduled at 2026-03-05 13:45:00+08:00)
+2026-03-05 13:45:00,006 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 13:47:23,973 - scheduler - INFO - 背离扫描完成，发现 11 只有背离信号的股票
+2026-03-05 13:47:23,976 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 13:50:00 CST)" executed successfully
+2026-03-05 13:47:23,976 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 13:50:00,196 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 13:55:00 CST)" (scheduled at 2026-03-05 13:50:00+08:00)
+2026-03-05 13:50:00,284 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 13:52:17,578 - scheduler - INFO - 背离扫描完成，发现 9 只有背离信号的股票
+2026-03-05 13:52:17,582 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 13:55:00 CST)" executed successfully
+2026-03-05 13:52:17,583 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 13:55:00,070 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:00:00 CST)" (scheduled at 2026-03-05 13:55:00+08:00)
+2026-03-05 13:55:00,077 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 13:57:58,441 - scheduler - INFO - 背离扫描完成，发现 12 只有背离信号的股票
+2026-03-05 13:57:58,443 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:00:00 CST)" executed successfully
+2026-03-05 13:57:58,444 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 14:00:00,056 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:05:00 CST)" (scheduled at 2026-03-05 14:00:00+08:00)
+2026-03-05 14:00:00,071 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:02:28,091 - scheduler - INFO - 背离扫描完成，发现 11 只有背离信号的股票
+2026-03-05 14:02:28,092 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:05:00 CST)" executed successfully
+2026-03-05 14:02:28,094 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 14:05:00,012 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:10:00 CST)" (scheduled at 2026-03-05 14:05:00+08:00)
+2026-03-05 14:05:00,014 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:07:22,049 - scheduler - INFO - 背离扫描完成，发现 11 只有背离信号的股票
+2026-03-05 14:07:22,053 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:10:00 CST)" executed successfully
+2026-03-05 14:07:22,054 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 14:10:00,006 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:15:00 CST)" (scheduled at 2026-03-05 14:10:00+08:00)
+2026-03-05 14:10:00,008 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:12:47,656 - scheduler - INFO - 背离扫描完成，发现 12 只有背离信号的股票
+2026-03-05 14:12:47,659 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:15:00 CST)" executed successfully
+2026-03-05 14:12:47,661 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 14:15:00,027 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:20:00 CST)" (scheduled at 2026-03-05 14:15:00+08:00)
+2026-03-05 14:15:00,031 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:18:25,550 - scheduler - INFO - ============================================================
+2026-03-05 14:18:25,550 - scheduler - INFO - 统一任务调度器启动
+2026-03-05 14:18:25,550 - scheduler - INFO - ============================================================
+2026-03-05 14:18:25,555 - scheduler - INFO - 调度器初始化完成
+2026-03-05 14:18:25,556 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:18:25,556 - scheduler - INFO - 注册任务：背离扫描 (trigger=cron, params={'minute': '*/5', 'hour': '9-11,13-15', 'day_of_week': 'mon-fri'})
+2026-03-05 14:18:25,556 - scheduler - INFO - 已注册 1 个已授权任务
+2026-03-05 14:18:25,556 - scheduler - INFO - 任务列表：['背离扫描']
+2026-03-05 14:18:25,556 - scheduler - INFO - 启动调度器...
+2026-03-05 14:18:25,557 - apscheduler.scheduler - INFO - Added job "背离扫描" to job store "default"
+2026-03-05 14:18:25,557 - apscheduler.scheduler - INFO - Scheduler started
+2026-03-05 14:20:00,010 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:20:00 CST)" (scheduled at 2026-03-05 14:20:00+08:00)
+2026-03-05 14:20:00,499 - numexpr.utils - INFO - NumExpr defaulting to 8 threads.
+2026-03-05 14:20:00,722 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:20:48,926 - scheduler - INFO - 背离扫描完成，发现 9 只有背离信号的股票
+2026-03-05 14:20:48,927 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:25:00 CST)" executed successfully
+2026-03-05 14:20:48,928 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 14:21:11,663 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:21:11,844 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:21:11,976 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:21:12,243 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:21:12,641 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:21:12,802 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:21:12,963 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:21:13,105 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:21:13,274 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:21:21,975 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:23:28,116 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:23:28,674 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:23:29,118 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:23:29,324 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:23:29,458 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:23:29,585 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:23:29,729 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:23:29,872 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:25:00,053 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:30:00 CST)" (scheduled at 2026-03-05 14:25:00+08:00)
+2026-03-05 14:25:00,065 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:25:41,735 - scheduler - INFO - 背离扫描完成，发现 11 只有背离信号的股票
+2026-03-05 14:25:41,737 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:30:00 CST)" executed successfully
+2026-03-05 14:25:41,738 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 14:28:31,756 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:28:33,643 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:28:33,867 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:28:34,010 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:28:34,152 - scheduler - INFO - 收到信号 2，准备优雅退出...
+2026-03-05 14:30:00,225 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:35:00 CST)" (scheduled at 2026-03-05 14:30:00+08:00)
+2026-03-05 14:30:00,239 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:30:36,186 - scheduler - INFO - 背离扫描完成，发现 10 只有背离信号的股票
+2026-03-05 14:30:36,190 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:35:00 CST)" executed successfully
+2026-03-05 14:30:36,191 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 14:32:44,841 - scheduler - INFO - 收到信号 15，准备优雅退出...
+2026-03-05 14:34:01,431 - scheduler - INFO - ============================================================
+2026-03-05 14:34:01,431 - scheduler - INFO - 统一任务调度器启动
+2026-03-05 14:34:01,431 - scheduler - INFO - ============================================================
+2026-03-05 14:34:01,434 - scheduler - INFO - 调度器初始化完成
+2026-03-05 14:34:01,434 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:34:01,434 - scheduler - INFO - 注册任务：背离扫描 (trigger=cron, params={'minute': '*/5', 'hour': '9-11,13-15', 'day_of_week': 'mon-fri'})
+2026-03-05 14:34:01,434 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:34:01,434 - scheduler - INFO - 注册任务：AMP 增量扫描 (trigger=cron, params={'hour': 15, 'minute': 1, 'day_of_week': 'mon-fri'})
+2026-03-05 14:34:01,434 - scheduler - INFO - 已注册 2 个已授权任务
+2026-03-05 14:34:01,434 - scheduler - INFO - 任务列表：['背离扫描', 'AMP 增量扫描']
+2026-03-05 14:34:01,434 - scheduler - INFO - 启动调度器...
+2026-03-05 14:34:01,435 - apscheduler.scheduler - INFO - Added job "背离扫描" to job store "default"
+2026-03-05 14:34:01,435 - apscheduler.scheduler - INFO - Added job "AMP 增量扫描" to job store "default"
+2026-03-05 14:34:01,435 - apscheduler.scheduler - INFO - Scheduler started
+2026-03-05 14:35:00,011 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:35:00 CST)" (scheduled at 2026-03-05 14:35:00+08:00)
+2026-03-05 14:35:01,052 - numexpr.utils - INFO - NumExpr defaulting to 8 threads.
+2026-03-05 14:35:01,277 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:35:32,260 - scheduler - ERROR - 背离扫描任务执行失败：name 'logger' is not defined
+Traceback (most recent call last):
+  File "/Users/zhenbao/Nextcloud/coding/交易/scheduler.py", line 350, in scan_divergence_task
+    result = scan_all_stocks(
+             ^^^^^^^^^^^^^^^^
+  File "/Users/zhenbao/Nextcloud/coding/交易/app/quote_snapshot.py", line 2264, in scan_all_stocks
+    logger.info(f"已发送底背离汇总通知，共 {len(all_bottom_divergences)} 只股票")
+    ^^^^^^
+NameError: name 'logger' is not defined
+2026-03-05 14:35:32,266 - apscheduler.executors.default - ERROR - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:40:00 CST)" raised an exception
+Traceback (most recent call last):
+  File "/Users/zhenbao/anaconda3/lib/python3.11/site-packages/apscheduler/executors/base.py", line 125, in run_job
+    retval = job.func(*job.args, **job.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/zhenbao/Nextcloud/coding/交易/scheduler.py", line 350, in scan_divergence_task
+    result = scan_all_stocks(
+             ^^^^^^^^^^^^^^^^
+  File "/Users/zhenbao/Nextcloud/coding/交易/app/quote_snapshot.py", line 2264, in scan_all_stocks
+    logger.info(f"已发送底背离汇总通知，共 {len(all_bottom_divergences)} 只股票")
+    ^^^^^^
+NameError: name 'logger' is not defined
+2026-03-05 14:35:32,272 - scheduler - ERROR - 任务 task_背离扫描 执行失败：name 'logger' is not defined
+Traceback (most recent call last):
+  File "/Users/zhenbao/anaconda3/lib/python3.11/site-packages/apscheduler/executors/base.py", line 125, in run_job
+    retval = job.func(*job.args, **job.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/zhenbao/Nextcloud/coding/交易/scheduler.py", line 350, in scan_divergence_task
+    result = scan_all_stocks(
+             ^^^^^^^^^^^^^^^^
+  File "/Users/zhenbao/Nextcloud/coding/交易/app/quote_snapshot.py", line 2264, in scan_all_stocks
+    logger.info(f"已发送底背离汇总通知，共 {len(all_bottom_divergences)} 只股票")
+    ^^^^^^
+NameError: name 'logger' is not defined
+2026-03-05 14:40:00,090 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:45:00 CST)" (scheduled at 2026-03-05 14:40:00+08:00)
+2026-03-05 14:40:00,105 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:40:31,451 - scheduler - ERROR - 背离扫描任务执行失败：name 'logger' is not defined
+Traceback (most recent call last):
+  File "/Users/zhenbao/Nextcloud/coding/交易/scheduler.py", line 350, in scan_divergence_task
+    result = scan_all_stocks(
+             ^^^^^^^^^^^^^^^^
+  File "/Users/zhenbao/Nextcloud/coding/交易/app/quote_snapshot.py", line 2213, in scan_all_stocks
+    symbol = result['symbol']
+            ^^^^^^
+NameError: name 'logger' is not defined
+2026-03-05 14:40:31,456 - apscheduler.executors.default - ERROR - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:45:00 CST)" raised an exception
+Traceback (most recent call last):
+  File "/Users/zhenbao/anaconda3/lib/python3.11/site-packages/apscheduler/executors/base.py", line 125, in run_job
+    retval = job.func(*job.args, **job.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/zhenbao/Nextcloud/coding/交易/scheduler.py", line 350, in scan_divergence_task
+    result = scan_all_stocks(
+             ^^^^^^^^^^^^^^^^
+  File "/Users/zhenbao/Nextcloud/coding/交易/app/quote_snapshot.py", line 2213, in scan_all_stocks
+    symbol = result['symbol']
+            ^^^^^^
+NameError: name 'logger' is not defined
+2026-03-05 14:40:31,458 - scheduler - ERROR - 任务 task_背离扫描 执行失败：name 'logger' is not defined
+Traceback (most recent call last):
+  File "/Users/zhenbao/anaconda3/lib/python3.11/site-packages/apscheduler/executors/base.py", line 125, in run_job
+    retval = job.func(*job.args, **job.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/zhenbao/Nextcloud/coding/交易/scheduler.py", line 350, in scan_divergence_task
+    result = scan_all_stocks(
+             ^^^^^^^^^^^^^^^^
+  File "/Users/zhenbao/Nextcloud/coding/交易/app/quote_snapshot.py", line 2213, in scan_all_stocks
+    symbol = result['symbol']
+            ^^^^^^
+NameError: name 'logger' is not defined
+2026-03-05 14:40:46,069 - scheduler - INFO - 收到中断信号，停止调度器
+2026-03-05 14:40:46,075 - scheduler - INFO - 关闭调度器...
+2026-03-05 14:40:46,077 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2026-03-05 14:40:46,077 - scheduler - INFO - 调度器已关闭
+2026-03-05 14:40:48,296 - scheduler - INFO - ============================================================
+2026-03-05 14:40:48,296 - scheduler - INFO - 统一任务调度器启动
+2026-03-05 14:40:48,296 - scheduler - INFO - ============================================================
+2026-03-05 14:40:48,299 - scheduler - INFO - 调度器初始化完成
+2026-03-05 14:40:48,300 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:40:48,300 - scheduler - INFO - 注册任务：背离扫描 (trigger=cron, params={'minute': '*/5', 'hour': '9-11,13-15', 'day_of_week': 'mon-fri'})
+2026-03-05 14:40:48,300 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:40:48,300 - scheduler - INFO - 注册任务：AMP 增量扫描 (trigger=cron, params={'hour': 15, 'minute': 1, 'day_of_week': 'mon-fri'})
+2026-03-05 14:40:48,300 - scheduler - INFO - 已注册 2 个已授权任务
+2026-03-05 14:40:48,300 - scheduler - INFO - 任务列表：['背离扫描', 'AMP 增量扫描']
+2026-03-05 14:40:48,300 - scheduler - INFO - 启动调度器...
+2026-03-05 14:40:48,300 - apscheduler.scheduler - INFO - Added job "背离扫描" to job store "default"
+2026-03-05 14:40:48,300 - apscheduler.scheduler - INFO - Added job "AMP 增量扫描" to job store "default"
+2026-03-05 14:40:48,301 - apscheduler.scheduler - INFO - Scheduler started
+2026-03-05 14:42:01,524 - scheduler - INFO - 收到中断信号，停止调度器
+2026-03-05 14:42:01,527 - scheduler - INFO - 关闭调度器...
+2026-03-05 14:42:01,528 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2026-03-05 14:42:01,529 - scheduler - INFO - 调度器已关闭
+2026-03-05 14:43:16,446 - scheduler - INFO - ============================================================
+2026-03-05 14:43:16,447 - scheduler - INFO - 统一任务调度器启动
+2026-03-05 14:43:16,447 - scheduler - INFO - ============================================================
+2026-03-05 14:43:16,450 - scheduler - INFO - 调度器初始化完成
+2026-03-05 14:43:16,450 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:43:16,450 - scheduler - INFO - 注册任务：背离扫描 (trigger=cron, params={'minute': '*/5', 'hour': '9-11,13-15', 'day_of_week': 'mon-fri'})
+2026-03-05 14:43:16,450 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:43:16,450 - scheduler - INFO - 注册任务：AMP 增量扫描 (trigger=cron, params={'hour': 15, 'minute': 1, 'day_of_week': 'mon-fri'})
+2026-03-05 14:43:16,450 - scheduler - INFO - 已注册 2 个已授权任务
+2026-03-05 14:43:16,450 - scheduler - INFO - 任务列表：['背离扫描', 'AMP 增量扫描']
+2026-03-05 14:43:16,450 - scheduler - INFO - 启动调度器...
+2026-03-05 14:43:16,451 - apscheduler.scheduler - INFO - Added job "背离扫描" to job store "default"
+2026-03-05 14:43:16,451 - apscheduler.scheduler - INFO - Added job "AMP 增量扫描" to job store "default"
+2026-03-05 14:43:16,451 - apscheduler.scheduler - INFO - Scheduler started
+2026-03-05 14:45:00,033 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:45:00 CST)" (scheduled at 2026-03-05 14:45:00+08:00)
+2026-03-05 14:45:00,603 - numexpr.utils - INFO - NumExpr defaulting to 8 threads.
+2026-03-05 14:45:00,820 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:45:31,805 - quote_snapshot - INFO - 已发送底背离汇总通知，共 9 只股票
+2026-03-05 14:45:31,808 - scheduler - INFO - 背离扫描完成，发现 10 只有背离信号的股票
+2026-03-05 14:45:31,808 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:50:00 CST)" executed successfully
+2026-03-05 14:45:31,809 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 14:49:05,585 - scheduler - INFO - 收到中断信号，停止调度器
+2026-03-05 14:49:05,595 - scheduler - INFO - 关闭调度器...
+2026-03-05 14:49:05,607 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2026-03-05 14:49:05,609 - scheduler - INFO - 调度器已关闭
+2026-03-05 14:49:13,440 - scheduler - INFO - ============================================================
+2026-03-05 14:49:13,440 - scheduler - INFO - 统一任务调度器启动
+2026-03-05 14:49:13,440 - scheduler - INFO - ============================================================
+2026-03-05 14:49:13,443 - scheduler - INFO - 调度器初始化完成
+2026-03-05 14:49:13,443 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:49:13,444 - scheduler - INFO - 注册任务：背离扫描 (trigger=cron, params={'minute': '*/5', 'hour': '9-11,13-15', 'day_of_week': 'mon-fri'})
+2026-03-05 14:49:13,444 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:49:13,444 - scheduler - INFO - 注册任务：AMP 增量扫描 (trigger=cron, params={'hour': 15, 'minute': 1, 'day_of_week': 'mon-fri'})
+2026-03-05 14:49:13,444 - scheduler - INFO - 已注册 2 个已授权任务
+2026-03-05 14:49:13,444 - scheduler - INFO - 任务列表：['背离扫描', 'AMP 增量扫描']
+2026-03-05 14:49:13,444 - scheduler - INFO - 启动调度器...
+2026-03-05 14:49:13,444 - apscheduler.scheduler - INFO - Added job "背离扫描" to job store "default"
+2026-03-05 14:49:13,445 - apscheduler.scheduler - INFO - Added job "AMP 增量扫描" to job store "default"
+2026-03-05 14:49:13,445 - apscheduler.scheduler - INFO - Scheduler started
+2026-03-05 14:50:00,070 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:50:00 CST)" (scheduled at 2026-03-05 14:50:00+08:00)
+2026-03-05 14:50:01,603 - numexpr.utils - INFO - NumExpr defaulting to 8 threads.
+2026-03-05 14:50:01,868 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:50:33,019 - quote_snapshot - INFO - 已发送底背离汇总通知，共 6 只股票
+2026-03-05 14:50:33,029 - scheduler - INFO - 背离扫描完成，发现 12 只有背离信号的股票
+2026-03-05 14:50:33,030 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:55:00 CST)" executed successfully
+2026-03-05 14:50:33,031 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 14:52:35,914 - scheduler - INFO - 收到中断信号，停止调度器
+2026-03-05 14:52:35,921 - scheduler - INFO - 关闭调度器...
+2026-03-05 14:52:35,928 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2026-03-05 14:52:35,928 - scheduler - INFO - 调度器已关闭
+2026-03-05 14:54:53,577 - scheduler - INFO - ============================================================
+2026-03-05 14:54:53,578 - scheduler - INFO - 统一任务调度器启动
+2026-03-05 14:54:53,578 - scheduler - INFO - ============================================================
+2026-03-05 14:54:53,580 - scheduler - INFO - 调度器初始化完成
+2026-03-05 14:54:53,580 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:54:53,580 - scheduler - INFO - 注册任务：背离扫描 (trigger=cron, params={'minute': '*/5', 'hour': '9-11,13-15', 'day_of_week': 'mon-fri'})
+2026-03-05 14:54:53,580 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 14:54:53,581 - scheduler - INFO - 注册任务：AMP 增量扫描 (trigger=cron, params={'hour': 15, 'minute': 1, 'day_of_week': 'mon-fri'})
+2026-03-05 14:54:53,581 - scheduler - INFO - 已注册 2 个已授权任务
+2026-03-05 14:54:53,581 - scheduler - INFO - 任务列表：['背离扫描', 'AMP 增量扫描']
+2026-03-05 14:54:53,581 - scheduler - INFO - 启动调度器...
+2026-03-05 14:54:53,581 - apscheduler.scheduler - INFO - Added job "背离扫描" to job store "default"
+2026-03-05 14:54:53,581 - apscheduler.scheduler - INFO - Added job "AMP 增量扫描" to job store "default"
+2026-03-05 14:54:53,581 - apscheduler.scheduler - INFO - Scheduler started
+2026-03-05 14:55:00,015 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 14:55:00 CST)" (scheduled at 2026-03-05 14:55:00+08:00)
+2026-03-05 14:55:00,743 - numexpr.utils - INFO - NumExpr defaulting to 8 threads.
+2026-03-05 14:55:00,976 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 14:55:32,022 - quote_snapshot - INFO - 已发送底背离汇总通知，共 5 只股票
+2026-03-05 14:55:32,025 - scheduler - INFO - 背离扫描完成，发现 10 只有背离信号的股票
+2026-03-05 14:55:32,026 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:00:00 CST)" executed successfully
+2026-03-05 14:55:32,027 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 15:00:00,060 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:05:00 CST)" (scheduled at 2026-03-05 15:00:00+08:00)
+2026-03-05 15:00:00,082 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 15:00:03,892 - scheduler - INFO - 收到中断信号，停止调度器
+2026-03-05 15:00:03,894 - scheduler - INFO - 关闭调度器...
+2026-03-05 15:00:05,040 - scheduler - INFO - ============================================================
+2026-03-05 15:00:05,040 - scheduler - INFO - 统一任务调度器启动
+2026-03-05 15:00:05,040 - scheduler - INFO - ============================================================
+2026-03-05 15:00:05,043 - scheduler - INFO - 调度器初始化完成
+2026-03-05 15:00:05,043 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 15:00:05,043 - scheduler - INFO - 注册任务：背离扫描 (trigger=cron, params={'minute': '*/5', 'hour': '9-11,13-15', 'day_of_week': 'mon-fri'})
+2026-03-05 15:00:05,043 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-03-05 15:00:05,043 - scheduler - INFO - 注册任务：AMP 增量扫描 (trigger=cron, params={'hour': 15, 'minute': 1, 'day_of_week': 'mon-fri'})
+2026-03-05 15:00:05,043 - scheduler - INFO - 已注册 2 个已授权任务
+2026-03-05 15:00:05,043 - scheduler - INFO - 任务列表：['背离扫描', 'AMP 增量扫描']
+2026-03-05 15:00:05,043 - scheduler - INFO - 启动调度器...
+2026-03-05 15:00:05,044 - apscheduler.scheduler - INFO - Added job "背离扫描" to job store "default"
+2026-03-05 15:00:05,044 - apscheduler.scheduler - INFO - Added job "AMP 增量扫描" to job store "default"
+2026-03-05 15:00:05,044 - apscheduler.scheduler - INFO - Scheduler started
+2026-03-05 15:01:00,050 - apscheduler.executors.default - INFO - Running job "AMP 增量扫描 (trigger: cron[day_of_week='mon-fri', hour='15', minute='1'], next run at: 2026-03-05 15:01:00 CST)" (scheduled at 2026-03-05 15:01:00+08:00)
+2026-03-05 15:01:00,053 - scheduler - INFO - 开始执行 AMP 增量扫描任务
+2026-03-05 15:01:00,054 - scheduler - INFO - 执行命令：/Users/zhenbao/anaconda3/bin/python -m app.amp_scanner --freqs 15m,60m,d,w
+2026-03-05 15:05:00,110 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:05:00 CST)" (scheduled at 2026-03-05 15:05:00+08:00)
+2026-03-05 15:05:00,561 - numexpr.utils - INFO - NumExpr defaulting to 8 threads.
+2026-03-05 15:05:00,873 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 15:05:32,064 - quote_snapshot - INFO - 已发送底背离汇总通知，共 5 只股票
+2026-03-05 15:05:32,065 - scheduler - INFO - 背离扫描完成，发现 9 只有背离信号的股票
+2026-03-05 15:05:32,065 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:10:00 CST)" executed successfully
+2026-03-05 15:05:32,066 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 15:10:00,011 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:15:00 CST)" (scheduled at 2026-03-05 15:10:00+08:00)
+2026-03-05 15:10:00,021 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 15:10:28,866 - scheduler - INFO - 背离扫描完成，发现 9 只有背离信号的股票
+2026-03-05 15:10:28,867 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:15:00 CST)" executed successfully
+2026-03-05 15:10:28,867 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 15:15:00,015 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:20:00 CST)" (scheduled at 2026-03-05 15:15:00+08:00)
+2026-03-05 15:15:00,017 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 15:15:28,889 - scheduler - INFO - 背离扫描完成，发现 9 只有背离信号的股票
+2026-03-05 15:15:28,890 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:20:00 CST)" executed successfully
+2026-03-05 15:15:28,890 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 15:20:00,059 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:25:00 CST)" (scheduled at 2026-03-05 15:20:00+08:00)
+2026-03-05 15:20:00,078 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 15:20:29,548 - scheduler - INFO - 背离扫描完成，发现 9 只有背离信号的股票
+2026-03-05 15:20:29,549 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:25:00 CST)" executed successfully
+2026-03-05 15:20:29,549 - scheduler - INFO - 任务 task_背离扫描 执行完成
+2026-03-05 15:25:00,063 - apscheduler.executors.default - INFO - Running job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:30:00 CST)" (scheduled at 2026-03-05 15:25:00+08:00)
+2026-03-05 15:25:00,075 - scheduler - INFO - 开始执行背离扫描任务
+2026-03-05 15:25:29,865 - scheduler - INFO - 背离扫描完成，发现 9 只有背离信号的股票
+2026-03-05 15:25:29,865 - apscheduler.executors.default - INFO - Job "背离扫描 (trigger: cron[day_of_week='mon-fri', hour='9-11,13-15', minute='*/5'], next run at: 2026-03-05 15:30:00 CST)" executed successfully
+2026-03-05 15:25:29,865 - scheduler - INFO - 任务 task_背离扫描 执行完成
