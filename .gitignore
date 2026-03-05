@@ -29,3 +29,6 @@ app/config.*.py
 
 # QMT 交易文件夹（包含敏感配置）
 trading/
+
+# Trae IDE 配置文件夹
+.trae/
