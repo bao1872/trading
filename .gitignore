@@ -26,3 +26,6 @@ stock_concepts_cache.xlsx
 # 交易相关敏感文件
 app/config.py
 app/config.*.py
+
+# QMT 交易文件夹（包含敏感配置）
+trading/
