@@ -1833,13 +1833,20 @@ def batch_generate_html(stock_list_path: str, stock_cache_path: str, output_dir:
     from app.stock_list_manager import get_stock_list_from_db
     
     # 从数据库读取股票列表（优先）
-    stock_names = get_stock_list_from_db()
+    try:
+        stock_names = get_stock_list_from_db()
+        if stock_names:
+            print(f"✅ 从数据库读取到 {len(stock_names)} 只股票")
+    except Exception as e:
+        print(f"⚠️  数据库连接失败：{e}，尝试从 Excel 文件读取")
+        stock_names = []
     
-    # 如果数据库为空，尝试从 Excel 文件读取（向后兼容）
+    # 如果数据库为空或连接失败，尝试从 Excel 文件读取（向后兼容）
     if not stock_names and os.path.exists(stock_list_path):
-        print(f"⚠️  数据库中没有股票数据，从 {stock_list_path} 读取")
+        print(f"⚠️  从 {stock_list_path} 读取股票列表")
         df_stock = pd.read_excel(stock_list_path)
         stock_names = df_stock['股票名称'].tolist()
+        print(f"✅ 从 Excel 读取到 {len(stock_names)} 只股票")
     
     if not stock_names:
         print("❌ 错误：股票列表为空")
@@ -1848,13 +1855,20 @@ def batch_generate_html(stock_list_path: str, stock_cache_path: str, output_dir:
     print(f"股票列表共 {len(stock_names)} 只股票")
     
     # 从数据库读取股票概念缓存
-    name_to_code = get_stock_cache_from_db()
+    try:
+        name_to_code = get_stock_cache_from_db()
+        if name_to_code:
+            print(f"✅ 从数据库读取到 {len(name_to_code)} 条股票缓存")
+    except Exception as e:
+        print(f"⚠️  数据库连接失败：{e}，尝试从 Excel 文件读取")
+        name_to_code = {}
     
-    # 如果数据库为空，尝试从 Excel 文件读取（向后兼容）
+    # 如果数据库为空或连接失败，尝试从 Excel 文件读取（向后兼容）
     if not name_to_code and os.path.exists(stock_cache_path):
-        print(f"⚠️  数据库中没有股票缓存数据，从 {stock_cache_path} 读取")
+        print(f"⚠️  从 {stock_cache_path} 读取股票缓存")
         df_cache = pd.read_excel(stock_cache_path)
         name_to_code = dict(zip(df_cache['name'], df_cache['ts_code']))
+        print(f"✅ 从 Excel 读取到 {len(name_to_code)} 条股票缓存")
     
     os.makedirs(output_dir, exist_ok=True)
     
