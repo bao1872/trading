@@ -2308,7 +2308,7 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                 md_parts.append("")
                 
                 # 为每只股票添加背离信息（使用卡片式布局）
-                for i, ((symbol, stock_name, last_close), divs) in enumerate(stock_signals.items(), 1):
+                for i, ((symbol, stock_name, last_close, pct_change), divs) in enumerate(stock_signals.items(), 1):
                     # 合并周期
                     periods = sorted(set(div['period'] for div in divs), 
                                    key=lambda x: {'1m':0, '5m':1, '15m':2, '30m':3, '60m':4}.get(x, 99))
