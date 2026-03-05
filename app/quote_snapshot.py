@@ -2287,12 +2287,27 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                 pct_change = result.get('pct_change', 0)  # 获取涨跌幅
                 div_time = result.get('div_time')  # 背离时间
                 
-                # 检查背离时间是否超过 5 分钟（测试时跳过此检查）
+                # 检查背离时间是否超过超时限制（按周期动态调整）
+                # 1m 周期：超时 6 分钟，5m 周期：超时 11 分钟，15m 周期：超时 31 分钟，60m 周期：超时 121 分钟
                 if div_time and os.getenv('TEST_MODE', 'false').lower() != 'true':
                     try:
                         time_diff = datetime.now() - div_time
-                        if time_diff.total_seconds() > 300:  # 5 分钟 = 300 秒
-                            logger.debug(f"跳过超时信号：{symbol} 背离时间 {div_time}，距今 {time_diff.total_seconds():.0f} 秒")
+                        max_age_minutes = 6  # 默认 6 分钟（1m 周期）
+                        
+                        # 根据背离周期调整超时时间
+                        for div in result['divergences']:
+                            period = div.get('period', '')
+                            if period == '1m':
+                                max_age_minutes = 6
+                            elif period == '5m':
+                                max_age_minutes = 11
+                            elif period == '15m':
+                                max_age_minutes = 31
+                            elif period == '60m':
+                                max_age_minutes = 121
+                        
+                        if time_diff.total_seconds() > max_age_minutes * 60:
+                            logger.debug(f"跳过超时信号：{symbol} 背离时间 {div_time}，距今 {time_diff.total_seconds()/60:.1f} 分钟（最大允许 {max_age_minutes} 分钟）")
                             continue
                     except Exception:
                         pass
@@ -2357,15 +2372,30 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     price_emoji = "🔺" if last_close > 0 else "🔻"
                     price_color = "red" if last_close > 0 else "green"
                     
-                    # 为每个周期构建背离信息
+                    # 为每个周期构建背离信息（带指标颜色）
                     period_div_info = []
                     for div in divs:
                         indicator = div.get('indicator', '')
-                        indicator_str = f" [{indicator}]" if indicator else ""
                         div_type = div['type']
                         type_text = "底背离" if div_type == 'bottom' else "顶背离"
                         type_emoji = "🔴" if div_type == 'bottom' else "🟢"
-                        period_div_info.append(f"{div['period']}{type_emoji}{type_text}{indicator_str}")
+                        
+                        # 背离类型基础显示
+                        base_display = f"{div['period']}{type_emoji}{type_text}"
+                        
+                        # 添加带颜色的指标标识
+                        # MACD: 深红色 🔴, OBV: 橙色 🟠, HIST: 黄色 🟡
+                        indicator_colors = {
+                            'MACD': '🔴',
+                            'OBV': '🟠',
+                            'Hist': '🟡',
+                        }
+                        
+                        if indicator:
+                            indicator_emoji = indicator_colors.get(indicator, '⚪️')
+                            period_div_info.append(f"{base_display}[{indicator_emoji}{indicator}]")
+                        else:
+                            period_div_info.append(base_display)
                     
                     # 合并所有周期的背离信息
                     type_display = " | ".join(period_div_info)
