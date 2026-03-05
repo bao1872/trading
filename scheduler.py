@@ -337,6 +337,7 @@ def scan_divergence_task():
     
     logger.info("开始执行背离扫描任务")
     
+    # 股票列表现在从数据库读取，stock_list_path 参数仅用于向后兼容
     stock_list_path = PROJECT_ROOT / 'stock.xlsx'
     stock_cache_path = PROJECT_ROOT / 'stock_concepts_cache.xlsx'
     output_dir = PROJECT_ROOT / '背离扫描'

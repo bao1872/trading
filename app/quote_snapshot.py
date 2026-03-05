@@ -1809,23 +1809,55 @@ def build_trend_tab_html(data: Dict, symbol: str, stock_name: str, output_path: 
         f.write(html_content)
 
 
+def get_stock_cache_from_db() -> dict:
+    """从数据库读取股票概念缓存
+    
+    Returns:
+        dict: {name: ts_code} 映射字典
+    """
+    from app.db import get_session
+    from sqlalchemy import text
+    
+    with get_session() as session:
+        sql = "SELECT name, ts_code FROM stock_concepts_cache"
+        result = session.execute(text(sql))
+        return {row[0]: row[1] for row in result.fetchall()}
+
+
 def batch_generate_html(stock_list_path: str, stock_cache_path: str, output_dir: str):
     """批量生成股票趋势分析 HTML 文件
     
     Args:
-        stock_list_path: 股票列表文件路径 (stock.xlsx)
-        stock_cache_path: 股票缓存文件路径 (stock_concepts_cache.xlsx)
+        stock_list_path: 股票列表文件路径 (stock.xlsx) - 已废弃，现在从数据库读取
+        stock_cache_path: 股票缓存文件路径 (stock_concepts_cache.xlsx) - 已废弃，从数据库读取
         output_dir: 输出目录路径
     """
     from tqdm import tqdm
+    from app.stock_list_manager import get_stock_list_from_db
     
-    df_stock = pd.read_excel(stock_list_path)
-    df_cache = pd.read_excel(stock_cache_path)
+    # 从数据库读取股票列表（优先）
+    stock_names = get_stock_list_from_db()
     
-    name_to_code = dict(zip(df_cache['name'], df_cache['ts_code']))
+    # 如果数据库为空，尝试从 Excel 文件读取（向后兼容）
+    if not stock_names and os.path.exists(stock_list_path):
+        print(f"⚠️  数据库中没有股票数据，从 {stock_list_path} 读取")
+        df_stock = pd.read_excel(stock_list_path)
+        stock_names = df_stock['股票名称'].tolist()
     
-    stock_names = df_stock['股票名称'].tolist()
+    if not stock_names:
+        print("❌ 错误：股票列表为空")
+        return
+    
     print(f"股票列表共 {len(stock_names)} 只股票")
+    
+    # 从数据库读取股票概念缓存
+    name_to_code = get_stock_cache_from_db()
+    
+    # 如果数据库为空，尝试从 Excel 文件读取（向后兼容）
+    if not name_to_code and os.path.exists(stock_cache_path):
+        print(f"⚠️  数据库中没有股票缓存数据，从 {stock_cache_path} 读取")
+        df_cache = pd.read_excel(stock_cache_path)
+        name_to_code = dict(zip(df_cache['name'], df_cache['ts_code']))
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -2165,7 +2197,7 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
     - 已推送的背离信号不会被重复推送
     
     Args:
-        stock_list_path: 股票列表文件路径
+        stock_list_path: 股票列表文件路径（已废弃，现在从数据库读取）
         stock_cache_path: 股票缓存文件路径
         output_dir: 输出目录路径
         notify: 是否发送飞书通知
@@ -2174,13 +2206,23 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
     """
     from tqdm import tqdm
     from feishu_notifier import FeishuNotifier
+    from app.stock_list_manager import get_stock_list_from_db
     
-    df_stock = pd.read_excel(stock_list_path)
+    # 从数据库读取股票列表（优先）
+    stock_names = get_stock_list_from_db()
+    
+    # 如果数据库为空，尝试从 Excel 文件读取（向后兼容）
+    if not stock_names and os.path.exists(stock_list_path):
+        logger.warning(f"⚠️  数据库中没有股票数据，从 {stock_list_path} 读取")
+        df_stock = pd.read_excel(stock_list_path)
+        stock_names = df_stock['股票名称'].tolist()
+    
+    if not stock_names:
+        logger.error("❌ 错误：股票列表为空")
+        return []
+    
     df_cache = pd.read_excel(stock_cache_path)
-    
     name_to_code = dict(zip(df_cache['name'], df_cache['ts_code']))
-    
-    stock_names = df_stock['股票名称'].tolist()
     
     api = connect_pytdx()
     

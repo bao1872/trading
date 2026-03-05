@@ -601,8 +601,24 @@ def main():
 
 
 def get_stock_code_by_name(api: TdxHq_API, name: str, stock_cache_path: str = None) -> Optional[str]:
-    """通过股票名称查找股票代码，优先从本地缓存查找"""
-    # 优先从本地缓存文件查找
+    """通过股票名称查找股票代码，优先从数据库缓存查找"""
+    # 优先从数据库缓存查找
+    try:
+        from app.db import get_session
+        from sqlalchemy import text
+        
+        with get_session() as session:
+            sql = "SELECT ts_code FROM stock_concepts_cache WHERE name = :name"
+            result = session.execute(text(sql), {"name": name})
+            row = result.first()
+            if row:
+                ts_code = row[0]
+                # ts_code 格式为 "000426.SZ"，提取代码部分
+                return ts_code.split('.')[0]
+    except Exception:
+        pass  # 数据库查询失败，继续尝试从文件读取
+    
+    # 从本地缓存文件查找（向后兼容）
     if stock_cache_path and os.path.exists(stock_cache_path):
         cache_df = pd.read_excel(stock_cache_path)
         if 'name' in cache_df.columns and 'ts_code' in cache_df.columns:

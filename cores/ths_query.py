@@ -1,63 +1,63 @@
-# cache_generator.py
+# ths_query.py
 """
-股票概念缓存生成器
+同花顺数据查询工具
 
 功能：
-1. 更新股票概念缓存：通过 pywencai 获取所有 A 股的概念、人气排名、市值等数据，保存到 Excel 文件
+1. 更新股票概念缓存：通过 pywencai 获取所有 A 股的概念、人气排名、市值等数据，保存到 Excel 和数据库
 2. 获取指定日期的人气排名：查询指定交易日的人气排名数据并打印
-3. 扫描 1 年内人气排名：遍历 1 年内每个交易日的人气排名并打印前 10 名
+3. 扫描 1 年内人气排名：遍历 1 年内每个交易日的人气排名并打印前 10 名（带进度条）
 
 Usage:
     # 更新股票概念缓存（同时保存到 Excel 和数据库）
-    python cores/cache_generator.py --update-cache
+    python cores/ths_query.py --update-cache
     
     # 更新股票概念缓存（只保存 Excel，不保存到数据库）
-    python cores/cache_generator.py --update-cache --no-db
+    python cores/ths_query.py --update-cache --no-db
     
     # 获取指定日期的人气排名
-    python cores/cache_generator.py --date 2024-03-01
-    python cores/cache_generator.py --date 2024-12-31
+    python cores/ths_query.py --date 2024-03-01
+    python cores/ths_query.py --date 2024-12-31
     
-    # 扫描 1 年内的人气排名（从今天往前推 365 天）
-    python cores/cache_generator.py --scan-popularity
+    # 扫描 1 年内的人气排名（从今天往前推 365 天，带进度条）
+    python cores/ths_query.py --scan-popularity
     
-    # 扫描到指定日期为止的 1 年
-    python cores/cache_generator.py --scan-popularity --end-date 2024-03-01
+    # 扫描到指定日期为止的 1 年（带进度条）
+    python cores/ths_query.py --scan-popularity --end-date 2024-03-01
     
     # 创建数据库表
-    python cores/cache_generator.py --create-table
+    python cores/ths_query.py --create-table
     
-    # 扫描并保存到数据库（增量更新）
-    python cores/cache_generator.py --scan-popularity --save-to-db
+    # 扫描并保存到数据库（增量更新，带进度条）
+    python cores/ths_query.py --scan-popularity --save-to-db
     
-    # 扫描并保存到数据库（全量覆盖）
-    python cores/cache_generator.py --scan-popularity --save-to-db --no-incremental
+    # 扫描并保存到数据库（全量覆盖，带进度条）
+    python cores/ths_query.py --scan-popularity --save-to-db --no-incremental
     
     # 获取指定日期数据并保存到数据库
-    python cores/cache_generator.py --date 2024-03-01 --save-to-db
+    python cores/ths_query.py --date 2024-03-01 --save-to-db
     
     # 查看帮助
-    python cores/cache_generator.py --help
+    python cores/ths_query.py --help
 
 Examples:
     # 示例 1: 获取 2024 年 3 月 1 日的人气排名前 20
-    python cores/cache_generator.py --date 2024-03-01
+    python cores/ths_query.py --date 2024-03-01
     
-    # 示例 2: 扫描 2024 年全年的交易日人气排名
-    python cores/cache_generator.py --scan-popularity --end-date 2024-12-31
+    # 示例 2: 扫描 2024 年全年的交易日人气排名（带进度条）
+    python cores/ths_query.py --scan-popularity --end-date 2024-12-31
     
     # 示例 3: 更新最新的股票概念缓存（同时保存到 Excel 和数据库）
-    python cores/cache_generator.py --update-cache
+    python cores/ths_query.py --update-cache
     
     # 示例 4: 只更新 Excel 文件，不保存到数据库
-    python cores/cache_generator.py --update-cache --no-db
+    python cores/ths_query.py --update-cache --no-db
 
 Side Effects:
     - --update-cache: 会生成/更新 stock_concepts_cache.xlsx 文件，并写入数据库 stock_concepts_cache 表（默认）
     - --update-cache --no-db: 只生成/更新 stock_concepts_cache.xlsx 文件，不写入数据库
     - --date: 仅打印输出，不修改任何文件
     - --date --save-to-db: 将指定日期数据写入数据库 stock_popularity_rank 表
-    - --scan-popularity: 仅打印输出，不修改任何文件
+    - --scan-popularity: 带进度条打印输出，不修改任何文件
     - --scan-popularity --save-to-db: 将所有日期数据写入数据库（默认增量更新）
     - --scan-popularity --save-to-db --no-incremental: 全量覆盖写入数据库
     - --create-table: 创建数据库表 stock_popularity_rank 或 stock_concepts_cache
@@ -388,6 +388,8 @@ def scan_popularity_rank_for_year(end_date: str = None, save_to_db: bool = False
         save_to_db: 是否保存到数据库
         incremental: 是否增量更新（跳过已存在的日期）
     """
+    from tqdm import tqdm
+    
     if end_date is None:
         end_date = datetime.now().strftime('%Y-%m-%d')
     
@@ -411,9 +413,10 @@ def scan_popularity_rank_for_year(end_date: str = None, save_to_db: bool = False
                 logger.info("所有日期的数据都已存在，无需更新")
                 return
     
-    for i, trade_date in enumerate(trading_dates, 1):
+    # 使用 tqdm 显示进度条
+    for trade_date in tqdm(trading_dates, desc="获取人气数据", ncols=100):
         logger.info(f"\n{'='*60}")
-        logger.info(f"[{i}/{len(trading_dates)}] 处理日期：{trade_date}")
+        logger.info(f"处理日期：{trade_date}")
         logger.info(f"{'='*60}")
         
         df = get_popularity_rank_by_date(trade_date)
