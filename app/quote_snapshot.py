@@ -2143,15 +2143,17 @@ def scan_divergence_for_stock(api, symbol: str, stock_name: str) -> Dict:
         'div_time': None,  # 背离发生时间
     }
     
-    # 获取日线数据计算当日涨跌幅
+    # 获取日线数据计算当日涨跌幅（优先，且不被覆盖）
+    daily_pct_change = 0.0
+    daily_close = 0.0
     try:
         df_daily = get_kline_data(api, symbol, 'd', 2)
         if not df_daily.empty and len(df_daily) >= 2:
             # 使用日线数据计算当日涨跌幅
-            results['last_close'] = float(df_daily['close'].iloc[-1])
+            daily_close = float(df_daily['close'].iloc[-1])
             prev_close = float(df_daily['close'].iloc[-2])  # 昨日收盘价
             if prev_close > 0:
-                results['pct_change'] = ((results['last_close'] - prev_close) / prev_close) * 100
+                daily_pct_change = ((daily_close - prev_close) / prev_close) * 100
     except Exception:
         pass  # 如果获取日线失败，使用默认值
     
@@ -2161,14 +2163,9 @@ def scan_divergence_for_stock(api, symbol: str, stock_name: str) -> Dict:
             if df.empty or len(df) < 60:
                 continue
             
-            # 获取最新收盘价和涨跌幅
-            if 'close' in df.columns and not df.empty:
+            # 获取最新收盘价（仅用于背离分析，不覆盖日线数据）
+            if 'close' in df.columns and not df.empty and results['last_close'] == 0.0:
                 results['last_close'] = float(df['close'].iloc[-1])
-                # 计算涨跌幅（当日）
-                if len(df) >= 2:
-                    prev_close = float(df['close'].iloc[-2])  # 前一个周期的收盘价（作为昨日收盘价）
-                    if prev_close > 0:
-                        results['pct_change'] = ((results['last_close'] - prev_close) / prev_close) * 100
             
             df_tail = df.tail(255).reset_index(drop=True)
             if 'datetime' not in df_tail.columns and 'index' in df_tail.columns:
@@ -2201,8 +2198,14 @@ def scan_divergence_for_stock(api, symbol: str, stock_name: str) -> Dict:
                         results['div_time'] = div_time
         
         except Exception as e:
-            print(f"  ⚠️ {stock_name} {period} 周期扫描失败: {e}")
+            print(f"  ⚠️ {stock_name} {period} 周期扫描失败：{e}")
             continue
+    
+    # 使用日线数据覆盖（确保使用真实的当日涨跌幅）
+    if daily_close > 0:
+        results['last_close'] = daily_close
+    if daily_pct_change != 0.0:
+        results['pct_change'] = daily_pct_change
     
     return results
 
@@ -2357,17 +2360,18 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     price_emoji = "🔺" if last_close > 0 else "🔻"
                     price_color = "red" if last_close > 0 else "green"
                     
-                    # 背离类型可视化（底背离用红色，顶背离用绿色）+ 指标类型
-                    is_bottom = divs[0]['type'] == 'bottom'
-                    type_emoji = "🔴" if is_bottom else "🟢"  # 底背离红色，顶背离绿色
-                    type_text = "底背离" if is_bottom else "顶背离"
+                    # 为每个周期构建背离信息
+                    period_div_info = []
+                    for div in divs:
+                        indicator = div.get('indicator', '')
+                        indicator_str = f" [{indicator}]" if indicator else ""
+                        div_type = div['type']
+                        type_text = "底背离" if div_type == 'bottom' else "顶背离"
+                        type_emoji = "🔴" if div_type == 'bottom' else "🟢"
+                        period_div_info.append(f"{div['period']}{type_emoji}{type_text}{indicator_str}")
                     
-                    # 合并所有指标（去重）
-                    all_indicators = list(set(div.get('indicator', '') for div in divs if div.get('indicator')))
-                    indicator_display = f" [{', '.join(all_indicators)}]" if all_indicators else ""
-                    
-                    # 背离类型显示：🔴 底背离 [MACD]
-                    type_display = f"{type_emoji} {type_text}{indicator_display}"
+                    # 合并所有周期的背离信息
+                    type_display = " | ".join(period_div_info)
                     
                     # 周期可视化（带颜色等级，添加空格）
                     period_colors = {
