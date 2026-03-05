@@ -2371,7 +2371,6 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     time_str = f"@{latest_time}" if latest_time else ""
                     
                     # 股价颜色（根据涨跌幅判断）
-                    price_emoji = "🔺" if last_close > 0 else "🔻"
                     price_color = "red" if last_close > 0 else "green"
                     
                     # 为每个周期构建背离信息（带指标底色）
@@ -2394,7 +2393,8 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                                 'Hist': '#FFD700',  # 黄色
                             }
                             color = indicator_colors.get(indicator, '#808080')
-                            period_div_info.append(f"{base_display}<font color=\"{color}\">【{indicator}】</font>")
+                            # 使用 bg 标签显示底色
+                            period_div_info.append(f"{base_display}<bg color=\"{color}\">{indicator}</bg>")
                         else:
                             period_div_info.append(base_display)
                     
@@ -2424,7 +2424,8 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     
                     pct_display = f"{pct_arrow} {pct_change:+.2f}%"
                     
-                    md_parts.append(f"- **💰 股价**: <font color=\"{price_color}\">{last_close:.2f}</font> {price_emoji}")
+                    # 股价显示（去掉 icon，只用颜色）
+                    md_parts.append(f"- **💰 股价**: <font color=\"{price_color}\">{last_close:.2f}</font>")
                     md_parts.append(f"- **📈 涨跌幅**: <font color=\"{pct_color}\">{pct_display}</font>")
                     md_parts.append(f"- **📈 背离**: {type_display}")
                     md_parts.append(f"- **⏰ 周期**: {period_viz}")
