@@ -390,7 +390,7 @@ def amp_incremental_scan_task():
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=7200,  # 2 小时超时
+            timeout=43200,  # 12 小时超时（5012 只股票×4 周期×7 秒 ≈ 9.75 小时）
         )
         
         # 记录输出
