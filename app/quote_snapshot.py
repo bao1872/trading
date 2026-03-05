@@ -2139,6 +2139,7 @@ def scan_divergence_for_stock(api, symbol: str, stock_name: str) -> Dict:
         'divergences': [],
         'has_divergence': False,
         'last_close': 0.0,  # 最新收盘价
+        'pct_change': 0.0,  # 当日涨跌幅（百分比）
     }
     
     for period in periods:
@@ -2147,9 +2148,14 @@ def scan_divergence_for_stock(api, symbol: str, stock_name: str) -> Dict:
             if df.empty or len(df) < 60:
                 continue
             
-            # 获取最新收盘价
-            if results['last_close'] == 0.0 and 'close' in df.columns:
+            # 获取最新收盘价和涨跌幅
+            if 'close' in df.columns and not df.empty:
                 results['last_close'] = float(df['close'].iloc[-1])
+                # 计算涨跌幅（当日）
+                if len(df) >= 2:
+                    prev_close = float(df['close'].iloc[-2])  # 前一个周期的收盘价（作为昨日收盘价）
+                    if prev_close > 0:
+                        results['pct_change'] = ((results['last_close'] - prev_close) / prev_close) * 100
             
             df_tail = df.tail(255).reset_index(drop=True)
             if 'datetime' not in df_tail.columns and 'index' in df_tail.columns:
@@ -2261,6 +2267,7 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                 symbol = result['symbol']
                 stock_name = result['name']
                 last_close = result.get('last_close', 0)
+                pct_change = result.get('pct_change', 0)  # 获取涨跌幅
                 
                 # 获取底背离信号
                 for div in result['divergences']:
@@ -2274,6 +2281,7 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                                 'name': stock_name,
                                 'div': div,
                                 'last_close': last_close,
+                                'pct_change': pct_change,  # 添加涨跌幅
                             })
                         else:
                             logger.debug(f"跳过已推送信号：{symbol} {div['period']} {div['type']} [{div.get('indicator', '')}]")
@@ -2282,7 +2290,7 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
             from collections import defaultdict
             stock_signals = defaultdict(list)
             for item in all_bottom_divergences:
-                key = (item['symbol'], item['name'], item['last_close'])
+                key = (item['symbol'], item['name'], item['last_close'], item['pct_change'])  # 添加涨跌幅到 key
                 stock_signals[key].append(item['div'])
             
             # 如果有底背离，发送整合后的 Markdown 消息
@@ -2335,7 +2343,22 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     # 股票卡片（使用标题和列表）
                     md_parts.append(f"### {i}. {stock_name} ({symbol})")
                     md_parts.append("")
+                    
+                    # 涨跌幅颜色和箭头
+                    if pct_change > 0:
+                        pct_color = "red"
+                        pct_arrow = "🔺"
+                    elif pct_change < 0:
+                        pct_color = "green"
+                        pct_arrow = "🔻"
+                    else:
+                        pct_color = "gray"
+                        pct_arrow = "➖"
+                    
+                    pct_display = f"{pct_arrow} {pct_change:+.2f}%"
+                    
                     md_parts.append(f"- **💰 股价**: <font color=\"{price_color}\">{last_close:.2f}</font> {price_emoji}")
+                    md_parts.append(f"- **📈 涨跌幅**: <font color=\"{pct_color}\">{pct_display}</font>")
                     md_parts.append(f"- **📈 类型**: {type_emoji} {type_text}")
                     md_parts.append(f"- **⏰ 周期**: {period_viz}")
                     md_parts.append(f"- **📊 指标**: {indicator_str if indicator_str else '无'}")
