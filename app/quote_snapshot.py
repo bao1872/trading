@@ -2410,13 +2410,13 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     md_parts.append(f"### {i}. {stock_name} ({symbol})")
                     md_parts.append("")
                     
-                    # 涨跌幅颜色和箭头（涨红色，跌绿色）
+                    # 涨跌幅颜色（涨红色，跌绿色）
                     if pct_change > 0:
-                        pct_display = f"<font color=\"red\">🔺 +{pct_change:.2f}%</font>"
+                        pct_display = f"<font color=\"red\">+{pct_change:.2f}%</font>"
                     elif pct_change < 0:
-                        pct_display = f"<font color=\"green\">🔻 {pct_change:.2f}%</font>"
+                        pct_display = f"<font color=\"green\">{pct_change:.2f}%</font>"
                     else:
-                        pct_display = "➖ +0.00%"
+                        pct_display = "+0.00%"
                     
                     # 股价显示（数字不用颜色）
                     md_parts.append(f"- **💰 股价**: {last_close:.2f}")
