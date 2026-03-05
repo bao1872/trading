@@ -372,6 +372,9 @@ def compute_divergence_for_period(df: pd.DataFrame, period: str, cfg: DivConfig 
     div_events: List[Tuple[int, str]] = []
     last_feat: Dict = {}
     
+    # 记录每个时间点的背离指标
+    div_indicators_at_time: Dict[int, str] = {}
+    
     startpoint = 0 if cfg.dontconfirm else 1
     
     xcat = [str(idx) for idx in df_copy.index]
@@ -509,6 +512,10 @@ def compute_divergence_for_period(df: pd.DataFrame, period: str, cfg: DivConfig 
                     divergence_text_top += indicator_names[x] + "\n"
                 else:
                     divergence_text_bottom += indicator_names[x] + "\n"
+                
+                # 记录该时间点的背离指标
+                if t not in div_indicators_at_time:
+                    div_indicators_at_time[t] = indicator_names[x]
         
         if dnumdiv_top > 0:
             div_events.append((t, "top"))
@@ -558,18 +565,8 @@ def compute_divergence_for_period(df: pd.DataFrame, period: str, cfg: DivConfig 
         # 获取背离发生的时间点
         div_last_time = str(xcat[last_event_t]) if last_event_t < len(xcat) else ""
         
-        # 获取最后一个背离的指标类型
-        div_last_indicator = ""
-        if last_event_t < n:
-            # 重新计算最后一个时间点的指标背离
-            for x, key in enumerate(indicator_keys):
-                for y in range(4):
-                    dist = all_divs[x * 4 + y]
-                    if dist > 0 and dist == (last_t - last_event_t):
-                        div_last_indicator = indicator_names[x]
-                        break
-                if div_last_indicator:
-                    break
+        # 获取最后一个背离的指标类型（从记录的字典中获取）
+        div_last_indicator = div_indicators_at_time.get(last_event_t, "")
         
         last_feat = {
             "div_bias": float(div_bias),
