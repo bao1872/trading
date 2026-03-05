@@ -2334,9 +2334,9 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     # 背离类型可视化（底背离用红色，顶背离用绿色）
                     type_viz = "🔴底" if divs[0]['type'] == 'bottom' else "🟢顶"
                     
-                    # 添加分隔线（第一只股票前不加，缩短到 1/3 长度）
+                    # 添加分隔线（第一只股票前不加，缩短到约 10 个字符）
                     if i > 1:
-                        md_parts.append("━━━" * 7)
+                        md_parts.append("━━━" * 3)
                     
                     # 紧凑格式：## 序号。股票名称 (代码)--🔺股价：XX.XX--🔴60m🟡15m🟢底背离 [指标] age=X @ 时间
                     md_parts.append(f"## {i}. {stock_name} ({symbol})--{price_emoji}**股价：{last_close:.2f}**--{period_viz}{type_viz}背离{indicator_str} **age={min_age}** {time_str}")
