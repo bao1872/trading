@@ -2321,9 +2321,9 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     price_emoji = "🔺" if last_close > 0 else "🔻"
                     price_color = "red" if last_close > 0 else "green"
                     
-                    # 背离类型（底背离/顶背离）
+                    # 背离类型（底背离/顶背离）- 底背离用红色，顶背离用绿色
                     is_bottom = divs[0]['type'] == 'bottom'
-                    type_emoji = "🟢" if is_bottom else "🔴"
+                    type_emoji = "🔴" if is_bottom else "🟢"  # 底背离红色，顶背离绿色
                     type_text = "底背离" if is_bottom else "顶背离"
                     
                     # 周期可视化（带颜色等级）
