@@ -548,26 +548,44 @@ def save_features_to_db(features: List[Dict], max_retries: int = 3) -> int:
     return 0
 
 
-def scan_stock_pool(stock_pool_path: str, frequencies: List[str], 
-                    limit: Optional[int] = None, 
-                    filter_name: Optional[str] = None,
-                    recent_bars: int = 255) -> int:
+def scan_stock_pool(
+    stock_pool_path: str,
+    frequencies: List[str],
+    limit: int = None,
+    filter_name: str = None,
+    recent_bars: int = 255
+) -> int:
     """
     扫描股票池中所有股票
     
     Args:
-        stock_pool_path: 股票池 Excel 路径
+        stock_pool_path: 股票池 Excel 路径（已废弃，现在从数据库读取）
         frequencies: 周期列表
         limit: 限制扫描股票数量
         filter_name: 按名称过滤股票
         recent_bars: 只计算最近 N 个 bar 的特征（默认 255；None 表示计算所有）
     """
-    df_pool = pd.read_excel(stock_pool_path)
-    logger.info(f"股票池共 {len(df_pool)} 只股票")
+    # 从数据库读取股票池
+    from app.db import get_session
+    from sqlalchemy import text
     
-    if filter_name:
-        df_pool = df_pool[df_pool['name'].str.contains(filter_name, na=False)]
-        logger.info(f"过滤后共 {len(df_pool)} 只股票")
+    with get_session() as session:
+        sql = "SELECT ts_code, name FROM stock_concepts_cache"
+        if filter_name:
+            sql += " WHERE name LIKE :filter_name"
+            result = session.execute(text(sql), {"filter_name": f"%{filter_name}%"})
+        else:
+            result = session.execute(text(sql))
+        
+        rows = result.fetchall()
+        df_pool = pd.DataFrame(rows, columns=['ts_code', 'name'])
+    
+    # 如果数据库为空，尝试从 Excel 文件读取（向后兼容）
+    if df_pool.empty and os.path.exists(stock_pool_path):
+        logger.warning(f"⚠️  数据库中没有股票数据，从 {stock_pool_path} 读取")
+        df_pool = pd.read_excel(stock_pool_path)
+    
+    logger.info(f"股票池共 {len(df_pool)} 只股票")
     
     if limit:
         df_pool = df_pool.head(limit)
