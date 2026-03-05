@@ -2285,32 +2285,34 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                 stock_name = result['name']
                 last_close = result.get('last_close', 0)
                 pct_change = result.get('pct_change', 0)  # 获取涨跌幅
-                div_time = result.get('div_time')  # 背离时间
                 
-                # 检查背离时间是否超过超时限制（按周期动态调整）
-                # 1m 周期：超时 6 分钟，5m 周期：超时 11 分钟，15m 周期：超时 31 分钟，60m 周期：超时 121 分钟
-                if div_time and os.getenv('TEST_MODE', 'false').lower() != 'true':
-                    try:
-                        time_diff = datetime.now() - div_time
-                        max_age_minutes = 6  # 默认 6 分钟（1m 周期）
+                # 检查背离年龄是否超过限制（测试时跳过此检查）
+                if os.getenv('TEST_MODE', 'false').lower() != 'true':
+                    # 过滤掉年龄过大的背离
+                    # 5m 及以上周期：age > 2 不发通知
+                    # 1m 周期：age > 6 不发通知
+                    valid_divs = []
+                    for div in result['divergences']:
+                        period = div.get('period', '')
+                        age = div.get('age', 999)
                         
-                        # 根据背离周期调整超时时间
-                        for div in result['divergences']:
-                            period = div.get('period', '')
-                            if period == '1m':
-                                max_age_minutes = 6
-                            elif period == '5m':
-                                max_age_minutes = 11
-                            elif period == '15m':
-                                max_age_minutes = 31
-                            elif period == '60m':
-                                max_age_minutes = 121
+                        # 判断是否超过年龄限制
+                        if period == '1m':
+                            max_age = 6
+                        else:  # 5m, 15m, 60m
+                            max_age = 2
                         
-                        if time_diff.total_seconds() > max_age_minutes * 60:
-                            logger.debug(f"跳过超时信号：{symbol} 背离时间 {div_time}，距今 {time_diff.total_seconds()/60:.1f} 分钟（最大允许 {max_age_minutes} 分钟）")
-                            continue
-                    except Exception:
-                        pass
+                        if age <= max_age:
+                            valid_divs.append(div)
+                        else:
+                            logger.debug(f"跳过超龄信号：{symbol} {period} 周期，age={age}（最大允许 {max_age}）")
+                    
+                    # 如果没有有效的背离，跳过该股票
+                    if not valid_divs:
+                        continue
+                    
+                    # 更新 result 中的背离列表
+                    result['divergences'] = valid_divs
                 
                 # 获取底背离信号
                 for div in result['divergences']:
