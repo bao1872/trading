@@ -2221,8 +2221,14 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
         logger.error("❌ 错误：股票列表为空")
         return []
     
-    df_cache = pd.read_excel(stock_cache_path)
-    name_to_code = dict(zip(df_cache['name'], df_cache['ts_code']))
+    # 从数据库读取股票概念缓存
+    name_to_code = get_stock_cache_from_db()
+    
+    # 如果数据库为空，尝试从 Excel 文件读取（向后兼容）
+    if not name_to_code and os.path.exists(stock_cache_path):
+        logger.warning(f"⚠️  数据库中没有股票缓存数据，从 {stock_cache_path} 读取")
+        df_cache = pd.read_excel(stock_cache_path)
+        name_to_code = dict(zip(df_cache['name'], df_cache['ts_code']))
     
     api = connect_pytdx()
     
