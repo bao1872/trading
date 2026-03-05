@@ -24,4 +24,5 @@ stock_concepts_cache.xlsx
 *.png
 
 # 交易相关敏感文件
-config.*
+app/config.py
+app/config.*.py
