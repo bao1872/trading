@@ -2287,14 +2287,19 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
             
             # 如果有底背离，发送整合后的 Markdown 消息
             if stock_signals:
-                # 构建 Markdown 消息（紧凑布局，优化手机阅读体验）
+                # 构建 Markdown 消息（优化结构性和可读性）
                 md_parts = []
-                md_parts.append("# 🟢 底背离信号汇总")
-                md_parts.append(f"**扫描时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                md_parts.append(f"**发现股票**: {len(stock_signals)} 只")
+                
+                # 标题和摘要信息（使用引用块突出）
+                md_parts.append("# 🎯 背离信号扫描报告")
+                md_parts.append("")
+                md_parts.append(f"> **📅 扫描时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                md_parts.append(f"> **📊 发现股票**: **{len(stock_signals)}** 只")
+                md_parts.append("")
+                md_parts.append("---")
                 md_parts.append("")
                 
-                # 为每只股票添加背离信息（合并同股票信号）
+                # 为每只股票添加背离信息（使用卡片式布局）
                 for i, ((symbol, stock_name, last_close), divs) in enumerate(stock_signals.items(), 1):
                     # 合并周期
                     periods = sorted(set(div['period'] for div in divs), 
@@ -2312,39 +2317,42 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     latest_time = max(times) if times else ""
                     time_str = f"@{latest_time}" if latest_time else ""
                     
-                    # 股价颜色（根据涨跌幅判断，这里简化处理：>0 用红色，否则用绿色）
-                    # 飞书 Markdown 不支持 HTML，使用 emoji 标识
+                    # 股价颜色（根据涨跌幅判断）
                     price_emoji = "🔺" if last_close > 0 else "🔻"
+                    price_color = "red" if last_close > 0 else "green"
                     
-                    # A 股风格周期颜色等级
-                    # 底背离：用红色系（60m 最红 🔴，1m 淡红 🌸）
-                    # 顶背离：用绿色系（60m 最绿 🟢，1m 淡绿 🍃）
-                    # 周期颜色映射
-                    period_colors = {
-                        '60m': '🔴',  # 最红（最重要）
-                        '30m': '🟠',  # 橙色
-                        '15m': '🟡',  # 黄色
-                        '5m': '🟢',   # 绿色
-                        '1m': '🌸',   # 淡红（最不重要）
-                    }
+                    # 背离类型（底背离/顶背离）
+                    is_bottom = divs[0]['type'] == 'bottom'
+                    type_emoji = "🟢" if is_bottom else "🔴"
+                    type_text = "底背离" if is_bottom else "顶背离"
                     
                     # 周期可视化（带颜色等级）
-                    period_viz = ''.join(f"{period_colors.get(p, '⚪️')}{p}" for p in periods)
+                    period_colors = {
+                        '60m': '🔴', '30m': '🟠', '15m': '🟡', '5m': '🟢', '1m': '🌸',
+                    }
+                    period_viz = ' '.join(f"{period_colors.get(p, '⚪️')}{p}" for p in periods)
                     
-                    # 背离类型可视化（底背离用红色，顶背离用绿色）
-                    type_viz = "🔴底" if divs[0]['type'] == 'bottom' else "🟢顶"
+                    # 股票卡片（使用标题和列表）
+                    md_parts.append(f"### {i}. {stock_name} ({symbol})")
+                    md_parts.append("")
+                    md_parts.append(f"- **💰 股价**: <font color=\"{price_color}\">{last_close:.2f}</font> {price_emoji}")
+                    md_parts.append(f"- **📈 类型**: {type_emoji} {type_text}")
+                    md_parts.append(f"- **⏰ 周期**: {period_viz}")
+                    md_parts.append(f"- **📊 指标**: {indicator_str if indicator_str else '无'}")
+                    md_parts.append(f"- **⏳ 年龄**: **{min_age}** 个周期")
+                    if time_str:
+                        md_parts.append(f"- **🕐 时间**: {time_str}")
+                    md_parts.append("")
                     
-                    # 添加分隔线（第一只股票前不加，缩短到约 10 个字符）
-                    if i > 1:
-                        md_parts.append("━━━" * 3)
-                    
-                    # 紧凑格式：## 序号。股票名称 (代码)--🔺股价：XX.XX--🔴60m🟡15m🟢底背离 [指标] age=X @ 时间
-                    md_parts.append(f"## {i}. {stock_name} ({symbol})--{price_emoji}**股价：{last_close:.2f}**--{period_viz}{type_viz}背离{indicator_str} **age={min_age}** {time_str}")
+                    # 添加分隔线（最后一只股票后不加）
+                    if i < len(stock_signals):
+                        md_parts.append("---")
+                        md_parts.append("")
                 
                 # 合并并发送
                 md_text = "\n".join(md_parts)
                 notifier.send_markdown(md_text)
-                logger.info(f"已发送底背离汇总通知，共 {len(stock_signals)} 只股票")
+                logger.info(f"已发送背离信号扫描报告，共 {len(stock_signals)} 只股票")
                 
                 # 发送后统一标记为已推送
                 for item in all_bottom_divergences:
