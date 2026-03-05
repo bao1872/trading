@@ -2317,7 +2317,8 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     price_emoji = "🔺" if last_close > 0 else "🔻"
                     
                     # A 股风格周期颜色等级
-                    # 底背离：60m 最红 🔴，1m 淡红 🌸
+                    # 底背离：用红色系（60m 最红 🔴，1m 淡红 🌸）
+                    # 顶背离：用绿色系（60m 最绿 🟢，1m 淡绿 🍃）
                     # 周期颜色映射
                     period_colors = {
                         '60m': '🔴',  # 最红（最重要）
@@ -2330,12 +2331,12 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     # 周期可视化（带颜色等级）
                     period_viz = ''.join(f"{period_colors.get(p, '⚪️')}{p}" for p in periods)
                     
-                    # 底背离类型可视化
-                    type_viz = "🟢底"
+                    # 背离类型可视化（底背离用红色，顶背离用绿色）
+                    type_viz = "🔴底" if divs[0]['type'] == 'bottom' else "🟢顶"
                     
-                    # 添加分隔线（第一只股票前不加）
+                    # 添加分隔线（第一只股票前不加，缩短到 1/3 长度）
                     if i > 1:
-                        md_parts.append("━━━" * 20)
+                        md_parts.append("━━━" * 7)
                     
                     # 紧凑格式：## 序号。股票名称 (代码)--🔺股价：XX.XX--🔴60m🟡15m🟢底背离 [指标] age=X @ 时间
                     md_parts.append(f"## {i}. {stock_name} ({symbol})--{price_emoji}**股价：{last_close:.2f}**--{period_viz}{type_viz}背离{indicator_str} **age={min_age}** {time_str}")
