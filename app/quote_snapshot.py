@@ -2129,20 +2129,45 @@ if __name__ == "__main__":
     main()
 
 
-def scan_divergence_for_stock(api, symbol: str, stock_name: str) -> Dict:
+def scan_divergence_for_stock(api, symbol: str, stock_name: str, periods: List[str] = None) -> Dict:
     """扫描单只股票的背离情况
     
-    固定扫描 1m, 5m, 15m, 60m 周期
+    根据传入的周期列表扫描，如果没有传入则根据当前时间自动决定：
+    - 每 5 分钟整点：扫描 5m 周期
+    - 每 15 分钟整点：扫描 15m 周期
+    - 每 60 分钟整点：扫描 60m 周期
+    - 1m 周期：每次都扫描（可选）
     
     Args:
         api: pytdx API 实例
         symbol: 股票代码
         stock_name: 股票名称
+        periods: 要扫描的周期列表（如 ['5m', '15m', '60m']），None 则自动判断
     
     Returns:
         背离检测结果
     """
-    periods = ['1m', '5m', '15m', '60m']
+    # 如果没有传入 periods，根据当前时间自动判断
+    if periods is None:
+        periods = []
+        now = datetime.now()
+        minute = now.minute
+        
+        # 每 5 分钟整点：扫描 5m 周期
+        if minute % 5 == 0:
+            periods.append('5m')
+        
+        # 每 15 分钟整点：扫描 15m 周期
+        if minute % 15 == 0:
+            periods.append('15m')
+        
+        # 每 60 分钟整点：扫描 60m 周期
+        if minute == 0:
+            periods.append('60m')
+        
+        # 如果没有匹配任何周期，默认扫描 5m
+        if not periods:
+            periods = ['5m']
     
     results = {
         'symbol': symbol,
