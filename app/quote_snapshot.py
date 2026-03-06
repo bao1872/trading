@@ -2342,8 +2342,8 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                 # 检查背离年龄是否超过限制（测试时跳过此检查）
                 if os.getenv('TEST_MODE', 'false').lower() != 'true':
                     # 过滤掉年龄过大的背离
-                    # 5m 及以上周期：age > 2 不发通知
-                    # 1m 周期：age > 6 不发通知
+                    # 5m 及以上周期：只推送 age=1 的信号
+                    # 1m 周期：age <= 6 不发通知
                     valid_divs = []
                     for div in result['divergences']:
                         period = div.get('period', '')
@@ -2353,7 +2353,7 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                         if period == '1m':
                             max_age = 6
                         else:  # 5m, 15m, 60m
-                            max_age = 2
+                            max_age = 1  # 只推送 age=1 的信号
                         
                         if age <= max_age:
                             valid_divs.append(div)
