@@ -454,52 +454,47 @@ def main():
             name='背离扫描',
             func=scan_divergence_task,
             trigger='cron',
+            job_id='task_背离扫描_am',
             minute='25,30,35,40,45,50,55',  # 9 点从 25 分开始
             hour='9',  # 9 点
             day_of_week='mon-fri',  # 工作日
-            id='task_背离扫描_am',
-            replace_existing=True,
         )
         scheduler.register_task(
             name='背离扫描',
             func=scan_divergence_task,
             trigger='cron',
+            job_id='task_背离扫描_am2',
             minute='*/5',  # 每 5 分钟
             hour='10',  # 10 点整小时
             day_of_week='mon-fri',  # 工作日
-            id='task_背离扫描_am2',
-            replace_existing=True,
         )
         scheduler.register_task(
             name='背离扫描',
             func=scan_divergence_task,
             trigger='cron',
+            job_id='task_背离扫描_am3',
             minute='0,5,10,15,20,25,30',  # 11 点到 30 分结束
             hour='11',  # 11 点
             day_of_week='mon-fri',  # 工作日
-            id='task_背离扫描_am3',
-            replace_existing=True,
         )
         # 下午：13 点 (0-55 分), 14 点 (0-55 分), 15 点 (0 分)
         scheduler.register_task(
             name='背离扫描',
             func=scan_divergence_task,
             trigger='cron',
+            job_id='task_背离扫描_pm',
             minute='*/5',  # 每 5 分钟
             hour='13-14',  # 13-14 点
             day_of_week='mon-fri',  # 工作日
-            id='task_背离扫描_pm',
-            replace_existing=True,
         )
         scheduler.register_task(
             name='背离扫描',
             func=scan_divergence_task,
             trigger='cron',
+            job_id='task_背离扫描_pm2',
             minute='0',  # 15 点只在 0 分执行（收盘）
             hour='15',  # 15 点
             day_of_week='mon-fri',  # 工作日
-            id='task_背离扫描_pm2',
-            replace_existing=True,
         )
     else:
         logger.warning("背离扫描任务未启用（ENABLE_DIVERGENCE_SCAN=false）")
