@@ -254,13 +254,14 @@ class TaskScheduler:
         """任务执行错误事件"""
         logger.error(f"任务 {event.job_id} 执行失败：{event.exception}", exc_info=event.exception)
     
-    def register_task(self, name: str, func, trigger: str, **kwargs):
+    def register_task(self, name: str, func, trigger: str, job_id: str = None, **kwargs):
         """注册任务
         
         Args:
             name: 任务名称
             func: 任务函数
             trigger: 触发器类型 ('interval', 'cron', 'date')
+            job_id: 可选的任务 ID（如果不提供，自动生成 task_{name}）
             **kwargs: 触发器参数
             
         Examples:
@@ -269,7 +270,19 @@ class TaskScheduler:
             
             # 每天 9:25 执行
             scheduler.register_task('daily_report', report_func, 'cron', hour=9, minute=25)
+            
+            # 指定自定义 job_id
+            scheduler.register_task('scan', func, 'cron', job_id='custom_id', hour=9)
         """
+        # 提取 add_job 的参数（不属于 trigger 的参数）
+        add_job_kwargs = {}
+        if 'replace_existing' in kwargs:
+            add_job_kwargs['replace_existing'] = kwargs.pop('replace_existing')
+        if 'max_instances' in kwargs:
+            add_job_kwargs['max_instances'] = kwargs.pop('max_instances')
+        if 'misfire_grace_time' in kwargs:
+            add_job_kwargs['misfire_grace_time'] = kwargs.pop('misfire_grace_time')
+        
         if trigger == 'interval':
             trigger_obj = IntervalTrigger(**kwargs)
         elif trigger == 'cron':
@@ -279,29 +292,31 @@ class TaskScheduler:
         else:
             raise ValueError(f"不支持的触发器类型：{trigger}")
         
-        job_id = f"task_{name}"
+        # 使用提供的 job_id 或自动生成
+        final_job_id = job_id if job_id else f"task_{name}"
         
         if trigger_obj:
             self.scheduler.add_job(
                 func=func,
                 trigger=trigger_obj,
-                id=job_id,
+                id=final_job_id,
                 name=name,
                 replace_existing=True,
                 max_instances=1,  # 防止并发
                 misfire_grace_time=60,  # 错过执行时间的容忍度
+                **add_job_kwargs  # 额外的参数
             )
         else:
             self.scheduler.add_job(
                 func=func,
                 trigger='date',
-                id=job_id,
+                id=final_job_id,
                 name=name,
                 run_date=kwargs.get('run_date'),
             )
         
-        self.tasks[name] = job_id
-        logger.info(f"注册任务：{name} (trigger={trigger}, params={kwargs})")
+        self.tasks[name] = final_job_id
+        logger.info(f"注册任务：{name} (id={final_job_id}, trigger={trigger}, params={kwargs})")
     
     def start(self):
         """启动调度器"""
