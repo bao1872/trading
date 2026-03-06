@@ -136,6 +136,9 @@ def tv_color_bar(zv: float) -> str:
 def build_plot(df: pd.DataFrame, cfg: VolZCfg, title: str, out_html: str, out_png: str = "") -> None:
     df = df.sort_index().copy()
     vol = df["volume"].astype(float)
+    
+    # 将日期索引转换为字符串格式，避免显示非交易时间段
+    x_labels = df.index.strftime("%Y-%m-%d")
 
     z_raw, mu, sd = volume_zscore(vol, cfg.win)
 
@@ -158,7 +161,7 @@ def build_plot(df: pd.DataFrame, cfg: VolZCfg, title: str, out_html: str, out_pn
     # --- 1) K线 ---
     fig.add_trace(
         go.Candlestick(
-            x=df.index,
+            x=x_labels,
             open=df["open"], high=df["high"], low=df["low"], close=df["close"],
             increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
             increasing_fillcolor="#26a69a", decreasing_fillcolor="#ef5350",
@@ -174,7 +177,7 @@ def build_plot(df: pd.DataFrame, cfg: VolZCfg, title: str, out_html: str, out_pn
         "rgba(239,83,80,0.6)",
     )
     fig.add_trace(
-        go.Bar(x=df.index, y=vol, marker_color=vol_colors, showlegend=False,
+        go.Bar(x=x_labels, y=vol, marker_color=vol_colors, showlegend=False,
                hovertemplate="Date=%{x}<br>Vol=%{y:.0f}<extra></extra>"),
         row=2, col=1
     )
@@ -183,7 +186,7 @@ def build_plot(df: pd.DataFrame, cfg: VolZCfg, title: str, out_html: str, out_pn
     z_colors = [tv_color_bar(v) for v in z_raw.values]
     fig.add_trace(
         go.Bar(
-            x=df.index,
+            x=x_labels,
             y=z_plot,
             marker_color=z_colors,
             showlegend=False,
@@ -203,7 +206,7 @@ def build_plot(df: pd.DataFrame, cfg: VolZCfg, title: str, out_html: str, out_pn
 
         fig.add_trace(
             go.Scatter(
-                x=df.index[whale],
+                x=x_labels[whale],
                 y=np.full(int(whale.sum()), y_mark),
                 mode="text",
                 text=["🐋"] * int(whale.sum()),
@@ -256,6 +259,7 @@ def build_plot(df: pd.DataFrame, cfg: VolZCfg, title: str, out_html: str, out_pn
         height=980,
         margin=dict(l=40, r=40, t=60, b=40),
         bargap=0.0,
+        xaxis3=dict(type="category"),  # 强制 x 轴为字符串类型
     )
     fig.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)", rangeslider_visible=False)
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)", row=1, col=1)
