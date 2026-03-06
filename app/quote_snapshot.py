@@ -2342,8 +2342,8 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                 # 检查背离年龄是否超过限制（测试时跳过此检查）
                 if os.getenv('TEST_MODE', 'false').lower() != 'true':
                     # 过滤掉年龄过大的背离
-                    # 5m 及以上周期：只推送 age=1 的信号
-                    # 1m 周期：age <= 6 不发通知
+                    # 5m 及以上周期：只推送 age=1 的信号（已确认的背离）
+                    # 1m 周期：推送 age<=6 的信号
                     valid_divs = []
                     for div in result['divergences']:
                         period = div.get('period', '')
@@ -2352,13 +2352,15 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                         # 判断是否超过年龄限制
                         if period == '1m':
                             max_age = 6
+                            if age <= max_age:
+                                valid_divs.append(div)
                         else:  # 5m, 15m, 60m
-                            max_age = 1  # 只推送 age=1 的信号
+                            # 只推送 age=1 的信号（排除 age=0 未确认的信号）
+                            if age == 1:
+                                valid_divs.append(div)
                         
-                        if age <= max_age:
-                            valid_divs.append(div)
-                        else:
-                            logger.debug(f"跳过超龄信号：{symbol} {period} 周期，age={age}（最大允许 {max_age}）")
+                        if period != '1m' and age != 1:
+                            logger.debug(f"跳过信号：{symbol} {period} 周期，age={age}（只推送 age=1）")
                     
                     # 如果没有有效的背离，跳过该股票
                     if not valid_divs:
