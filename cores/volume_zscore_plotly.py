@@ -137,8 +137,8 @@ def build_plot(df: pd.DataFrame, cfg: VolZCfg, title: str, out_html: str, out_pn
     df = df.sort_index().copy()
     vol = df["volume"].astype(float)
     
-    # 将日期索引转换为字符串格式，避免显示非交易时间段
-    x_labels = df.index.strftime("%Y-%m-%d")
+    # 将日期索引转换为字符串列表，避免显示非交易时间段
+    x_labels = df.index.strftime("%Y-%m-%d").tolist()
 
     z_raw, mu, sd = volume_zscore(vol, cfg.win)
 
@@ -165,7 +165,8 @@ def build_plot(df: pd.DataFrame, cfg: VolZCfg, title: str, out_html: str, out_pn
             open=df["open"], high=df["high"], low=df["low"], close=df["close"],
             increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
             increasing_fillcolor="#26a69a", decreasing_fillcolor="#ef5350",
-            showlegend=False
+            showlegend=False,
+            xaxis="x1",
         ),
         row=1, col=1
     )
@@ -204,9 +205,10 @@ def build_plot(df: pd.DataFrame, cfg: VolZCfg, title: str, out_html: str, out_pn
             y_max = float(np.nanmax(z_plot.values)) if np.any(np.isfinite(z_plot.values)) else 0.0
             y_mark = y_max
 
+        whale_labels = [x_labels[i] for i in range(len(whale)) if whale.iloc[i]]
         fig.add_trace(
             go.Scatter(
-                x=x_labels[whale],
+                x=whale_labels,
                 y=np.full(int(whale.sum()), y_mark),
                 mode="text",
                 text=["🐋"] * int(whale.sum()),
@@ -259,9 +261,16 @@ def build_plot(df: pd.DataFrame, cfg: VolZCfg, title: str, out_html: str, out_pn
         height=980,
         margin=dict(l=40, r=40, t=60, b=40),
         bargap=0.0,
-        xaxis3=dict(type="category"),  # 强制 x 轴为字符串类型
     )
-    fig.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)", rangeslider_visible=False)
+    
+    # 强制所有 x 轴为字符串类型（category）
+    fig.update_xaxes(
+        showgrid=True, 
+        gridcolor="rgba(255,255,255,0.06)", 
+        rangeslider_visible=False,
+        type="category",  # 强制为字符串类型
+    )
+    
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)", row=1, col=1)
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)", row=2, col=1, rangemode="tozero")
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)", row=3, col=1)
