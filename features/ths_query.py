@@ -231,7 +231,6 @@ def get_popularity_rank_by_date(target_date: str):
         query_text = f'{target_date} 科创板或创业板或主板非 st 人气排名'
         logger.info(f"问财问句：{query_text}")
         res = wc.get(query=query_text, loop=True, sleep=2, cookie=None)
-        
         if res is None or res.empty:
             logger.warning(f"未能从问财获取到 {target_date} 的数据")
             return None
@@ -354,19 +353,18 @@ def get_trading_dates(start_date: str, end_date: str) -> list:
         import qstock as qs
         logger.info(f"正在通过 qstock 获取交易日历：{start_date} 至 {end_date}")
         
+        latest = qs.latest_trade_date()
+        logger.info(f"最新交易日: {latest}")
+        
         all_dates = pd.date_range(start=start_date, end=end_date)
         trading_dates = []
         
         for date in all_dates:
             date_str = date.strftime('%Y-%m-%d')
-            try:
-                latest = qs.latest_trade_date()
-                if latest == date_str:
-                    trading_dates.append(date_str)
-            except Exception:
-                if date.weekday() < 5:
-                    trading_dates.append(date_str)
+            if date_str <= latest and date.weekday() < 5:
+                trading_dates.append(date_str)
         
+        trading_dates.sort()
         logger.info(f"获取到 {len(trading_dates)} 个交易日")
         return trading_dates
         
@@ -374,6 +372,7 @@ def get_trading_dates(start_date: str, end_date: str) -> list:
         logger.warning(f"获取交易日历失败：{e}，将使用周末判断法")
         all_dates = pd.date_range(start=start_date, end=end_date)
         trading_dates = [d.strftime('%Y-%m-%d') for d in all_dates if d.weekday() < 5]
+        trading_dates.sort()
         return trading_dates
 
 
