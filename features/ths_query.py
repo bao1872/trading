@@ -18,7 +18,7 @@ Usage:
     python features/ths_query.py --date 2024-03-01
     python features/ths_query.py --date 2024-12-31
     
-    # 扫描 1 年内的人气排名（从今天往前推 365 天，带进度条）
+    # 扫描 1 年内的人气排名（从今天往前推 365 天，带进度条，默认保存到数据库）
     python features/ths_query.py --scan-popularity
     
     # 扫描到指定日期为止的 1 年（带进度条）
@@ -27,11 +27,8 @@ Usage:
     # 创建数据库表
     python features/ths_query.py --create-table
     
-    # 扫描并保存到数据库（增量更新，带进度条）
-    python features/ths_query.py --scan-popularity --save-to-db
-    
     # 扫描并保存到数据库（全量覆盖，带进度条）
-    python features/ths_query.py --scan-popularity --save-to-db --no-incremental
+    python features/ths_query.py --scan-popularity --no-incremental
     
     # 获取指定日期数据并保存到数据库
     python features/ths_query.py --date 2024-03-01 --save-to-db
@@ -57,9 +54,8 @@ Side Effects:
     - --update-cache --no-db: 只生成/更新 stock_concepts_cache.xlsx 文件，不写入数据库
     - --date: 仅打印输出，不修改任何文件
     - --date --save-to-db: 将指定日期数据写入数据库 stock_popularity_rank 表
-    - --scan-popularity: 带进度条打印输出，不修改任何文件
-    - --scan-popularity --save-to-db: 将所有日期数据写入数据库（默认增量更新）
-    - --scan-popularity --save-to-db --no-incremental: 全量覆盖写入数据库
+    - --scan-popularity: 带进度条扫描并保存到数据库（默认增量更新）
+    - --scan-popularity --no-incremental: 全量覆盖写入数据库
     - --create-table: 创建数据库表 stock_popularity_rank 或 stock_concepts_cache
 
 Dependencies:
@@ -72,6 +68,8 @@ import re
 import sys
 import os
 import logging
+import time
+import random
 from datetime import datetime, timedelta
 
 # 配置日志
@@ -438,6 +436,10 @@ def scan_popularity_rank_for_year(end_date: str = None, save_to_db: bool = False
                 logger.warning(f"{trade_date} 数据转换失败")
         else:
             logger.warning(f"{trade_date} 无数据")
+        
+        sleep_time = random.randint(10, 20)
+        logger.info(f"休息 {sleep_time} 秒，防止请求过于频繁...")
+        time.sleep(sleep_time)
     
     logger.info(f"\n{'='*60}")
     logger.info(f"扫描完成！共处理 {len(trading_dates)} 个交易日")
@@ -486,7 +488,7 @@ if __name__ == '__main__':
     elif args.scan_popularity:
         scan_popularity_rank_for_year(
             end_date=args.end_date,
-            save_to_db=args.save_to_db,
+            save_to_db=True,
             incremental=not args.no_incremental
         )
     elif args.date:
