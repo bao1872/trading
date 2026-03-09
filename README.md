@@ -35,7 +35,7 @@ PYTHONPATH=/path/to/交易:$PYTHONPATH python app/amp_scanner.py --help
 PYTHONPATH=/path/to/交易:$PYTHONPATH python app/amp_scanner.py --symbol 600547 --years 3
 
 # 运行背离检测可视化
-PYTHONPATH=/path/to/交易:$PYTHONPATH python cores/divergence_many_plotly.py --symbol 600489 --freq 60m --prd 5 --searchdiv Regular --out output/div.html
+PYTHONPATH=/path/to/交易:$PYTHONPATH python features/divergence_many_plotly.py --symbol 600489 --freq 60m --prd 5 --searchdiv Regular --out output/div.html
 ```
 
 ## 📁 项目结构
@@ -43,7 +43,7 @@ PYTHONPATH=/path/to/交易:$PYTHONPATH python cores/divergence_many_plotly.py --
 ```
 交易/
 ├── app/           # 应用脚本 (新建脚本放在这里)
-├── cores/         # 核心算法/可视化
+├── features/      # 核心算法/可视化
 ├── datasource/    # 数据源模块
 ├── doc/           # 所有文档 (查看这里了解详细说明)
 ├── output/        # 临时输出文件

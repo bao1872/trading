@@ -17,8 +17,8 @@ Outputs:
     - 左上角特征表格
 
 How to Run:
-    python cores/bollinger_features_plotly.py --symbol 600547 --years 3 --bb_win 20 --bb_k 2 --z_win 255 --out bb_feat.html
-    python cores/bollinger_features_plotly.py --symbol 002099 --years 5 --out bb_feat.html
+    python features/bollinger_features_plotly.py --symbol 600547 --years 3 --bb_win 20 --bb_k 2 --z_win 255 --out bb_feat.html
+    python features/bollinger_features_plotly.py --symbol 002099 --years 5 --out bb_feat.html
 
 Side Effects:
     - 写文件：输出 HTML 文件到指定路径

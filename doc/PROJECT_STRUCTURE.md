@@ -22,7 +22,7 @@
 │   └── migrations/          # 数据库迁移脚本
 │       └── add_name_to_amp_features.py
 │
-├── cores/                    # 核心算法/可视化模块
+├── features/                 # 核心算法/可视化模块
 │   ├── __init__.py
 │   ├── amp_plotly.py        # AMP 可视化
 │   ├── divergence_many_plotly.py  # 背离检测可视化
@@ -79,7 +79,7 @@
 - **包含**: 数据库操作、数据加载、扫描器、通知等模块
 - **规范**: 新建脚本必须遵循 `scripts-database.md` 规则
 
-### `cores/` - 核心算法模块
+### `features/` - 核心算法模块
 - **用途**: 核心算法实现和可视化
 - **包含**: AMP、背离检测、布林带、VWAP 等算法
 - **规范**: 遵循 `consistency.md` 和 `caculation.md` 规则

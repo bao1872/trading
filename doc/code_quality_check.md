@@ -57,9 +57,9 @@
 **要求**: 核心计算逻辑只写一份，禁止复制改写
 
 **检查结果**: ✅ 符合
-- AMP 算法：只在 `cores/amp_plotly.py` 中实现
-- 背离算法：只在 `cores/divergence_many_plotly.py` 中实现
-- 流动性区域：只在 `cores/liquidity_zones_plotly.py` 中实现
+- AMP 算法：只在 `features/amp_plotly.py` 中实现
+- 背离算法：只在 `features/divergence_many_plotly.py` 中实现
+- 流动性区域：只在 `features/liquidity_zones_plotly.py` 中实现
 - 所有 app 脚本都通过引用调用核心逻辑
 
 ### 规则 2: 数据源统一 (datasource.md)

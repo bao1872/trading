@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-AMP特征扫描脚本 - 扫描股票池中所有股票的多周期特征并写入数据库
-引用 cores/amp_plotly.py 的核心 AMP 算法
-数据源: k_data_loader.py
+AMP 特征扫描脚本 - 扫描股票池中所有股票的多周期特征并写入数据库
+引用 features/amp_plotly.py 的核心 AMP 算法
+数据源：k_data_loader.py
 
 典型用法:
   # 扫描整个股票池的日线周期
@@ -30,7 +30,7 @@ from tqdm import tqdm
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from cores.amp_plotly import (
+from features.amp_plotly import (
     calcDevATF, cS, cD, apply_deviation, clamp01, safe_ratio, 
     f_adjust, f_unadjust, calc_line_value, AMPConfig as AMPConfigBase
 )

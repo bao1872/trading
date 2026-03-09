@@ -32,7 +32,7 @@ import pandas as pd
 
 sys.path.insert(0, "/Users/zhenbao/Nextcloud/coding/交易")
 
-from cores.divergence_many_plotly import (
+from features.divergence_many_plotly import (
     DivConfig,
     run_divergence_engine,
     fetch_bars_pytdx,

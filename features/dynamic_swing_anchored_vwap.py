@@ -30,6 +30,8 @@ Notes
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -37,6 +39,11 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+# 添加项目根目录到路径（支持直接运行脚本）
+base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if base_dir not in sys.path:
+    sys.path.insert(0, base_dir)
 
 from datasource.pytdx_client import connect_pytdx, PERIOD_MAP
 
@@ -89,8 +96,24 @@ def _connect_pytdx() -> TdxHq_API:
     raise RuntimeError(f"pytdx连接失败; {err}")
 
 
-def fetch_kline_pytdx(symbol: str, start: str, end: str, freq) -> pd.DataFrame:
-    api = connect_pytdx()
+def fetch_kline_pytdx(symbol: str, start: str, end: str, freq, api=None) -> pd.DataFrame:
+    """
+    从 pytdx 获取 K 线数据
+    
+    Args:
+        symbol: 股票代码
+        start: 开始日期
+        end: 结束日期
+        freq: 频率
+        api: pytdx API 连接（可选，用于复用连接）
+    """
+    # 使用传入的 api 或创建新连接
+    if api is None:
+        api = connect_pytdx()
+        should_close = True
+    else:
+        should_close = False
+    
     try:
         cat = _category_from_freq(freq)
         mkt = 1 if symbol.startswith("6") else 0
@@ -107,7 +130,7 @@ def fetch_kline_pytdx(symbol: str, start: str, end: str, freq) -> pd.DataFrame:
             elif {"year", "month", "day", "hour", "minute"}.issubset(d.columns):
                 d["date"] = pd.to_datetime(d[["year", "month", "day", "hour", "minute"]].astype(int))
             else:
-                raise RuntimeError("pytdx返回数据缺少时间列")
+                raise RuntimeError("pytdx 返回数据缺少时间列")
             if "vol" in d.columns:
                 d = d.rename(columns={"vol": "volume"})
             d = d[["date", "open", "high", "low", "close"] + (["volume"] if "volume" in d.columns else [])]
@@ -116,7 +139,7 @@ def fetch_kline_pytdx(symbol: str, start: str, end: str, freq) -> pd.DataFrame:
                 break
             page += 1
         if not frames:
-            raise RuntimeError("pytdx无数据")
+            raise RuntimeError("pytdx 无数据")
         all_df = pd.concat(frames).sort_values("date")
         start_dt = pd.to_datetime(start)
         end_dt = pd.to_datetime(end)
@@ -124,7 +147,9 @@ def fetch_kline_pytdx(symbol: str, start: str, end: str, freq) -> pd.DataFrame:
         all_df = all_df.drop_duplicates(subset=["date"], keep="last").set_index("date")
         return all_df
     finally:
-        api.disconnect()
+        # 只在函数内部创建的连接才需要关闭
+        if should_close:
+            api.disconnect()
 
 
 

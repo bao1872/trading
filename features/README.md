@@ -1,8 +1,8 @@
-# cores - 核心算法目录
+# features - 核心算法目录
 
 ## 目录定位
 
-`cores/` 是核心算法库，包含所有可复用的计算逻辑（算法/公式/指标/转换/统计）。
+`features/` 是核心算法库，包含所有可复用的计算逻辑（算法/公式/指标/转换/统计）。
 
 ## 核心原则
 
@@ -14,7 +14,7 @@
 ## 目录结构
 
 ```
-cores/
+features/
 ├── amp_plotly.py             # AMP自适应移动通道算法及可视化
 ├── divergence_many_plotly.py # 多指标背离检测算法及可视化
 ├── liquidity_zones_plotly.py # 流动性区域算法及可视化
@@ -59,17 +59,17 @@ cores/
 
 ```bash
 # 直接运行可视化脚本
-python cores/amp_plotly.py --symbol 600547 --freq d --bars 300
+python features/amp_plotly.py --symbol 600547 --freq d --bars 300
 
-# 查看HTML输出
+# 查看 HTML 输出
 open amp.html
 ```
 
 ### 工程化引用
 
 ```python
-# src/scanner 引用核心算法
-from cores.divergence_many_plotly import (
+# app/ 应用脚本引用核心算法
+from features.divergence_many_plotly import (
     DivConfig, compute_indicators, calculate_divs
 )
 

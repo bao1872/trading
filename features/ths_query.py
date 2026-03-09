@@ -9,48 +9,48 @@
 
 Usage:
     # 更新股票概念缓存（同时保存到 Excel 和数据库）
-    python cores/ths_query.py --update-cache
+    python features/ths_query.py --update-cache
     
     # 更新股票概念缓存（只保存 Excel，不保存到数据库）
-    python cores/ths_query.py --update-cache --no-db
+    python features/ths_query.py --update-cache --no-db
     
     # 获取指定日期的人气排名
-    python cores/ths_query.py --date 2024-03-01
-    python cores/ths_query.py --date 2024-12-31
+    python features/ths_query.py --date 2024-03-01
+    python features/ths_query.py --date 2024-12-31
     
     # 扫描 1 年内的人气排名（从今天往前推 365 天，带进度条）
-    python cores/ths_query.py --scan-popularity
+    python features/ths_query.py --scan-popularity
     
     # 扫描到指定日期为止的 1 年（带进度条）
-    python cores/ths_query.py --scan-popularity --end-date 2024-03-01
+    python features/ths_query.py --scan-popularity --end-date 2024-03-01
     
     # 创建数据库表
-    python cores/ths_query.py --create-table
+    python features/ths_query.py --create-table
     
     # 扫描并保存到数据库（增量更新，带进度条）
-    python cores/ths_query.py --scan-popularity --save-to-db
+    python features/ths_query.py --scan-popularity --save-to-db
     
     # 扫描并保存到数据库（全量覆盖，带进度条）
-    python cores/ths_query.py --scan-popularity --save-to-db --no-incremental
+    python features/ths_query.py --scan-popularity --save-to-db --no-incremental
     
     # 获取指定日期数据并保存到数据库
-    python cores/ths_query.py --date 2024-03-01 --save-to-db
+    python features/ths_query.py --date 2024-03-01 --save-to-db
     
     # 查看帮助
-    python cores/ths_query.py --help
+    python features/ths_query.py --help
 
 Examples:
     # 示例 1: 获取 2024 年 3 月 1 日的人气排名前 20
-    python cores/ths_query.py --date 2024-03-01
+    python features/ths_query.py --date 2024-03-01
     
     # 示例 2: 扫描 2024 年全年的交易日人气排名（带进度条）
-    python cores/ths_query.py --scan-popularity --end-date 2024-12-31
+    python features/ths_query.py --scan-popularity --end-date 2024-12-31
     
     # 示例 3: 更新最新的股票概念缓存（同时保存到 Excel 和数据库）
-    python cores/ths_query.py --update-cache
+    python features/ths_query.py --update-cache
     
     # 示例 4: 只更新 Excel 文件，不保存到数据库
-    python cores/ths_query.py --update-cache --no-db
+    python features/ths_query.py --update-cache --no-db
 
 Side Effects:
     - --update-cache: 会生成/更新 stock_concepts_cache.xlsx 文件，并写入数据库 stock_concepts_cache 表（默认）

@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS stock_concepts_cache (
 ### 1. 创建数据库表（首次使用）
 
 ```bash
-python cores/cache_generator.py --create-table
+python features/cache_generator.py --create-table
 ```
 
 这会创建两个表：
@@ -65,13 +65,13 @@ python cores/cache_generator.py --create-table
 同时保存到 Excel 和数据库：
 
 ```bash
-python cores/cache_generator.py --update-cache
+python features/cache_generator.py --update-cache
 ```
 
 ### 3. 只更新 Excel，不保存到数据库
 
 ```bash
-python cores/cache_generator.py --update-cache --no-db
+python features/cache_generator.py --update-cache --no-db
 ```
 
 ### 4. 在代码中读取数据库

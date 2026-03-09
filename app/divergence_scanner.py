@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 背离特征扫描脚本 - 扫描股票池中所有股票的多周期背离特征并写入数据库
-引用 cores/divergence_many_plotly.py 的核心背离算法
+引用 features/divergence_many_plotly.py 的核心背离算法
 数据源: k_data_loader.py
 
 python -m src.divergence_scanner --filter "中金黄金" --freqs "5m,15m,60m,d"
@@ -18,7 +18,7 @@ from tqdm import tqdm
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from cores.divergence_many_plotly import (
+from features.divergence_many_plotly import (
     DivConfig, compute_indicators, pivots_confirmed as pivots_confirmed_original,
     pos_reg_or_neg_hid, neg_reg_or_pos_hid, calculate_divs,
     _line_dash

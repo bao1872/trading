@@ -109,7 +109,7 @@ venv/                              # 虚拟环境
 ```
 scheduler.py                        # 调度器主程序
 app/                                # 应用代码
-cores/                              # 核心模块
+features/                              # 核心模块
 datasource/                         # 数据源模块
 .env.example                        # 配置模板
 requirements.txt                    # Python 依赖

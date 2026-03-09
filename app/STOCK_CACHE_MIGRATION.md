@@ -221,7 +221,7 @@ python app/quote_snapshot.py --schedule
 ### Q2: 缓存需要多久更新一次？
 建议每天更新一次，运行：
 ```bash
-python cores/cache_generator.py --update-cache
+python features/cache_generator.py --update-cache
 python app/import_stock_cache_to_db.py
 ```
 
