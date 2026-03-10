@@ -100,6 +100,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datasource.pytdx_client import PERIOD_MAP, connect_pytdx, get_kline_data
 
 
+def fetch_daily_pytdx(symbol: str, start: str, end: str, *, max_bars: int = 800) -> pd.DataFrame:
+    """Fetch daily bars via pytdx (薄封装)."""
+    from features.bollinger_features_plotly import fetch_daily_pytdx as _fetch
+    return _fetch(symbol, start, end, max_bars=max_bars)
+
+
 @dataclass
 class AMPConfig:
     useAdaptive: bool = True

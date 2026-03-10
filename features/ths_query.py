@@ -216,31 +216,73 @@ def update_cache_from_pywencai(save_to_db: bool = True):
         logger.error(f"生成概念缓存时发生错误：{e}")
         raise
 
-def get_popularity_rank_by_date(target_date: str):
+def get_popularity_rank_by_date(target_date: str, max_retries: int = 3):
     """
     获取指定日期的股票人气排名数据
     
     Args:
         target_date: 目标日期，格式 'YYYY-MM-DD'
+        max_retries: 最大重试次数，默认 3 次
     
     Returns:
         DataFrame: 包含人气排名数据的 DataFrame
     """
-    logger.info(f"正在获取 {target_date} 的人气排名数据...")
-    try:
-        query_text = f'{target_date} 科创板或创业板或主板非 st 人气排名'
-        logger.info(f"问财问句：{query_text}")
-        res = wc.get(query=query_text, loop=True, sleep=2, cookie=None)
-        if res is None or res.empty:
-            logger.warning(f"未能从问财获取到 {target_date} 的数据")
-            return None
+    query_text = f'{target_date} 科创板或创业板或主板非 st 人气排名'
+    
+    for attempt in range(1, max_retries + 1):
+        import signal
         
-        logger.info(f"成功获取到 {len(res)} 条数据")
-        return res
+        class TimeoutException(Exception):
+            pass
         
-    except Exception as e:
-        logger.error(f"获取 {target_date} 人气排名时发生错误：{e}")
-        return None
+        def timeout_handler(signum, frame):
+            raise TimeoutException("wc.get() 调用超时（>10 分钟）")
+        
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(600)
+        
+        try:
+            res = wc.get(query=query_text, loop=True, sleep=2, cookie=None)
+            signal.alarm(0)
+            
+            if res is None:
+                logger.warning(f"未能从问财获取到 {target_date} 的数据 (返回 None)")
+                if attempt < max_retries:
+                    time.sleep(30)
+                    continue
+                return None
+            
+            if res.empty:
+                logger.warning(f"未能从问财获取到 {target_date} 的数据 (DataFrame 为空)")
+                if attempt < max_retries:
+                    time.sleep(30)
+                    continue
+                return None
+            
+            logger.info(f"成功获取到 {len(res)} 条数据")
+            return res
+            
+        except TimeoutException as e:
+            signal.alarm(0)
+            logger.error(f"获取 {target_date} 人气排名时超时（第{attempt}次尝试）")
+            if attempt < max_retries:
+                time.sleep(60)
+            else:
+                logger.error(f"获取 {target_date} 人气排名失败：已重试 {max_retries} 次")
+            continue
+            
+        except Exception as e:
+            signal.alarm(0)
+            logger.error(f"获取 {target_date} 人气排名时发生错误：{e}")
+            if attempt < max_retries:
+                time.sleep(60)
+            else:
+                logger.error(f"获取 {target_date} 人气排名失败：已重试 {max_retries} 次")
+            continue
+        finally:
+            signal.signal(signal.SIGALRM, old_handler)
+    
+    return None
 
 
 def _transform_rank_data(raw_df: pd.DataFrame, trade_date: str) -> pd.DataFrame | None:
@@ -354,7 +396,7 @@ def get_trading_dates(start_date: str, end_date: str) -> list:
         logger.info(f"正在通过 qstock 获取交易日历：{start_date} 至 {end_date}")
         
         latest = qs.latest_trade_date()
-        logger.info(f"最新交易日: {latest}")
+        logger.info(f"最新交易日：{latest}")
         
         all_dates = pd.date_range(start=start_date, end=end_date)
         trading_dates = []
@@ -410,11 +452,9 @@ def scan_popularity_rank_for_year(end_date: str = None, save_to_db: bool = False
                 logger.info("所有日期的数据都已存在，无需更新")
                 return
     
-    # 使用 tqdm 显示进度条
-    for trade_date in tqdm(trading_dates, desc="获取人气数据", ncols=100):
-        logger.info(f"\n{'='*60}")
-        logger.info(f"处理日期：{trade_date}")
-        logger.info(f"{'='*60}")
+    pbar = tqdm(trading_dates, desc="获取人气数据", ncols=100)
+    for trade_date in pbar:
+        pbar.set_postfix_str(trade_date)
         
         df = get_popularity_rank_by_date(trade_date)
         
@@ -422,27 +462,16 @@ def scan_popularity_rank_for_year(end_date: str = None, save_to_db: bool = False
             transformed_df = _transform_rank_data(df, trade_date)
             
             if transformed_df is not None and not transformed_df.empty:
-                top_10 = transformed_df[['name', 'rank']].head(10)
-                logger.info(f"\n{trade_date} 人气排名前 10:")
-                print(top_10.to_string(index=False))
-                
                 if save_to_db:
                     from app.db import get_session
                     with get_session() as session:
                         count = save_popularity_to_db(transformed_df, session)
-                        logger.info(f"已保存 {count} 条数据到数据库")
-            else:
-                logger.warning(f"{trade_date} 数据转换失败")
-        else:
-            logger.warning(f"{trade_date} 无数据")
+                        logger.info(f"{trade_date}: 已保存 {count} 条数据")
         
         sleep_time = random.randint(10, 20)
-        logger.info(f"休息 {sleep_time} 秒，防止请求过于频繁...")
         time.sleep(sleep_time)
     
-    logger.info(f"\n{'='*60}")
     logger.info(f"扫描完成！共处理 {len(trading_dates)} 个交易日")
-    logger.info(f"{'='*60}")
 
 
 if __name__ == '__main__':

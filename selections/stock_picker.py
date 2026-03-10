@@ -84,8 +84,9 @@ How to Run:
   - 股票名称、股票代码
   - 是否通过（bool）
   - 当前 bar 的 AMP 指标（amp_strength, mid_slope, close_pos, channel_width, period）
-  - 历史冲顶信息（latest_trigger_bar, peak_amp_strength, peak_close_pos, peak_mid_slope）
+  - 历史冲顶信息（latest_trigger_bar, peak_amp_strength, peak_mid_slope, peak_close_pos）
   - 背离信号（div_detected, div_type, div_bar_idx, div_indicator, div_distance）
+  - 涨停板统计（limit_up_count_in_period：当前 AMP period 范围内的涨停板次数）
 
 输出示例：
   总股票数：500
@@ -356,6 +357,86 @@ def find_latest_peak_and_check_pullback_state(
 # Divergence helpers
 # =========================
 
+def is_limit_up(df: pd.DataFrame, idx: int, ts_code: str) -> bool:
+    """
+    判断指定 bar 是否为涨停板
+    
+    A 股涨停板价格计算规则：
+    - 涨停价 = 前一日收盘价 × (1 + 涨停比例)，四舍五入到分
+    - 主板（600/000/001 开头）：涨停比例 10%
+    - 创业板（300 开头）：涨停比例 20%
+    - 科创板（688 开头）：涨停比例 20%
+    
+    判断逻辑：
+    - 计算理论涨停价（使用传统四舍五入，非银行家舍入）
+    - 如果收盘价非常接近涨停价（±0.01 元），则为涨停
+    
+    Args:
+        df: K 线数据 DataFrame
+        idx: bar 索引
+        ts_code: 股票代码（如 000001.SZ）
+    
+    Returns:
+        bool: 是否为涨停板
+    """
+    from decimal import Decimal, ROUND_HALF_UP
+    
+    if idx < 1:
+        return False
+    
+    code = ts_code.split(".")[0]
+    prev_close = df["close"].iloc[idx - 1]
+    curr_close = df["close"].iloc[idx]
+    
+    if prev_close <= 0:
+        return False
+    
+    # 确定涨停比例
+    if code.startswith("300") or code.startswith("688"):
+        limit_ratio = Decimal("0.20")  # 创业板/科创板 20%
+    else:
+        limit_ratio = Decimal("0.10")  # 主板 10%
+    
+    # 使用 Decimal 进行精确计算，避免浮点数误差
+    prev = Decimal(str(prev_close))
+    # 计算涨停价，使用传统四舍五入（ROUND_HALF_UP）
+    theoretical_limit_price = float((prev * (1 + limit_ratio)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    
+    # 判断是否涨停：收盘价非常接近涨停价（±0.01 元）
+    return abs(curr_close - theoretical_limit_price) <= 0.01
+
+
+def count_limit_ups_in_period(
+    df: pd.DataFrame,
+    target_idx: int,
+    period: int,
+    ts_code: str,
+) -> int:
+    """
+    统计指定 period 范围内的涨停板次数
+    
+    Args:
+        df: K 线数据 DataFrame
+        target_idx: 目标 bar 索引
+        period: AMP 周期（回看 bar 数）
+        ts_code: 股票代码
+    
+    Returns:
+        int: 涨停板次数
+    """
+    if period <= 0 or target_idx < 0:
+        return 0
+    
+    start_idx = max(0, target_idx - period + 1)
+    count = 0
+    
+    for i in range(start_idx, target_idx + 1):
+        if is_limit_up(df, i, ts_code):
+            count += 1
+    
+    return count
+
+
 def check_recent_bottom_divergence(
     df: pd.DataFrame,
     target_idx: int,
@@ -485,8 +566,8 @@ def run_stock_picker(target_date: str, max_stocks: Optional[int], args) -> pd.Da
                 {
                     "股票名称": stock_name,
                     "股票代码": ts_code,
-                    "AMP当前bar快速过滤通过": False,
-                    "最近3天底背离通过": False,
+                    "AMP 当前 bar 快速过滤通过": False,
+                    "最近 3 天底背离通过": False,
                     "历史趋势/第一次回踩通过": False,
                     "全部通过": False,
                     "amp_strength": current_metrics["amp_strength"] if current_metrics else None,
@@ -505,10 +586,15 @@ def run_stock_picker(target_date: str, max_stocks: Optional[int], args) -> pd.Da
                     "divergence_indicator": None,
                     "divergence_type": None,
                     "divergence_distance": None,
+                    "divergence_age": None,
                     "divergence_count": None,
+                    "limit_up_count_in_period": None,
                 }
             )
             continue
+        
+        period = current_metrics["period"]
+        limit_up_count = count_limit_ups_in_period(df, target_idx, period, ts_code)
 
         div_passed, div_info = check_recent_bottom_divergence(df, target_idx, div_cfg, lookback_days=args.div_lookback_days)
         if not div_passed:
@@ -516,8 +602,8 @@ def run_stock_picker(target_date: str, max_stocks: Optional[int], args) -> pd.Da
                 {
                     "股票名称": stock_name,
                     "股票代码": ts_code,
-                    "AMP当前bar快速过滤通过": True,
-                    "最近3天底背离通过": False,
+                    "AMP 当前 bar 快速过滤通过": True,
+                    "最近 3 天底背离通过": False,
                     "历史趋势/第一次回踩通过": False,
                     "全部通过": False,
                     "amp_strength": current_metrics["amp_strength"],
@@ -536,7 +622,9 @@ def run_stock_picker(target_date: str, max_stocks: Optional[int], args) -> pd.Da
                     "divergence_indicator": None,
                     "divergence_type": None,
                     "divergence_distance": None,
+                    "divergence_age": None,
                     "divergence_count": None,
+                    "limit_up_count_in_period": limit_up_count,
                 }
             )
             continue
@@ -546,8 +634,8 @@ def run_stock_picker(target_date: str, max_stocks: Optional[int], args) -> pd.Da
             {
                 "股票名称": stock_name,
                 "股票代码": ts_code,
-                "AMP当前bar快速过滤通过": True,
-                "最近3天底背离通过": True,
+                "AMP 当前 bar 快速过滤通过": True,
+                "最近 3 天底背离通过": True,
                 "历史趋势/第一次回踩通过": hist_passed,
                 "全部通过": bool(hist_passed),
                 "amp_strength": current_metrics["amp_strength"],
@@ -568,6 +656,7 @@ def run_stock_picker(target_date: str, max_stocks: Optional[int], args) -> pd.Da
                 "divergence_distance": div_info["distance"] if div_info else None,
                 "divergence_age": div_info["age"] if div_info else None,
                 "divergence_count": div_info["total_count"] if div_info else None,
+                "limit_up_count_in_period": limit_up_count,
             }
         )
 
@@ -577,8 +666,8 @@ def run_stock_picker(target_date: str, max_stocks: Optional[int], args) -> pd.Da
 
     logger.info("\n选股结果统计:")
     logger.info(f"  总股票数：{len(result_df)}")
-    logger.info(f"  AMP当前bar快速过滤通过：{int(result_df['AMP当前bar快速过滤通过'].sum())}")
-    logger.info(f"  最近3天底背离通过：{int(result_df['最近3天底背离通过'].sum())}")
+    logger.info(f"  AMP 当前 bar 快速过滤通过：{int(result_df['AMP 当前 bar 快速过滤通过'].sum())}")
+    logger.info(f"  最近 3 天底背离通过：{int(result_df['最近 3 天底背离通过'].sum())}")
     logger.info(f"  全部通过：{int(result_df['全部通过'].sum())}")
     return result_df
 
@@ -588,6 +677,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--date", type=str, required=True, help="目标日期 YYYY-MM-DD")
     p.add_argument("--max-stocks", type=int, default=None, help="最大处理股票数（测试用）")
     p.add_argument("--output", type=str, default=None, help="输出 Excel 路径")
+    p.add_argument("--no-xlsx", action="store_true", help="不保存 Excel 文件（仅保存到数据库）")
     p.add_argument("--bars", type=int, default=810, help="拉取日线 bars 数")
     p.add_argument("--min-bars-required", type=int, default=220, help="最少样本 bars")
 
@@ -604,6 +694,121 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def save_to_database(result_df: pd.DataFrame, trade_date: str) -> bool:
+    """
+    保存选股结果到数据库
+    
+    逻辑：
+    1. 尝试连接数据库
+    2. 如果连接成功，先删除当天的旧数据
+    3. 插入新数据
+    
+    Args:
+        result_df: 选股结果 DataFrame
+        trade_date: 交易日期 (YYYY-MM-DD)
+    
+    Returns:
+        bool: 是否成功保存到数据库
+    """
+    try:
+        from app.db import get_session
+        from app.models import get_create_sql
+        from sqlalchemy import text
+        import numpy as np
+        
+        # 重命名列以匹配数据库表结构
+        df_db = result_df.copy()
+        column_mapping = {
+            "股票名称": "stock_name",
+            "股票代码": "ts_code",
+            "AMP 当前 bar 快速过滤通过": "amp_passed",
+            "最近 3 天底背离通过": "div_passed",
+            "历史趋势/第一次回踩通过": "hist_passed",
+            "全部通过": "all_passed",
+            "amp_strength": "amp_strength",
+            "mid_slope": "mid_slope",
+            "upper_slope": "upper_slope",
+            "lower_slope": "lower_slope",
+            "close_pos": "close_pos",
+            "channel_width": "channel_width",
+            "period": "period",
+            "window_len": "window_len",
+            "history_peak_bar_idx": "history_peak_bar_idx",
+            "history_peak_amp_strength": "history_peak_amp_strength",
+            "history_peak_mid_slope": "history_peak_mid_slope",
+            "history_peak_close_pos": "history_peak_close_pos",
+            "divergence_bar_idx": "divergence_bar_idx",
+            "divergence_indicator": "divergence_indicator",
+            "divergence_type": "divergence_type",
+            "divergence_distance": "divergence_distance",
+            "divergence_age": "divergence_age",
+            "divergence_count": "divergence_count",
+            "limit_up_count_in_period": "limit_up_count_in_period",
+        }
+        df_db = df_db.rename(columns=column_mapping)
+        
+        # 添加 trade_date 列
+        df_db["trade_date"] = trade_date
+        
+        # 只保留需要的列
+        db_columns = [
+            "trade_date", "stock_name", "ts_code", "amp_passed", "div_passed", 
+            "hist_passed", "all_passed", "amp_strength", "mid_slope", "upper_slope",
+            "lower_slope", "close_pos", "channel_width", "period", "window_len",
+            "history_peak_bar_idx", "history_peak_amp_strength", "history_peak_mid_slope",
+            "history_peak_close_pos", "divergence_bar_idx", "divergence_indicator",
+            "divergence_type", "divergence_distance", "divergence_age", 
+            "divergence_count", "limit_up_count_in_period"
+        ]
+        df_db = df_db[[col for col in db_columns if col in df_db.columns]]
+        
+        # 处理 NaN 值：将 NaN 转换为 None（数据库的 NULL）
+        df_db = df_db.replace({np.nan: None})
+        df_db = df_db.where(pd.notnull(df_db), None)
+        
+        with get_session() as session:
+            # 确保表存在
+            create_sql = get_create_sql("stock_picker_results")
+            session.execute(text(create_sql))
+            
+            # 删除当天的旧数据
+            delete_sql = "DELETE FROM stock_picker_results WHERE trade_date = :trade_date"
+            result = session.execute(text(delete_sql), {"trade_date": trade_date})
+            deleted_count = result.rowcount
+            if deleted_count > 0:
+                logger.info(f"已删除数据库中 {trade_date} 的 {deleted_count} 条旧数据")
+            
+            # 插入新数据
+            records = df_db.to_dict(orient="records")
+            if records:
+                insert_sql = """
+                    INSERT INTO stock_picker_results 
+                    (trade_date, stock_name, ts_code, amp_passed, div_passed, hist_passed, all_passed,
+                     amp_strength, mid_slope, upper_slope, lower_slope, close_pos, channel_width,
+                     period, window_len, history_peak_bar_idx, history_peak_amp_strength, 
+                     history_peak_mid_slope, history_peak_close_pos, divergence_bar_idx,
+                     divergence_indicator, divergence_type, divergence_distance, divergence_age,
+                     divergence_count, limit_up_count_in_period)
+                    VALUES 
+                    (:trade_date, :stock_name, :ts_code, :amp_passed, :div_passed, :hist_passed, :all_passed,
+                     :amp_strength, :mid_slope, :upper_slope, :lower_slope, :close_pos, :channel_width,
+                     :period, :window_len, :history_peak_bar_idx, :history_peak_amp_strength,
+                     :history_peak_mid_slope, :history_peak_close_pos, :divergence_bar_idx,
+                     :divergence_indicator, :divergence_type, :divergence_distance, :divergence_age,
+                     :divergence_count, :limit_up_count_in_period)
+                """
+                session.execute(text(insert_sql), records)
+                logger.info(f"已保存 {len(records)} 条记录到数据库")
+            
+            session.commit()
+        
+        return True
+        
+    except Exception as e:
+        logger.warning(f"保存到数据库失败（可能不在局域网）：{e}")
+        return False
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -613,13 +818,17 @@ def main() -> None:
         logger.info("没有结果")
         return
 
-    if args.output:
-        out_path = args.output
-    else:
-        out_path = os.path.join(os.getcwd(), f"selected_stocks_{args.date}.xlsx")
-
-    result_df.to_excel(out_path, index=False)
-    logger.info(f"结果已保存：{out_path}")
+    # 保存到 Excel（除非指定 --no-xlsx）
+    if not args.no_xlsx:
+        if args.output:
+            out_path = args.output
+        else:
+            out_path = os.path.join(os.getcwd(), f"selected_stocks_{args.date}.xlsx")
+        result_df.to_excel(out_path, index=False)
+        logger.info(f"结果已保存：{out_path}")
+    
+    # 尝试保存到数据库
+    save_to_database(result_df, args.date)
 
 
 if __name__ == "__main__":

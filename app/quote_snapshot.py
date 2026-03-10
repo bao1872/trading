@@ -306,7 +306,7 @@ def compute_divergence_for_period(df: pd.DataFrame, period: str, cfg: DivConfig 
         cfg = DivConfig(
             prd=5,
             source="Close",
-            searchdiv="Regular",
+            searchdiv="Regular/Hidden",
             showlimit=1,
             maxpp=10,
             maxbars=100,
@@ -372,8 +372,9 @@ def compute_divergence_for_period(df: pd.DataFrame, period: str, cfg: DivConfig 
     div_events: List[Tuple[int, str]] = []
     last_feat: Dict = {}
     
-    # 记录每个时间点的背离指标
+    # 记录每个时间点的背离指标和类型（regular/hidden）
     div_indicators_at_time: Dict[int, str] = {}
+    div_types_at_time: Dict[int, str] = {}  # 0=reg底,1=reg顶,2=hid底,3=hid顶
     
     startpoint = 0 if cfg.dontconfirm else 1
     
@@ -513,9 +514,11 @@ def compute_divergence_for_period(df: pd.DataFrame, period: str, cfg: DivConfig 
                 else:
                     divergence_text_bottom += indicator_names[x] + "\n"
                 
-                # 记录该时间点的背离指标
+                # 记录该时间点的背离指标和类型
                 if t not in div_indicators_at_time:
                     div_indicators_at_time[t] = indicator_names[x]
+                    # 记录背离类型: 0=reg底,1=reg顶,2=hid底,3=hid顶
+                    div_types_at_time[t] = div_type
         
         if dnumdiv_top > 0:
             div_events.append((t, "top"))
@@ -568,6 +571,17 @@ def compute_divergence_for_period(df: pd.DataFrame, period: str, cfg: DivConfig 
         # 获取最后一个背离的指标类型（从记录的字典中获取）
         div_last_indicator = div_indicators_at_time.get(last_event_t, "")
         
+        # 获取最后一个背离的类型 (0=reg底,1=reg顶,2=hid底,3=hid顶)
+        div_last_type_raw = div_types_at_time.get(last_event_t, -1)
+        is_hidden = div_last_type_raw >= 2  # 2 或 3 表示隐藏背离
+        
+        # 获取最后事件的详细信息（区分常规和隐藏背离）
+        # 检查最后5个事件中是否有隐藏背离
+        has_hidden_in_last = any(
+            div_types_at_time.get(t, -1) >= 2 
+            for t, _ in div_events[-5:] if t in div_types_at_time
+        )
+        
         last_feat = {
             "div_bias": float(div_bias),
             "div_last_type": last_type,
@@ -575,7 +589,9 @@ def compute_divergence_for_period(df: pd.DataFrame, period: str, cfg: DivConfig 
             "div_last_age_norm": min(last_age, 100) / 100,
             "div_rate": float(div_rate),
             "div_last_time": div_last_time,
-            "div_last_indicator": div_last_indicator,  # 添加指标类型
+            "div_last_indicator": div_last_indicator,
+            "div_is_hidden": is_hidden,  # 当前背离是否为隐藏背离
+            "div_has_hidden": has_hidden_in_last,  # 最近是否有隐藏背离
         }
     
     return {
@@ -2216,6 +2232,11 @@ def scan_divergence_for_stock(api, symbol: str, stock_name: str, periods: List[s
                 div_bias = last_feat.get('div_bias', 0)
                 div_time = last_feat.get('div_last_time', '')
                 div_indicator = last_feat.get('div_last_indicator', '')  # 获取指标类型
+                div_is_hidden = last_feat.get('div_is_hidden', False)  # 当前背离是否为隐藏背离
+                div_has_hidden = last_feat.get('div_has_hidden', False)  # 最近是否有隐藏背离
+                
+                # 如果当前背离不是隐藏背离，但最近有隐藏背离，也需要标记
+                is_hidden = div_is_hidden or div_has_hidden
                 
                 # 只报告最近的背离（age <= 5）
                 if div_age <= 5:
@@ -2225,7 +2246,8 @@ def scan_divergence_for_stock(api, symbol: str, stock_name: str, periods: List[s
                         'age': div_age,
                         'bias': div_bias,
                         'time': div_time,
-                        'indicator': div_indicator,  # 添加指标类型
+                        'indicator': div_indicator,
+                        'is_hidden': is_hidden,  # 添加隐藏背离标识（综合判断）
                     })
                     results['has_divergence'] = True
                     
@@ -2330,8 +2352,9 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
         if all_divergences and notify:
             notifier = FeishuNotifier()
             
-            # 收集所有底背离信号（先不标记已推送）
-            all_bottom_divergences = []
+            # 收集所有背离信号（底背离和顶背离，先不标记已推送）
+            all_divergences_for_notify = []
+            notified_divergences = notified_divergences or set()
             
             for result in all_divergences:
                 symbol = result['symbol']
@@ -2369,31 +2392,25 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     # 更新 result 中的背离列表
                     result['divergences'] = valid_divs
                 
-                # 获取底背离信号
+                # 获取所有背离信号（底背离和顶背离）
                 for div in result['divergences']:
-                    # 只收集底背离
-                    if div['type'] == 'bottom':
-                        # 检查是否已推送过（包含 indicator）
-                        div_key = (symbol, div['period'], div['type'], div.get('indicator', ''))
-                        if div_key not in notified_divergences:
-                            all_bottom_divergences.append({
-                                'symbol': symbol,
-                                'name': stock_name,
-                                'div': div,
-                                'last_close': last_close,
-                                'pct_change': pct_change,  # 添加涨跌幅
-                            })
-                        else:
-                            logger.debug(f"跳过已推送信号：{symbol} {div['period']} {div['type']} [{div.get('indicator', '')}]")
+                    # 收集所有类型的背离
+                    all_divergences_for_notify.append({
+                        'symbol': symbol,
+                        'name': stock_name,
+                        'div': div,
+                        'last_close': last_close,
+                        'pct_change': pct_change,
+                    })
             
             # 合并同一只股票的信号
             from collections import defaultdict
             stock_signals = defaultdict(list)
-            for item in all_bottom_divergences:
-                key = (item['symbol'], item['name'], item['last_close'], item['pct_change'])  # 添加涨跌幅到 key
+            for item in all_divergences_for_notify:  # 使用 all_divergences_for_notify 包含所有背离类型
+                key = (item['symbol'], item['name'], item['last_close'], item['pct_change'])
                 stock_signals[key].append(item['div'])
             
-            # 如果有底背离，发送整合后的 Markdown 消息
+            # 如果有背离，发送整合后的 Markdown 消息
             if stock_signals:
                 # 构建 Markdown 消息（优化结构性和可读性）
                 md_parts = []
@@ -2433,11 +2450,15 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                     for div in divs:
                         indicator = div.get('indicator', '')
                         div_type = div['type']
+                        is_hidden = div.get('is_hidden', False)
                         type_text = "底背离" if div_type == 'bottom' else "顶背离"
                         type_emoji = "🔴" if div_type == 'bottom' else "🟢"
                         
+                        # 隐藏背离标识
+                        hidden_tag = "<font color=\"#FF69B4\">[隐藏]</font>" if is_hidden else ""
+                        
                         # 背离类型基础显示
-                        base_display = f"{div['period']}{type_emoji}{type_text}"
+                        base_display = f"{div['period']}{type_emoji}{type_text}{hidden_tag}"
                         
                         # 添加带颜色的指标标识，用符号分隔
                         # MACD: 大红色 ●，OBV: 黄色 ◆，HIST: 蓝色 ■
@@ -2500,13 +2521,13 @@ def scan_all_stocks(stock_list_path: str, stock_cache_path: str, output_dir: str
                 logger.info(f"已发送背离信号扫描报告，共 {len(stock_signals)} 只股票")
                 
                 # 发送后统一标记为已推送
-                for item in all_bottom_divergences:
+                for item in all_divergences_for_notify:
                     symbol = item['symbol']
                     div = item['div']
-                    div_key = (symbol, div['period'], div['type'], div.get('indicator', ''))
+                    div_key = (symbol, div['period'], div['type'], div.get('indicator', ''), div.get('is_hidden', False))
                     notified_divergences.add(div_key)
             else:
-                logger.debug("未发现未推送的底背离信号")
+                logger.debug("未发现未推送的背离信号")
                     
         
         return all_divergences

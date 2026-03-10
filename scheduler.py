@@ -21,13 +21,13 @@
    - 日志：scheduler.log 中搜索 "背离扫描"
    - 状态：✅ 已授权并启用
 
-2. AMP 增量扫描任务 (task_amp 增量扫描) - [已授权]
-   - 函数：amp_incremental_scan_task()
-   - 触发器：Cron (每天 15:01)
-   - 执行时间：周一至周五 15:01（收盘后）
-   - 功能：增量扫描股票池的 15m/60m/d/w 周期 AMP 特征并保存到数据库
-   - 配置：ENABLE_AMP_SCAN=true
-   - 日志：scheduler.log 中搜索 "AMP 增量扫描"
+2. 选股任务 (task_选股) - [已授权]
+   - 函数：stock_picker_task()
+   - 触发器：Cron (每天 15:02)
+   - 执行时间：周一至周五 15:02（收盘后）
+   - 功能：执行 AMP + 底背离选股策略，仅保存到数据库
+   - 配置：ENABLE_STOCK_PICKER=true
+   - 日志：scheduler.log 中搜索 "选股任务"
    - 状态：✅ 已授权并启用
 
 ================================================================================
@@ -117,7 +117,8 @@
 ================================================================================
 
 # 已授权任务配置
-ENABLE_DIVERGENCE_SCAN=true      # 背离扫描任务（唯一已授权的任务）
+ENABLE_DIVERGENCE_SCAN=true      # 背离扫描任务
+ENABLE_STOCK_PICKER=true        # 选股任务
 
 # 日志配置
 LOG_LEVEL=INFO                  # 日志级别：DEBUG, INFO, WARNING, ERROR
@@ -134,7 +135,9 @@ LOG_FILE=scheduler.log         # 日志文件路径
 根据 dispatch.md 规则第 2 条（任务授权）：
 - 不允许创建或调度任何未在配置中显式指定的任务
 - 所有任务必须经过明确授权才能注册到调度器
-- 当前仅授权 1 个任务：背离扫描任务
+- 当前已授权 2 个任务：
+  1. 背离扫描任务
+  2. 选股任务
 
 如需添加新任务，必须：
 1. 在本文档头部明确列出任务信息
@@ -382,19 +385,24 @@ def scan_divergence_task():
         raise
 
 
-def amp_incremental_scan_task():
-    """AMP 增量扫描任务 - 已授权（收盘后执行）"""
+def stock_picker_task():
+    """选股任务 - 已授权（收盘后执行，仅保存到数据库）"""
     import subprocess
+    from datetime import datetime
     
-    logger.info("开始执行 AMP 增量扫描任务")
+    logger.info("开始执行选股任务")
     
     try:
-        # 调用 amp_scanner.py 进行增量扫描
-        # 扫描周期：15m, 60m, d, w
+        # 获取当天日期
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        # 调用 stock_picker.py 进行选股
+        # 使用 --no-xlsx 参数，仅保存到数据库
         cmd = [
-            sys.executable,  # 使用当前 Python 解释器
-            "-m", "app.amp_scanner",
-            "--freqs", "15m,60m,d,w",
+            sys.executable,
+            str(PROJECT_ROOT / "selections" / "stock_picker.py"),
+            "--date", today,
+            "--no-xlsx",  # 不保存 Excel 文件
         ]
         
         logger.info(f"执行命令：{' '.join(cmd)}")
@@ -411,24 +419,24 @@ def amp_incremental_scan_task():
         # 记录输出
         if result.stdout:
             for line in result.stdout.strip().split('\n'):
-                logger.info(f"AMP 扫描：{line}")
+                logger.info(f"选股任务：{line}")
         
         if result.stderr:
             for line in result.stderr.strip().split('\n'):
-                logger.warning(f"AMP 扫描：{line}")
+                logger.warning(f"选股任务：{line}")
         
         # 检查执行结果
         if result.returncode == 0:
-            logger.info("✅ AMP 增量扫描任务执行完成")
+            logger.info("✅ 选股任务执行完成")
         else:
-            logger.error(f"❌ AMP 增量扫描任务执行失败，退出码：{result.returncode}")
-            raise RuntimeError(f"AMP 扫描失败：{result.stderr}")
+            logger.error(f"❌ 选股任务执行失败，退出码：{result.returncode}")
+            raise RuntimeError(f"选股任务失败：{result.stderr}")
     
     except subprocess.TimeoutExpired:
-        logger.error("❌ AMP 增量扫描任务超时（超过 2 小时）")
+        logger.error("❌ 选股任务超时（超过 2 小时）")
         raise
     except Exception as e:
-        logger.error(f"❌ AMP 增量扫描任务执行失败：{e}", exc_info=True)
+        logger.error(f"❌ 选股任务执行失败：{e}", exc_info=True)
         raise
 
 
@@ -443,7 +451,7 @@ def main():
     
     # 从环境变量读取任务配置（仅支持已授权的任务）
     ENABLE_DIVERGENCE_SCAN = os.getenv('ENABLE_DIVERGENCE_SCAN', 'true').lower() == 'true'
-    ENABLE_AMP_SCAN = os.getenv('ENABLE_AMP_SCAN', 'true').lower() == 'true'
+    ENABLE_STOCK_PICKER = os.getenv('ENABLE_STOCK_PICKER', 'true').lower() == 'true'
     
     # 背离扫描任务 - 每 5 分钟整点执行（仅在 A 股交易时段）
     # 交易时段：9:25-11:30（上午），13:00-15:00（下午）
@@ -498,20 +506,19 @@ def main():
         )
     else:
         logger.warning("背离扫描任务未启用（ENABLE_DIVERGENCE_SCAN=false）")
-        logger.warning("调度器中没有其他已授权的任务，将不会执行任何任务")
     
-    # AMP 增量扫描任务 - 每天 15:01 执行（收盘后）
-    if ENABLE_AMP_SCAN:
+    # 选股任务 - 每天 15:02 执行（收盘后）
+    if ENABLE_STOCK_PICKER:
         scheduler.register_task(
-            name='AMP 增量扫描',
-            func=amp_incremental_scan_task,
+            name='选股任务',
+            func=stock_picker_task,
             trigger='cron',
             hour=15,
-            minute=1,
+            minute=2,
             day_of_week='mon-fri',  # 工作日
         )
     else:
-        logger.warning("AMP 增量扫描任务未启用（ENABLE_AMP_SCAN=false）")
+        logger.warning("选股任务未启用（ENABLE_STOCK_PICKER=false）")
     
     logger.info(f"已注册 {len(scheduler.tasks)} 个已授权任务")
     logger.info(f"任务列表：{list(scheduler.tasks.keys())}")

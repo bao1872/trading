@@ -68,36 +68,6 @@ CREATE INDEX IF NOT EXISTS idx_div_features_bar_time ON stock_div_features(bar_t
 TABLE_DEFINITIONS["stock_div_features"] = DIV_FEATURES_TABLE
 
 
-AMP_FEATURES_TABLE = """
-CREATE TABLE IF NOT EXISTS stock_amp_features (
-    id SERIAL PRIMARY KEY,
-    ts_code VARCHAR(20) NOT NULL,
-    name VARCHAR(50),
-    freq VARCHAR(10) NOT NULL,
-    bar_time TIMESTAMP NOT NULL,
-    window_len INTEGER,
-    final_period INTEGER,
-    pearson_r FLOAT,
-    strength_pr FLOAT,
-    bar_close FLOAT,
-    bar_upper FLOAT,
-    bar_lower FLOAT,
-    close_pos_0_1 FLOAT,
-    activity_pos_0_1 FLOAT,
-    upper_ret_per_bar FLOAT,
-    upper_total_ret FLOAT,
-    lower_ret_per_bar FLOAT,
-    lower_total_ret FLOAT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(ts_code, freq, bar_time)
-);
-CREATE INDEX IF NOT EXISTS idx_amp_features_ts_code ON stock_amp_features(ts_code);
-CREATE INDEX IF NOT EXISTS idx_amp_features_freq ON stock_amp_features(freq);
-CREATE INDEX IF NOT EXISTS idx_amp_features_bar_time ON stock_amp_features(bar_time);
-"""
-TABLE_DEFINITIONS["stock_amp_features"] = AMP_FEATURES_TABLE
-
-
 DIV_FEATURES_UPSERT_SQL = """
 INSERT INTO stock_div_features 
 (ts_code, freq, bar_time, total_div_count, macd_has_div, macd_div_type, macd_div_len,
@@ -115,32 +85,6 @@ ON CONFLICT (ts_code, freq, bar_time) DO UPDATE SET
     obv_has_div = EXCLUDED.obv_has_div,
     obv_div_type = EXCLUDED.obv_div_type,
     obv_div_len = EXCLUDED.obv_div_len
-"""
-
-
-AMP_FEATURES_UPSERT_SQL = """
-INSERT INTO stock_amp_features 
-(ts_code, name, freq, bar_time, window_len, final_period, pearson_r, strength_pr,
- bar_close, bar_upper, bar_lower, close_pos_0_1, activity_pos_0_1,
- upper_ret_per_bar, upper_total_ret, lower_ret_per_bar, lower_total_ret)
-VALUES (:ts_code, :name, :freq, :bar_time, :window_len, :final_period, :pearson_r, :strength_pr,
-        :bar_close, :bar_upper, :bar_lower, :close_pos_0_1, :activity_pos_0_1,
-        :upper_ret_per_bar, :upper_total_ret, :lower_ret_per_bar, :lower_total_ret)
-ON CONFLICT (ts_code, freq, bar_time) DO UPDATE SET
-    name = EXCLUDED.name,
-    window_len = EXCLUDED.window_len,
-    final_period = EXCLUDED.final_period,
-    pearson_r = EXCLUDED.pearson_r,
-    strength_pr = EXCLUDED.strength_pr,
-    bar_close = EXCLUDED.bar_close,
-    bar_upper = EXCLUDED.bar_upper,
-    bar_lower = EXCLUDED.bar_lower,
-    close_pos_0_1 = EXCLUDED.close_pos_0_1,
-    activity_pos_0_1 = EXCLUDED.activity_pos_0_1,
-    upper_ret_per_bar = EXCLUDED.upper_ret_per_bar,
-    upper_total_ret = EXCLUDED.upper_total_ret,
-    lower_ret_per_bar = EXCLUDED.lower_ret_per_bar,
-    lower_total_ret = EXCLUDED.lower_total_ret
 """
 
 
@@ -193,6 +137,46 @@ CREATE INDEX IF NOT EXISTS idx_concepts_popularity ON stock_concepts_cache(popul
 CREATE INDEX IF NOT EXISTS idx_concepts_industry ON stock_concepts_cache(industry);
 """
 TABLE_DEFINITIONS["stock_concepts_cache"] = STOCK_CONCEPTS_CACHE_TABLE
+
+
+STOCK_PICKER_RESULTS_TABLE = """
+CREATE TABLE IF NOT EXISTS stock_picker_results (
+    id SERIAL PRIMARY KEY,
+    trade_date DATE NOT NULL,
+    stock_name VARCHAR(50) NOT NULL,
+    ts_code VARCHAR(20) NOT NULL,
+    amp_passed BOOLEAN,
+    div_passed BOOLEAN,
+    hist_passed BOOLEAN,
+    all_passed BOOLEAN,
+    amp_strength FLOAT,
+    mid_slope FLOAT,
+    upper_slope FLOAT,
+    lower_slope FLOAT,
+    close_pos FLOAT,
+    channel_width FLOAT,
+    period INTEGER,
+    window_len INTEGER,
+    history_peak_bar_idx INTEGER,
+    history_peak_amp_strength FLOAT,
+    history_peak_mid_slope FLOAT,
+    history_peak_close_pos FLOAT,
+    divergence_bar_idx INTEGER,
+    divergence_indicator VARCHAR(20),
+    divergence_type VARCHAR(50),
+    divergence_distance FLOAT,
+    divergence_age INTEGER,
+    divergence_count INTEGER,
+    limit_up_count_in_period INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(trade_date, ts_code)
+);
+CREATE INDEX IF NOT EXISTS idx_picker_trade_date ON stock_picker_results(trade_date);
+CREATE INDEX IF NOT EXISTS idx_picker_ts_code ON stock_picker_results(ts_code);
+CREATE INDEX IF NOT EXISTS idx_picker_all_passed ON stock_picker_results(all_passed);
+CREATE INDEX IF NOT EXISTS idx_picker_amp_passed ON stock_picker_results(amp_passed);
+"""
+TABLE_DEFINITIONS["stock_picker_results"] = STOCK_PICKER_RESULTS_TABLE
 
 
 def get_table_names() -> List[str]:
