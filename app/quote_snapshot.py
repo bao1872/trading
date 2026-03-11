@@ -319,7 +319,7 @@ def compute_divergence_for_period(df: pd.DataFrame, period: str, cfg: DivConfig 
             calcstoc=False,
             calccci=False,
             calcmom=False,
-            calcobv=True,
+            calcobv=False,
             calcvwmacd=False,
             calccmf=False,
             calcmfi=False,
@@ -387,8 +387,8 @@ def compute_divergence_for_period(df: pd.DataFrame, period: str, cfg: DivConfig 
         cfg.neg_hid_div_col,
     ]
     
-    indicator_names = ["MACD", "Hist", "OBV"]
-    indicator_keys = ["macd", "hist", "obv"]
+    indicator_names = ["MACD", "Hist"]
+    indicator_keys = ["macd", "hist"]
     
     for t in range(n):
         if np.isfinite(ph_conf[t]):
