@@ -23,7 +23,7 @@ base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if base_dir not in sys.path:
     sys.path.insert(0, base_dir)
 
-from app.db import get_session
+from datasource.database import get_session
 from app.models import get_create_sql
 from sqlalchemy import text
 

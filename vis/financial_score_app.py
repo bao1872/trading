@@ -23,7 +23,7 @@ from plotly.subplots import make_subplots
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.db import get_session, query_sql
+from datasource.database import get_session, query_sql
 from datasource.k_data_loader import load_k_data
 from datasource.pytdx_client import connect_pytdx, get_kline_data
 from features.dynamic_swing_anchored_vwap import dynamic_swing_anchored_vwap, DSAConfig

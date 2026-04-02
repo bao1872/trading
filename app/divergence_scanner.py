@@ -24,7 +24,7 @@ from features.divergence_many_plotly import (
     _line_dash
 )
 from app.config import STOCK_POOL_PATH
-from app.db import get_session
+from datasource.database import get_session
 from app.models import DIV_FEATURES_TABLE, DIV_FEATURES_UPSERT_SQL
 from app.k_data_loader import load_k_data
 from app.logger import get_logger
