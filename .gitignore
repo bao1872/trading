@@ -20,12 +20,14 @@ stock_concepts_cache.xlsx
 # 临时输出目录
 背离扫描/
 复盘/
+output/
 *.html
 *.png
 
 # 交易相关敏感文件
 app/config.py
 app/config.*.py
+config.py
 
 # QMT 交易文件夹（包含敏感配置）
 trading/

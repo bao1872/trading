@@ -181,11 +181,9 @@ def get_tick_data_for_date(api: TdxHq_API, symbol: str, date_int: int) -> Option
     """获取指定日期的 tick 数据并汇总"""
     market = market_from_code(symbol)
     try:
-        # pytdx API: get_history_transaction_data(market, code, start, count, date)
-        # 单次请求最多返回 2000 条数据，需要循环获取
         all_ticks = []
         start = 0
-        count = 2000  # 单次最大请求量
+        count = 2000
         
         while True:
             data = api.get_history_transaction_data(market, symbol, start, count, date_int)
@@ -195,14 +193,12 @@ def get_tick_data_for_date(api: TdxHq_API, symbol: str, date_int: int) -> Option
             
             all_ticks.extend(data)
             
-            # 如果返回数据少于请求量，说明已经获取完毕
             if len(data) < count:
                 break
             
             start += count
             
-            # 安全限制，避免无限循环
-            if start > 100000:  # 最多获取 10 万条
+            if start > 100000:
                 break
         
         if not all_ticks:
@@ -210,16 +206,12 @@ def get_tick_data_for_date(api: TdxHq_API, symbol: str, date_int: int) -> Option
         
         df = pd.DataFrame(all_ticks)
         
-        # 主买数据
         buy_df = df[df['buyorsell'] == 0]
-        # 主卖数据
         sell_df = df[df['buyorsell'] == 1]
         
-        # 成交量转换为股数
         buy_volume = buy_df['vol'].sum() * 100
         sell_volume = sell_df['vol'].sum() * 100
         
-        # 成交金额
         buy_amount = (buy_df['price'] * buy_df['vol'] * 100).sum()
         sell_amount = (sell_df['price'] * sell_df['vol'] * 100).sum()
         
@@ -234,6 +226,40 @@ def get_tick_data_for_date(api: TdxHq_API, symbol: str, date_int: int) -> Option
         }
     except Exception:
         return None
+
+
+def get_raw_tick_data(api: TdxHq_API, symbol: str, date_int: int, page_size: int = 2000) -> pd.DataFrame:
+    """
+    获取指定日期的原始逐笔成交数据（DataFrame格式）
+    
+    Args:
+        api: TdxHq_API 实例
+        symbol: 股票代码
+        date_int: 日期整数，如 20260312
+        page_size: 每次请求数量，默认2000
+    
+    Returns:
+        DataFrame，包含原始逐笔数据
+    """
+    market = market_from_code(symbol)
+    all_ticks = []
+    start = 0
+    
+    while True:
+        data = api.get_history_transaction_data(market, symbol, start, page_size, date_int)
+        if not data:
+            break
+        all_ticks.extend(data)
+        if len(data) < page_size:
+            break
+        start += page_size
+        if start > 50000:
+            break
+    
+    if not all_ticks:
+        return pd.DataFrame()
+    
+    return pd.DataFrame(all_ticks).drop_duplicates()
 
 
 if __name__ == "__main__":

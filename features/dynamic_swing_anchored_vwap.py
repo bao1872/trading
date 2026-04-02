@@ -395,6 +395,77 @@ def dynamic_swing_anchored_vwap(df: pd.DataFrame, cfg: DSAConfig):
     return vwap_series, dir_series, pivot_labels, segments
 
 
+
+
+def compute_extra_factors(
+    df: pd.DataFrame,
+    vwap: pd.Series,
+    dir_series: pd.Series,
+    pivot_labels: list[dict],
+) -> pd.DataFrame:
+    """
+    计算两个附加因子（尽量保持原脚本框架不变）：
+
+    1) lh_hh_low_pos:
+       最近一次 LH/HH 拐点 到 当前区间最低点 之间，当前收盘价所处的位置，范围 [0, 1]
+       公式：
+         pos = (close - min_low_since_last_lh_hh) / (last_lh_hh_price - min_low_since_last_lh_hh)
+
+    2) bull_vwap_dev_pct:
+       仅当当前处于多头状态(dir > 0)时，计算 (close - vwap) / vwap * 100
+       若为空头，则直接记为 0
+    """
+    out = pd.DataFrame(index=df.index)
+
+    label_map = {}
+    for lab in pivot_labels:
+        x = lab.get("x")
+        txt = str(lab.get("text", "")).strip().upper()
+        if x in df.index and txt in {"LH", "HH"}:
+            label_map[x] = {
+                "text": txt,
+                "price": float(lab.get("y")) if pd.notna(lab.get("y")) else np.nan,
+            }
+
+    latest_lh_hh_idx = None
+    latest_lh_hh_price = np.nan
+    pos_values = []
+
+    lows = df["low"].astype(float)
+    closes = df["close"].astype(float)
+
+    for ts in df.index:
+        if ts in label_map:
+            latest_lh_hh_idx = ts
+            latest_lh_hh_price = float(label_map[ts]["price"])
+
+        if latest_lh_hh_idx is None or not np.isfinite(latest_lh_hh_price):
+            pos_values.append(np.nan)
+            continue
+
+        window_low = float(lows.loc[latest_lh_hh_idx:ts].min())
+        denom = latest_lh_hh_price - window_low
+
+        if not np.isfinite(window_low) or denom <= 0:
+            pos = np.nan
+        else:
+            pos = (float(closes.loc[ts]) - window_low) / denom
+            pos = float(np.clip(pos, 0.0, 1.0))
+        pos_values.append(pos)
+
+    out["lh_hh_low_pos"] = pos_values
+
+    vwap_safe = vwap.astype(float)
+    bull_dev = np.where(
+        (dir_series.astype(float) > 0) & np.isfinite(vwap_safe.to_numpy()) & (vwap_safe.to_numpy() != 0),
+        (closes.to_numpy() - vwap_safe.to_numpy()) / vwap_safe.to_numpy() * 100.0,
+        0.0,
+    )
+    out["bull_vwap_dev_pct"] = bull_dev
+
+    return out
+
+
 # =========================
 # Plot
 # =========================
@@ -423,7 +494,7 @@ def compute_daily_sma_on_intraday(df: pd.DataFrame, days: int = 220) -> pd.Serie
     return sma_intraday
 
 
-def add_feature_table(fig: go.Figure, df: pd.DataFrame, vwap: pd.Series, dir_series: pd.Series) -> None:
+def add_feature_table(fig: go.Figure, df: pd.DataFrame, vwap: pd.Series, dir_series: pd.Series, extra_factors: pd.DataFrame | None = None) -> None:
     """Overlay a small feature table near top-left in paper coordinates."""
     if len(df) == 0:
         return
@@ -440,6 +511,15 @@ def add_feature_table(fig: go.Figure, df: pd.DataFrame, vwap: pd.Series, dir_ser
         dev_abs = np.nan
 
     dir_txt = "UP (+1)" if last_dir > 0 else ("DOWN (-1)" if last_dir < 0 else "N/A")
+
+    lh_hh_low_pos = np.nan
+    bull_vwap_dev_pct = np.nan
+    if extra_factors is not None and len(extra_factors) > 0:
+        if "lh_hh_low_pos" in extra_factors.columns:
+            lh_hh_low_pos = float(extra_factors["lh_hh_low_pos"].iloc[-1]) if pd.notna(extra_factors["lh_hh_low_pos"].iloc[-1]) else np.nan
+        if "bull_vwap_dev_pct" in extra_factors.columns:
+            bull_vwap_dev_pct = float(extra_factors["bull_vwap_dev_pct"].iloc[-1]) if pd.notna(extra_factors["bull_vwap_dev_pct"].iloc[-1]) else np.nan
+
     rows = [
         ("time", last_ts.strftime("%Y-%m-%d %H:%M") if hasattr(last_ts, "strftime") else str(last_ts)),
         ("dir", dir_txt),
@@ -447,6 +527,8 @@ def add_feature_table(fig: go.Figure, df: pd.DataFrame, vwap: pd.Series, dir_ser
         ("vwap", f"{last_vwap:.3f}" if np.isfinite(last_vwap) else "n/a"),
         ("close - vwap", f"{dev_abs:.3f}" if np.isfinite(dev_abs) else "n/a"),
         ("dev(vwap)", f"{dev_pct:.3f}%" if np.isfinite(dev_pct) else "n/a"),
+        ("lh_hh_low_pos", f"{lh_hh_low_pos:.4f}" if np.isfinite(lh_hh_low_pos) else "n/a"),
+        ("bull_vwap_dev_pct", f"{bull_vwap_dev_pct:.4f}%" if np.isfinite(bull_vwap_dev_pct) else "n/a"),
     ]
 
     fig.add_trace(
@@ -481,6 +563,8 @@ def build_plot(df, vwap, dir_series, pivot_labels, segments, out_html, title, sm
         df["SMA220D"] = compute_daily_sma_on_intraday(df, days=sma_days)
     else:
         df["SMA220D"] = df["close"].rolling(sma_days, min_periods=sma_days).mean()
+
+    extra_factors = compute_extra_factors(df, vwap, dir_series, pivot_labels)
 
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,
@@ -560,7 +644,7 @@ def build_plot(df, vwap, dir_series, pivot_labels, segments, out_html, title, sm
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)", row=2, col=1, rangemode="tozero")
 
     # --- Feature table (top-left) ---
-    add_feature_table(fig, df, vwap, dir_series)
+    add_feature_table(fig, df, vwap, dir_series, extra_factors=extra_factors)
 
     fig.write_html(out_html, include_plotlyjs="cdn")
     print(f"[OK] HTML saved: {out_html}")
