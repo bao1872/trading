@@ -445,14 +445,18 @@ def query_sql(
     Returns:
         查询结果DataFrame
     """
-    result = session.execute(text(sql), params or {})
-    columns = result.keys()
-    rows = result.fetchall()
+    try:
+        result = session.execute(text(sql), params or {})
+        columns = result.keys()
+        rows = result.fetchall()
 
-    if not rows:
-        return pd.DataFrame(columns=columns)
+        if not rows:
+            return pd.DataFrame(columns=columns)
 
-    return pd.DataFrame(rows, columns=columns)
+        return pd.DataFrame(rows, columns=columns)
+    except Exception:
+        session.rollback()
+        return pd.DataFrame()
 
 
 def count_records(
