@@ -159,13 +159,13 @@ def upsert_top10_to_db(df: pd.DataFrame, engine,
     if stock_name:
         df["stock_name"] = stock_name
 
-    df["report_date"] = pd.to_datetime(df["report_date"], format="%Y%m%d", errors="coerce")
+    df["report_date"] = pd.to_datetime(df["report_date"].astype(str), format="%Y%m%d", errors="coerce")
     df = df[df["report_date"].notna()]
     if df.empty:
         return 0
 
     df["report_date_str"] = df["report_date"].dt.strftime("%Y%m%d")
-    df["ann_date"] = pd.to_datetime(df["ann_date"], format="%Y%m%d", errors="coerce")
+    df["ann_date"] = pd.to_datetime(df["ann_date"].astype(str), format="%Y%m%d", errors="coerce")
     df["ann_date"] = df["ann_date"].dt.strftime("%Y%m%d")
 
     if existing_dates:
