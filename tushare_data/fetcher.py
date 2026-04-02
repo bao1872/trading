@@ -350,9 +350,17 @@ def upsert_quarterly_to_db(income_df: pd.DataFrame, cash_df: pd.DataFrame,
         record = {}
         end_date_val = row.get("end_date")
         end_date_str = end_date_val.strftime("%Y%m%d") if pd.notna(end_date_val) else None
+        ann_date_val = row.get("ann_date")
+        ann_date_str = ann_date_val.strftime("%Y%m%d") if pd.notna(ann_date_val) else None
+        f_ann_date_val = row.get("f_ann_date")
+        f_ann_date_str = f_ann_date_val.strftime("%Y%m%d") if pd.notna(f_ann_date_val) else None
         for col in db_columns:
             if col == "end_date":
                 record[col] = end_date_str
+            elif col == "ann_date":
+                record[col] = ann_date_str
+            elif col == "f_ann_date":
+                record[col] = f_ann_date_str
             elif col in row.index and not pd.isna(row.get(col)):
                 val = row.get(col)
                 if isinstance(val, (np.integer, np.floating)):
