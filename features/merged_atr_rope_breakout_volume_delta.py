@@ -815,7 +815,7 @@ class MergedEngine:
                 d[c] = np.nan
 
         direct_buy_score = 80.0
-        touch_tol_atr = 0.1
+        touch_tol_atr = 0.2
 
         pending_breakout_idx: Optional[int] = None
 
