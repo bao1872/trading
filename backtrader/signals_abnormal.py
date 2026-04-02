@@ -232,14 +232,24 @@ def generate_rolling_signals(
     top_n_themes: int = 10,
     top_n_stocks: int = 20,
     top_n_concepts: int = 20,
-    limit_stocks: int = None
+    limit_stocks: int = None,
+    preloaded_data: tuple = None
 ) -> dict:
-    """生成滚动窗口异动信号"""
-    snapshot_ts = pd.Timestamp(snapshot_date) if snapshot_date else pd.Timestamp.now()
-    start_date = (snapshot_ts - pd.Timedelta(days=51 + 60)).strftime('%Y-%m-%d')
+    """
+    生成滚动窗口异动信号
 
-    print("加载全量股票数据...")
-    all_data, name_map = load_all_stock_data(freq, start_date=start_date, limit_stocks=limit_stocks)
+    Args:
+        preloaded_data: 可选，(DataFrame, name_map) 元组，若传入则直接使用，不重复加载
+    """
+    snapshot_ts = pd.Timestamp(snapshot_date) if snapshot_date else pd.Timestamp.now()
+
+    if preloaded_data is not None:
+        all_data, name_map = preloaded_data
+        all_data = all_data.copy()
+    else:
+        start_date = (snapshot_ts - pd.Timedelta(days=51 + 60)).strftime('%Y-%m-%d')
+        print("加载全量股票数据...")
+        all_data, name_map = load_all_stock_data(freq, start_date=start_date, limit_stocks=limit_stocks)
 
     if all_data.empty:
         return {

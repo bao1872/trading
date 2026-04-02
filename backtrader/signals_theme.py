@@ -305,15 +305,39 @@ def process_all_stocks_vectorized(
     snapshot_date: str,
     lookback: int = 51,
     filter_rising: bool = True,
-    limit_stocks: int = None
+    limit_stocks: int = None,
+    preloaded_data: tuple = None
 ) -> pd.DataFrame:
     """
     向量化一次性计算所有股票的Z-Score和涨跌停信息
+
+    Args:
+        preloaded_data: 可选，(DataFrame, name_map) 元组，若传入则直接使用，不重复加载
 
     Returns:
         DataFrame with columns: code, name, zscore, volume, rolling_mean, date,
                                 limit_up_info, limit_down_info, price_change
     """
+    if preloaded_data is not None:
+        all_data, name_map = preloaded_data
+        all_data = all_data.copy()
+    else:
+        target_date = None
+        if snapshot_date:
+            target_date = pd.Timestamp(snapshot_date)
+
+        start_date = None
+        if target_date is not None:
+            start_date = (target_date - pd.Timedelta(days=lookback + 60)).strftime('%Y-%m-%d')
+
+        print(f"  加载数据范围: {start_date} 到 {snapshot_date or '最新'}...")
+        all_data, name_map = load_all_stock_data(freq, start_date=start_date, end_date=None, limit_stocks=limit_stocks)
+
+    if all_data.empty:
+        return pd.DataFrame()
+
+    print(f"  数据量: {len(all_data)} 行, {len(name_map)} 只股票")
+
     target_date = None
     target_date_start = None
     target_date_end = None
@@ -321,18 +345,6 @@ def process_all_stocks_vectorized(
         target_date = pd.Timestamp(snapshot_date)
         target_date_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
         target_date_end = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-
-    start_date = None
-    if target_date is not None:
-        start_date = (target_date - pd.Timedelta(days=lookback + 60)).strftime('%Y-%m-%d')
-
-    print(f"  加载数据范围: {start_date} 到 {snapshot_date or '最新'}...")
-    all_data, name_map = load_all_stock_data(freq, start_date=start_date, end_date=None, limit_stocks=limit_stocks)
-
-    if all_data.empty:
-        return pd.DataFrame()
-
-    print(f"  数据量: {len(all_data)} 行, {len(name_map)} 只股票")
 
     all_data = all_data[all_data['ts_code'].isin(name_map.keys())]
 
@@ -584,10 +596,14 @@ def generate_signals(
     top_n_stocks: int = 20,
     top_n_concepts: int = 20,
     concept_xlsx_path: str = '../stock_concepts_cache.xlsx',
-    limit_stocks: int = None
+    limit_stocks: int = None,
+    preloaded_data: tuple = None
 ) -> dict:
     """
     生成主题投资信号
+
+    Args:
+        preloaded_data: 可选，(DataFrame, name_map) 元组，若传入则直接使用，不重复加载
     """
     from utils.volume_anomaly import get_window_for_period
     window = get_window_for_period(period)
@@ -602,7 +618,7 @@ def generate_signals(
     excluded = get_excluded_concepts(theme_mapping)
 
     print("向量化计算所有指标...")
-    volume_df = process_all_stocks_vectorized(period, window=window, snapshot_date=snapshot_date, lookback=51, limit_stocks=limit_stocks)
+    volume_df = process_all_stocks_vectorized(period, window=window, snapshot_date=snapshot_date, lookback=51, limit_stocks=limit_stocks, preloaded_data=preloaded_data)
 
     if volume_df.empty:
         return {
