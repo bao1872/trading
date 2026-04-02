@@ -254,7 +254,7 @@ def dedup_latest(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     tmp = df.copy()
-    tmp["_end_date_dt"] = pd.to_datetime(tmp["end_date"], format="%Y%m%d", errors="coerce")
+    tmp["_end_date_dt"] = pd.to_datetime(tmp["end_date"].astype(str), format="%Y%m%d", errors="coerce")
     sort_cols = ["_end_date_dt", "ann_date", "f_ann_date"]
     sort_cols = [c for c in sort_cols if c in tmp.columns]
     if sort_cols:
@@ -300,11 +300,16 @@ def upsert_quarterly_to_db(income_df: pd.DataFrame, cash_df: pd.DataFrame,
         on=["ts_code", "end_date"], how="outer"
     )
 
-    df["end_date"] = pd.to_datetime(df["end_date"], format="%Y%m%d", errors="coerce")
+    df["end_date"] = pd.to_datetime(df["end_date"].astype(str), format="%Y%m%d", errors="coerce")
+    if "ann_date" in df.columns:
+        df["ann_date"] = pd.to_datetime(df["ann_date"].astype(str), format="%Y%m%d", errors="coerce")
+    if "f_ann_date" in df.columns:
+        df["f_ann_date"] = pd.to_datetime(df["f_ann_date"].astype(str), format="%Y%m%d", errors="coerce")
     df = df.sort_values(["ts_code", "end_date"]).reset_index(drop=True)
 
+    date_cols = {"end_date", "ann_date", "f_ann_date", "report_date"}
     for col in df.columns:
-        if col not in ["ts_code", "name", "end_date"]:
+        if col not in ["ts_code", "name"] and col not in date_cols:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = df[df["end_date"].notna()]
