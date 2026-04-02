@@ -42,7 +42,7 @@ def init_saved_filters_table(session):
     from sqlalchemy import text
     sql = text("""
         CREATE TABLE IF NOT EXISTS saved_filters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id TEXT DEFAULT 'default',
             page_name TEXT NOT NULL,
             filter_name TEXT NOT NULL,
@@ -263,7 +263,10 @@ def load_stock_list(session) -> pd.DataFrame:
         FROM stock_financial_score_pool
         ORDER BY stock_name
     """
-    return query_sql(session, sql)
+    try:
+        return query_sql(session, sql)
+    except Exception:
+        return pd.DataFrame()
 
 
 def load_score_data(session, ts_code: str) -> pd.DataFrame:
@@ -276,10 +279,13 @@ def load_score_data(session, ts_code: str) -> pd.DataFrame:
         WHERE ts_code = :ts_code
         ORDER BY report_date DESC
     """
-    df = query_sql(session, sql, {"ts_code": ts_code})
-    if not df.empty:
-        df = df.sort_values("report_date", ascending=True).reset_index(drop=True)
-    return df
+    try:
+        df = query_sql(session, sql, {"ts_code": ts_code})
+        if not df.empty:
+            df = df.sort_values("report_date", ascending=True).reset_index(drop=True)
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 def load_factor_scores(session, ts_code: str, report_date: str) -> pd.DataFrame:
@@ -288,35 +294,44 @@ def load_factor_scores(session, ts_code: str, report_date: str) -> pd.DataFrame:
         SELECT * FROM stock_financial_score_pool
         WHERE ts_code = :ts_code AND report_date = :report_date
     """
-    df = query_sql(session, sql, {"ts_code": ts_code, "report_date": report_date})
-    return df
+    try:
+        df = query_sql(session, sql, {"ts_code": ts_code, "report_date": report_date})
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 def load_all_scores(session, report_date: Optional[str] = None) -> pd.DataFrame:
     """加载全股池评分数据"""
-    if report_date:
-        sql = """
-            SELECT * FROM stock_financial_score_pool
-            WHERE report_date = :report_date
-            ORDER BY total_score DESC
-        """
-        df = query_sql(session, sql, {"report_date": report_date})
-    else:
-        sql = """
-            SELECT * FROM stock_financial_score_pool
-            ORDER BY ts_code, report_date DESC
-        """
-        df = query_sql(session, sql, {})
-        df = df.groupby("ts_code").first().reset_index()
-        df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
-    return df
+    try:
+        if report_date:
+            sql = """
+                SELECT * FROM stock_financial_score_pool
+                WHERE report_date = :report_date
+                ORDER BY total_score DESC
+            """
+            df = query_sql(session, sql, {"report_date": report_date})
+        else:
+            sql = """
+                SELECT * FROM stock_financial_score_pool
+                ORDER BY ts_code, report_date DESC
+            """
+            df = query_sql(session, sql, {})
+            df = df.groupby("ts_code").first().reset_index()
+            df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 def get_available_report_dates(session) -> List[str]:
     """获取所有可用的报告期"""
     sql = "SELECT DISTINCT report_date FROM stock_financial_score_pool ORDER BY report_date DESC"
-    df = query_sql(session, sql, {})
-    return df["report_date"].tolist()
+    try:
+        df = query_sql(session, sql, {})
+        return df["report_date"].tolist()
+    except Exception:
+        return []
 
 
 def get_available_signal_dates(session) -> List[str]:
@@ -1268,20 +1283,21 @@ def render_signal_page(session):
     concept_cache_df = query_sql(session, concept_cache_sql, {})
 
     financial_scores = get_latest_financial_scores(session)
-    if not financial_scores.empty and not limit_up_df.empty:
+    if not limit_up_df.empty:
         limit_up_df = limit_up_df.rename(columns={"ts_code": "code"})
-        fs_copy = financial_scores.rename(columns={"ts_code": "code"})
-        score_cols = ["code", "total_score", "report_date"] + DIMENSION_COLS
-        score_cols = [c for c in score_cols if c in fs_copy.columns]
-        limit_up_df = limit_up_df.merge(
-            fs_copy[score_cols],
-            on="code",
-            how="left",
-            suffixes=("", "_dup")
-        )
-        dup_cols = [c for c in limit_up_df.columns if c.endswith("_dup")]
-        if dup_cols:
-            limit_up_df = limit_up_df.drop(columns=dup_cols)
+        if not financial_scores.empty:
+            fs_copy = financial_scores.rename(columns={"ts_code": "code"})
+            score_cols = ["code", "total_score", "report_date"] + DIMENSION_COLS
+            score_cols = [c for c in score_cols if c in fs_copy.columns]
+            limit_up_df = limit_up_df.merge(
+                fs_copy[score_cols],
+                on="code",
+                how="left",
+                suffixes=("", "_dup")
+            )
+            dup_cols = [c for c in limit_up_df.columns if c.endswith("_dup")]
+            if dup_cols:
+                limit_up_df = limit_up_df.drop(columns=dup_cols)
     if not financial_scores.empty and not anomaly_df.empty:
         fs_copy = financial_scores.rename(columns={"ts_code": "code"})
         score_cols = ["code", "total_score", "report_date"] + DIMENSION_COLS
@@ -1660,8 +1676,8 @@ def format_score(val) -> str:
 
 def format_report_date(date_str: str) -> str:
     """格式化报告期显示"""
-    if pd.isna(date_str) or len(str(date_str)) != 8:
-        return str(date_str)
+    if pd.isna(date_str) or date_str is None or len(str(date_str)) != 8:
+        return str(date_str) if date_str else "N/A"
     return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
 
 
@@ -1831,17 +1847,16 @@ def render_pool_page(session):
 
     report_dates = get_available_report_dates(session)
     if not report_dates:
-        st.warning("数据库中没有评分数据")
-        return
+        report_dates = []
 
-    selected_report = st.selectbox("报告期", options=report_dates, format_func=format_report_date, index=0)
+    if report_dates:
+        selected_report = st.selectbox("报告期", options=report_dates, format_func=format_report_date, index=0)
+    else:
+        selected_report = None
+        st.info("暂无报告期数据")
 
     with st.spinner("加载数据..."):
-        df = load_all_scores(session, selected_report)
-
-    if df.empty:
-        st.warning("该报告期没有数据")
-        return
+        df = load_all_scores(session, selected_report) if selected_report else pd.DataFrame()
 
     concept_sql = "SELECT ts_code, concepts FROM stock_pools"
     concept_df = query_sql(session, concept_sql, {})
@@ -2449,47 +2464,46 @@ def main():
         init_saved_filters_table(session)
         stock_list = load_stock_list(session)
 
-        if stock_list.empty:
-            st.error("数据库中没有评分数据，请先运行 `python financial_factors/batch_score.py` 生成数据")
-            st.info("提示：batch_score.py 默认连接 PostgreSQL 数据库（config.DATABASE_URL）")
-            return
-
         with st.sidebar:
             st.header("📊 财务评分分析")
             page = st.radio("页面", ["个股分析", "全股池因子表", "选股主页", "自选股", "股东画像", "股东变化评价", "形态选股"], index=0)
 
         if page == "个股分析":
-            with st.sidebar:
-                st.markdown("---")
-                st.subheader("⚙️ 股票选择")
+            if stock_list.empty:
+                st.info("暂无评分数据（stock_financial_score_pool 表不存在或为空）")
+            else:
+                with st.sidebar:
+                    st.markdown("---")
+                    st.subheader("⚙️ 股票选择")
 
-                pinyin_input = st.text_input(
-                    "输入股票名称首字母",
-                    value="",
-                    placeholder="例如: zgsy -> 中国石油",
-                    help="输入股票名称的拼音首字母进行模糊匹配",
-                )
+                    pinyin_input = st.text_input(
+                        "输入股票名称首字母",
+                        value="",
+                        placeholder="例如: zgsy -> 中国石油",
+                        help="输入股票名称的拼音首字母进行模糊匹配",
+                    )
 
-                matched_stocks = match_stocks_by_pinyin(pinyin_input, stock_list)
+                    matched_stocks = match_stocks_by_pinyin(pinyin_input, stock_list)
 
-                if matched_stocks.empty:
-                    st.info("请输入股票名称首字母进行搜索")
-                    return
+                    selected_option = None
+                    if matched_stocks.empty:
+                        st.info("请输入股票名称首字母进行搜索")
+                    else:
+                        selected_option = st.selectbox(
+                            "选择股票",
+                            options=range(len(matched_stocks)),
+                            format_func=lambda i: f"{matched_stocks.iloc[i]['name']} ({matched_stocks.iloc[i]['ts_code']})",
+                            index=0,
+                        )
 
-                selected_option = st.selectbox(
-                    "选择股票",
-                    options=range(len(matched_stocks)),
-                    format_func=lambda i: f"{matched_stocks.iloc[i]['name']} ({matched_stocks.iloc[i]['ts_code']})",
-                    index=0,
-                )
+                        st.markdown("---")
+                        st.markdown("**维度权重说明**")
+                        for dim, weight in DIMENSION_WEIGHTS.items():
+                            color = DIMENSION_COLORS.get(dim, "#888888")
+                            st.markdown(f"<span style='color:{color}'>●</span> {dim}: {weight*100:.0f}%", unsafe_allow_html=True)
 
-                st.markdown("---")
-                st.markdown("**维度权重说明**")
-                for dim, weight in DIMENSION_WEIGHTS.items():
-                    color = DIMENSION_COLORS.get(dim, "#888888")
-                    st.markdown(f"<span style='color:{color}'>●</span> {dim}: {weight*100:.0f}%", unsafe_allow_html=True)
-
-            _render_stock_page(session, matched_stocks, selected_option)
+                if selected_option is not None:
+                    _render_stock_page(session, matched_stocks, selected_option)
         elif page == "全股池因子表":
             with st.sidebar:
                 st.markdown("---")

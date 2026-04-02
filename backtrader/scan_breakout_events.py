@@ -38,6 +38,9 @@ How to Run:
     # 批量回补（从开始日期到上一交易日，自动跳过已扫描的日期，只扫日线）
     python backtrader/scan_breakout_events.py --batch-backfill 2026-02-01
 
+    # 批量回补指定日期范围
+    python backtrader/scan_breakout_events.py --batch-backfill 2026-02-01 --end-date 2026-03-15
+
 Side Effects:
     - 写入 breakout_dir_turn_events 表
     - 写入 breakout_pullback_buy_events 表
@@ -395,6 +398,61 @@ def process_stock_no_write(
     return (0, len(pullback_events), dir_turn_events, pullback_events)
 
 
+def process_stock_for_dates(
+    preloaded_data: pd.DataFrame,
+    ts_code: str,
+    name: str,
+    freq: str,
+    bars: int,
+    dates: List[str],
+) -> Dict[str, Tuple[List[Dict], List[Dict]]]:
+    """
+    对已加载的行情数据，按日期列表逐个计算事件
+
+    Args:
+        preloaded_data: 从DB加载的行情数据
+        ts_code: 股票代码
+        name: 股票名称
+        freq: 周期 ('d', '60m')
+        bars: K线数量（用于验证数据充足性）
+        dates: 要计算的日期列表
+
+    Returns:
+        {
+            '2026-03-01': ([dir_events], [pullback_events]),
+            ...
+        }
+    """
+    from features.merged_atr_rope_breakout_volume_delta import MergedEngine
+
+    results: Dict[str, Tuple[List[Dict], List[Dict]]] = {}
+
+    if preloaded_data is None or len(preloaded_data) < 50:
+        return results
+
+    for target_date in dates:
+        df = preloaded_data[preloaded_data.index <= target_date].copy()
+        if len(df) < 50:
+            results[target_date] = ([], [])
+            continue
+
+        try:
+            args = build_engine_args(ts_code, freq, bars)
+            engine = MergedEngine(df, args)
+            engine.run()
+            result_df = engine.df
+        except Exception as e:
+            logger.warning("计算 %s %s %s 因子失败: %s", ts_code, freq, target_date, e)
+            results[target_date] = ([], [])
+            continue
+
+        dir_events = extract_dir_turn_events(result_df, ts_code, name, freq, target_date)
+        pullback_events = extract_pullback_buy_events(result_df, ts_code, name, freq, target_date)
+        results[target_date] = (dir_events, pullback_events)
+
+    return results
+
+
 def ensure_tables_exist():
     from datasource.database import DATABASE_URL
     is_postgres = not DATABASE_URL.startswith("sqlite")
@@ -492,6 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--multi", type=float, default=1.5, help="ATR倍数，默认1.5")
     p.add_argument("--log-level", default="INFO", help="日志级别: DEBUG/INFO/WARNING/ERROR")
     p.add_argument("--batch-backfill", default="", help="批量回补开始日期（到上一交易日），格式 YYYY-MM-DD，如 2026-02-01")
+    p.add_argument("--end-date", default="", help="批量回补结束日期，格式 YYYY-MM-DD，如 2026-03-15")
     return p
 
 
@@ -510,9 +569,8 @@ def get_scanned_dates() -> set:
     return set(df["dt"].tolist())
 
 
-def batch_backfill(start_date: str, bars: int, log_level: str) -> None:
+def batch_backfill(start_date: str, bars: int, log_level: str, end_date: str = None) -> None:
     import qstock as qs
-    from features.merged_atr_rope_breakout_volume_delta import MergedEngine
 
     logging.basicConfig(
         level=getattr(logging, str(log_level).upper(), logging.INFO),
@@ -520,7 +578,7 @@ def batch_backfill(start_date: str, bars: int, log_level: str) -> None:
     )
 
     today = datetime.now().strftime("%Y-%m-%d")
-    end_date = today
+    end_date = end_date or today
 
     trade_dates = qs.get_dates(start_date, end_date)
     trade_dates = [d[:4] + "-" + d[4:6] + "-" + d[6:8] for d in trade_dates]
@@ -545,51 +603,46 @@ def batch_backfill(start_date: str, bars: int, log_level: str) -> None:
     stock_list = load_stock_pool_from_db()
     logger.info("股票池: %d 只", len(stock_list))
 
-    for scan_date in tqdm(to_scan, desc=f"批量回补 {start_date}~{end_date}", unit="天"):
-        day_dir_events: List[Dict] = []
-        day_pullback_events: List[Dict] = []
-        skipped_no_data = 0
-        skipped_insufficient = 0
+    freq = "d"
 
-        for stock in stock_list:
-            ts_code = stock["ts_code"]
-            name = stock.get("name", "") or ""
-            market = infer_market(ts_code)
-            if market is None:
-                continue
+    for stock in tqdm(stock_list, desc=f"批量回补 {start_date}~{end_date}", unit="只"):
+        ts_code = stock["ts_code"]
+        name = stock.get("name", "") or ""
+        market = infer_market(ts_code)
+        if market is None:
+            continue
 
-            code, pullback_cnt, dir_events, pull_events = process_stock_no_write(
-                ts_code, name, "d", bars, scan_date
-            )
-            if code == -1:
-                skipped_no_data += 1
-                continue
-            if code == -2:
-                skipped_insufficient += 1
-                continue
+        preloaded_data = load_kline_data_from_db(ts_code, freq, bars, to_scan[-1])
+        if preloaded_data is None:
+            continue
 
-            day_dir_events.extend(dir_events)
-            day_pullback_events.extend(pull_events)
+        stock_results = process_stock_for_dates(
+            preloaded_data, ts_code, name, freq, bars, to_scan
+        )
 
-        if day_dir_events or day_pullback_events:
-            from datasource.database import bulk_upsert
-            engine = get_engine()
-            with engine.connect() as conn:
-                if day_dir_events:
-                    bulk_upsert(conn, "breakout_dir_turn_events", pd.DataFrame(day_dir_events), ["ts_code", "freq", "event_time"])
-                if day_pullback_events:
-                    bulk_upsert(conn, "breakout_pullback_buy_events", pd.DataFrame(day_pullback_events), ["ts_code", "freq", "buy_time"])
-            engine.dispose()
+        for scan_date in to_scan:
+            dir_events, pullback_events = stock_results.get(scan_date, ([], []))
 
-        total_dir_turn += len(day_dir_events)
-        total_pullback += len(day_pullback_events)
+            if dir_events or pullback_events:
+                from datasource.database import bulk_upsert
+                engine = get_engine()
+                with engine.connect() as conn:
+                    if dir_events:
+                        bulk_upsert(conn, "breakout_dir_turn_events", pd.DataFrame(dir_events), ["ts_code", "freq", "event_time"])
+                    if pullback_events:
+                        bulk_upsert(conn, "breakout_pullback_buy_events", pd.DataFrame(pullback_events), ["ts_code", "freq", "buy_time"])
+                engine.dispose()
+
+                total_dir_turn += len(dir_events)
+                total_pullback += len(pullback_events)
+
         processed += 1
 
-        logger.info("  [%s] 翻多事件: %d，回踩买点: %d (跳过无数据: %d，数据不足: %d)",
-                    scan_date, len(day_dir_events), len(day_pullback_events), skipped_no_data, skipped_insufficient)
+        if processed % 100 == 0:
+            logger.info("已处理 %d / %d 只股票", processed, len(stock_list))
 
     logger.info("=" * 60)
-    logger.info("批量回补完成！共处理 %d 个交易日", processed)
+    logger.info("批量回补完成！共处理 %d 只股票", processed)
     logger.info("翻多事件: %d 个，回踩买点: %d 个", total_dir_turn, total_pullback)
 
 
@@ -601,6 +654,7 @@ def main():
             start_date=args.batch_backfill,
             bars=args.bars,
             log_level=args.log_level,
+            end_date=args.end_date if args.end_date else None,
         )
         return
 

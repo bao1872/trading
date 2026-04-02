@@ -99,15 +99,33 @@ def ensure_table_exists(engine):
                 text("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'stock_financial_score_pool'")
             )
             exists = result.fetchone()[0] > 0
+            pk_def = "id SERIAL PRIMARY KEY"
         else:
             result = conn.execute(
                 text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = 'stock_financial_score_pool'")
             )
             exists = result.fetchone()[0] > 0
-        
+            pk_def = "id INTEGER PRIMARY KEY AUTOINCREMENT"
+
         if not exists:
             logger.info("创建表 stock_financial_score_pool ...")
-            conn.execute(text(FINANCIAL_SCORE_POOL_TABLE.split(";")[0]))
+            create_sql = f"""
+CREATE TABLE IF NOT EXISTS stock_financial_score_pool (
+    {pk_def},
+    ts_code VARCHAR(20) NOT NULL,
+    stock_name VARCHAR(50),
+    report_date VARCHAR(8) NOT NULL,
+    total_score FLOAT,
+    规模与增长_score FLOAT,
+    盈利能力_score FLOAT,
+    利润质量_score FLOAT,
+    现金创造能力_score FLOAT,
+    资产效率与资金占用_score FLOAT,
+    边际变化与持续性_score FLOAT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(ts_code, report_date)
+)"""
+            conn.execute(text(create_sql))
             conn.commit()
             logger.info("表创建完成")
         else:
