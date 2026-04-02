@@ -107,11 +107,22 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str):
         return
 
     combined_df = pd.concat(all_dfs, ignore_index=True)
-    print(f"\n正在保存 {len(combined_df)} 条数据到数据库...")
+    total_rows = len(combined_df)
+    print(f"\n正在保存 {total_rows} 条数据到数据库...")
+
+    batch_size = 50000
+    total_batches = (total_rows + batch_size - 1) // batch_size
+    saved_count = 0
 
     try:
-        bulk_upsert(session, "stock_k_data", combined_df, unique_keys=["ts_code", "freq", "bar_time"])
-        print(f"✅ 成功保存 {len(combined_df)} 条数据")
+        for i in range(total_batches):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, total_rows)
+            batch_df = combined_df.iloc[start_idx:end_idx]
+            bulk_upsert(session, "stock_k_data", batch_df, unique_keys=["ts_code", "freq", "bar_time"])
+            saved_count += len(batch_df)
+            print(f"  批次 {i+1}/{total_batches}: 已保存 {saved_count}/{total_rows} 条")
+        print(f"✅ 成功保存 {saved_count} 条数据")
     except Exception as e:
         print(f"保存失败: {e}")
 
