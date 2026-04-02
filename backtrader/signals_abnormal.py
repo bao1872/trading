@@ -17,33 +17,8 @@ from utils.theme_aggregation import (
     load_theme_mapping, build_concept_to_theme_map, get_excluded_concepts,
     aggregate_theme_with_concept_detail
 )
-from datasource.k_data_loader import iter_k_data_with_names
+from datasource.k_data_loader import iter_k_data_with_names, load_all_stock_data
 from datasource.database import get_session, bulk_upsert, execute_sql
-
-
-def load_all_stock_data(freq: str, start_date: str = None, end_date: str = None) -> tuple:
-    """
-    一次性加载所有股票数据到DataFrame
-    """
-    df_list = []
-    name_map = {}
-
-    for code, name, df in iter_k_data_with_names(freq=freq, start_date=start_date, end_date=end_date):
-        if df.empty or 'volume' not in df.columns:
-            continue
-        df = df.reset_index()
-        df['ts_code'] = code
-        df['name'] = name
-        df_list.append(df)
-        name_map[code] = name
-
-    if not df_list:
-        return pd.DataFrame(), name_map
-
-    result = pd.concat(df_list, ignore_index=False)
-    result = result.sort_values(['ts_code', 'bar_time'])
-    result = result.reset_index(drop=True)
-    return result, name_map
 
 
 def calculate_5day_rolling_zscore_vectorized(
@@ -93,11 +68,18 @@ def calculate_5day_rolling_zscore_vectorized(
 
 def ensure_signal_tables(session) -> None:
     """确保信号表存在，不存在则创建"""
-    from datasource.database import execute_sql
+    from datasource.database import execute_sql, DATABASE_URL
+    is_postgres = not DATABASE_URL.startswith("sqlite")
+
+    def pk_sql():
+        if is_postgres:
+            return "id SERIAL PRIMARY KEY"
+        return "id INTEGER PRIMARY KEY AUTOINCREMENT"
+
     tables_sql = {
-        'theme_signals_rolling': """
+        'theme_signals_rolling': f"""
             CREATE TABLE IF NOT EXISTS theme_signals_rolling (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {pk_sql()},
                 snapshot_date DATE NOT NULL,
                 period VARCHAR(20),
                 theme VARCHAR(100) NOT NULL,
@@ -113,9 +95,9 @@ def ensure_signal_tables(session) -> None:
                 UNIQUE(snapshot_date, theme)
             )
         """,
-        'concept_signals_rolling': """
+        'concept_signals_rolling': f"""
             CREATE TABLE IF NOT EXISTS concept_signals_rolling (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {pk_sql()},
                 snapshot_date DATE NOT NULL,
                 concept VARCHAR(100) NOT NULL,
                 theme VARCHAR(100),
@@ -129,9 +111,9 @@ def ensure_signal_tables(session) -> None:
                 UNIQUE(snapshot_date, concept)
             )
         """,
-        'stock_anomaly_signals_rolling': """
+        'stock_anomaly_signals_rolling': f"""
             CREATE TABLE IF NOT EXISTS stock_anomaly_signals_rolling (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {pk_sql()},
                 snapshot_date DATE NOT NULL,
                 code VARCHAR(20) NOT NULL,
                 name VARCHAR(50),
@@ -249,14 +231,15 @@ def generate_rolling_signals(
     zscore_threshold: float = 2.0,
     top_n_themes: int = 10,
     top_n_stocks: int = 20,
-    top_n_concepts: int = 20
+    top_n_concepts: int = 20,
+    limit_stocks: int = None
 ) -> dict:
     """生成滚动窗口异动信号"""
     snapshot_ts = pd.Timestamp(snapshot_date) if snapshot_date else pd.Timestamp.now()
     start_date = (snapshot_ts - pd.Timedelta(days=51 + 60)).strftime('%Y-%m-%d')
 
     print("加载全量股票数据...")
-    all_data, name_map = load_all_stock_data(freq, start_date=start_date)
+    all_data, name_map = load_all_stock_data(freq, start_date=start_date, limit_stocks=limit_stocks)
 
     if all_data.empty:
         return {

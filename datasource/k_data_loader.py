@@ -167,7 +167,8 @@ def iter_k_data_with_names(
     freq: str = 'd',
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    name_map: Optional[dict] = None
+    name_map: Optional[dict] = None,
+    limit_stocks: Optional[int] = None
 ):
     """
     迭代器方式逐股票加载K线数据（外部传入name_map，避免重复查询）
@@ -178,6 +179,7 @@ def iter_k_data_with_names(
         start_date: 开始日期
         end_date: 结束日期
         name_map: 股票代码->名称的映射，None则自动从数据库加载
+        limit_stocks: 限制股票数量（用于测试），None表示不限制
 
     Yields:
         (code, name, DataFrame) 元组
@@ -209,6 +211,9 @@ def iter_k_data_with_names(
 
     df["bar_time"] = pd.to_datetime(df["bar_time"])
     codes = df['ts_code'].unique()
+
+    if limit_stocks:
+        codes = codes[:limit_stocks]
 
     if name_map is None:
         name_map = build_name_map(list(codes))
@@ -294,6 +299,48 @@ def load_k_data_as_dict(
         }
 
     return result
+
+
+def load_all_stock_data(
+    freq: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit_stocks: Optional[int] = None
+) -> tuple:
+    """
+    一次性加载所有股票数据到DataFrame（统一实现，SSOT）
+
+    Args:
+        freq: 周期 ('daily', 'weekly', 'min60', 'min15')
+        start_date: 开始日期
+        end_date: 结束日期
+        limit_stocks: 限制股票数量（用于测试），None表示不限制
+
+    Returns:
+        (DataFrame, name_map) 元组
+    """
+    df_list = []
+    name_map = {}
+
+    for code, name, df in iter_k_data_with_names(
+        freq=freq, start_date=start_date, end_date=end_date,
+        name_map=None, limit_stocks=limit_stocks
+    ):
+        if df.empty or 'volume' not in df.columns:
+            continue
+        df = df.reset_index()
+        df['ts_code'] = code
+        df['name'] = name
+        df_list.append(df)
+        name_map[code] = name
+
+    if not df_list:
+        return pd.DataFrame(), name_map
+
+    result = pd.concat(df_list, ignore_index=False)
+    result = result.sort_values(['ts_code', 'bar_time'])
+    result = result.reset_index(drop=True)
+    return result, name_map
 
 
 def get_stock_name(ts_code: str) -> Optional[str]:

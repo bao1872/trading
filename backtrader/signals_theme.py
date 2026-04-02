@@ -16,17 +16,24 @@ from utils.theme_aggregation import (
     get_excluded_concepts,
     get_stock_themes
 )
-from datasource.k_data_loader import iter_k_data_with_names
+from datasource.k_data_loader import iter_k_data_with_names, load_all_stock_data
 from datasource.database import get_session, bulk_upsert
 
 
 def ensure_signal_tables(session) -> None:
     """确保信号表存在，不存在则创建"""
-    from datasource.database import execute_sql
+    from datasource.database import execute_sql, DATABASE_URL
+    is_postgres = not DATABASE_URL.startswith("sqlite")
+
+    def pk_sql():
+        if is_postgres:
+            return "id SERIAL PRIMARY KEY"
+        return "id INTEGER PRIMARY KEY AUTOINCREMENT"
+
     tables_sql = {
-        'theme_signals': """
+        'theme_signals': f"""
             CREATE TABLE IF NOT EXISTS theme_signals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {pk_sql()},
                 snapshot_date DATE NOT NULL,
                 period VARCHAR(20),
                 theme VARCHAR(100) NOT NULL,
@@ -42,9 +49,9 @@ def ensure_signal_tables(session) -> None:
                 UNIQUE(snapshot_date, theme)
             )
         """,
-        'concept_signals': """
+        'concept_signals': f"""
             CREATE TABLE IF NOT EXISTS concept_signals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {pk_sql()},
                 snapshot_date DATE NOT NULL,
                 concept VARCHAR(100) NOT NULL,
                 theme VARCHAR(100),
@@ -58,9 +65,9 @@ def ensure_signal_tables(session) -> None:
                 UNIQUE(snapshot_date, concept)
             )
         """,
-        'stock_anomaly_signals': """
+        'stock_anomaly_signals': f"""
             CREATE TABLE IF NOT EXISTS stock_anomaly_signals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {pk_sql()},
                 snapshot_date DATE NOT NULL,
                 code VARCHAR(20) NOT NULL,
                 name VARCHAR(50),
@@ -72,9 +79,9 @@ def ensure_signal_tables(session) -> None:
                 UNIQUE(snapshot_date, code)
             )
         """,
-        'limit_up_signals': """
+        'limit_up_signals': f"""
             CREATE TABLE IF NOT EXISTS limit_up_signals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {pk_sql()},
                 snapshot_date DATE NOT NULL,
                 theme VARCHAR(100),
                 streak_key VARCHAR(20),
@@ -292,37 +299,13 @@ def _streak_sort_key(key):
     return (0, 0)
 
 
-def load_all_stock_data(freq: str, start_date: str = None, end_date: str = None) -> tuple:
-    """
-    一次性加载所有股票数据到一个DataFrame
-    """
-    df_list = []
-    name_map = {}
-
-    for code, name, df in iter_k_data_with_names(freq=freq, start_date=start_date, end_date=end_date):
-        if df.empty or 'volume' not in df.columns:
-            continue
-        df = df.reset_index()
-        df['ts_code'] = code
-        df['name'] = name
-        df_list.append(df)
-        name_map[code] = name
-
-    if not df_list:
-        return pd.DataFrame(), name_map
-
-    result = pd.concat(df_list, ignore_index=False)
-    result = result.sort_values(['ts_code', 'bar_time'])
-    result = result.reset_index(drop=True)
-    return result, name_map
-
-
 def process_all_stocks_vectorized(
     freq: str,
     window: int,
     snapshot_date: str,
     lookback: int = 51,
-    filter_rising: bool = True
+    filter_rising: bool = True,
+    limit_stocks: int = None
 ) -> pd.DataFrame:
     """
     向量化一次性计算所有股票的Z-Score和涨跌停信息
@@ -344,7 +327,7 @@ def process_all_stocks_vectorized(
         start_date = (target_date - pd.Timedelta(days=lookback + 60)).strftime('%Y-%m-%d')
 
     print(f"  加载数据范围: {start_date} 到 {snapshot_date or '最新'}...")
-    all_data, name_map = load_all_stock_data(freq, start_date=start_date, end_date=None)
+    all_data, name_map = load_all_stock_data(freq, start_date=start_date, end_date=None, limit_stocks=limit_stocks)
 
     if all_data.empty:
         return pd.DataFrame()
@@ -600,7 +583,8 @@ def generate_signals(
     top_n_themes: int = 10,
     top_n_stocks: int = 20,
     top_n_concepts: int = 20,
-    concept_xlsx_path: str = '../stock_concepts_cache.xlsx'
+    concept_xlsx_path: str = '../stock_concepts_cache.xlsx',
+    limit_stocks: int = None
 ) -> dict:
     """
     生成主题投资信号
@@ -618,7 +602,7 @@ def generate_signals(
     excluded = get_excluded_concepts(theme_mapping)
 
     print("向量化计算所有指标...")
-    volume_df = process_all_stocks_vectorized(period, window=window, snapshot_date=snapshot_date, lookback=51)
+    volume_df = process_all_stocks_vectorized(period, window=window, snapshot_date=snapshot_date, lookback=51, limit_stocks=limit_stocks)
 
     if volume_df.empty:
         return {

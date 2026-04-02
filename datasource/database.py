@@ -403,9 +403,16 @@ def query_df(
             sql += " WHERE " + " AND ".join(where_clauses)
 
     if order_by:
-        desc = order_by.startswith("-")
-        col_name = order_by.lstrip("-")
-        sql += f" ORDER BY {col_name} {'DESC' if desc else 'ASC'}"
+        order_parts = []
+        for part in order_by.split(','):
+            part = part.strip()
+            if not part:
+                continue
+            desc = part.startswith("-")
+            col_name = part.lstrip("+-")
+            order_parts.append(f"{col_name} {'DESC' if desc else 'ASC'}")
+        if order_parts:
+            sql += " ORDER BY " + ", ".join(order_parts)
 
     if limit:
         sql += f" LIMIT {limit}"
