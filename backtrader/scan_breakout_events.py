@@ -396,9 +396,17 @@ def process_stock_no_write(
 
 
 def ensure_tables_exist():
-    dir_turn_table = """
+    from datasource.database import DATABASE_URL
+    is_postgres = not DATABASE_URL.startswith("sqlite")
+
+    def pk_sql():
+        if is_postgres:
+            return "id SERIAL PRIMARY KEY"
+        return "id INTEGER PRIMARY KEY AUTOINCREMENT"
+
+    dir_turn_table = f"""
     CREATE TABLE IF NOT EXISTS breakout_dir_turn_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        {pk_sql()},
         ts_code VARCHAR(20) NOT NULL,
         name VARCHAR(50),
         event_time VARCHAR(30) NOT NULL,
@@ -436,9 +444,9 @@ def ensure_tables_exist():
         UNIQUE(ts_code, freq, event_time)
     );
     """
-    pullback_table = """
+    pullback_table = f"""
     CREATE TABLE IF NOT EXISTS breakout_pullback_buy_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        {pk_sql()},
         ts_code VARCHAR(20) NOT NULL,
         name VARCHAR(50),
         buy_time VARCHAR(30) NOT NULL,
