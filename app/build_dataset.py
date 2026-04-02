@@ -37,7 +37,6 @@ if base_dir not in sys.path:
 
 from datasource.pytdx_client import connect_pytdx, get_kline_data
 from datasource.database import get_session, bulk_upsert
-from datasource.init_db import init_tables
 
 
 def resample_to_weekly(df_daily: pd.DataFrame) -> pd.DataFrame:
@@ -332,8 +331,6 @@ def main():
         print(f"⚠️  测试模式：仅处理 {len(cache_df)} 只股票")
 
     print(f"股票池总数: {len(cache_df)}")
-
-    init_tables()
 
     def do_daily():
         if args.update:
