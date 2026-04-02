@@ -8,18 +8,18 @@ Tushare 数据获取模块
 4. 支持股票池批量获取和增量更新
 5. 提供命令行接口
 
-用法：
+用法（在项目根目录运行）：
     # 单股票获取财务报表
-    python -m tushare_data.fetcher --ts_code 000657.SZ --start_date 20120101
+    python tushare_data/fetcher.py --ts_code 000657.SZ --start_date 20120101
 
     # 股票池批量获取财务报表（增量）
-    python -m tushare_data.fetcher --pool --years 5
+    python tushare_data/fetcher.py --pool --years 5
 
     # 单股票获取前十大流通股东
-    python -m tushare_data.fetcher --top10 --ts_code 000657.SZ --start_date 20200101
+    python tushare_data/fetcher.py --top10 --ts_code 000657.SZ --start_date 20200101
 
     # 股票池批量获取前十大流通股东（增量）
-    python -m tushare_data.fetcher --top10 --pool --years 5
+    python tushare_data/fetcher.py --top10 --pool --years 5
 """
 
 import argparse

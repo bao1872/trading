@@ -11,7 +11,8 @@
 2. 财务数据查询：--financial-query
 
 【数据库表】
-- stock_concept_cache：概念缓存（股票代码、概念列表、人气、市值）
+- stock_pools：概念缓存（股票代码、概念列表、人气、市值）
+- stock_popularity_rank：人气排名历史数据
 - stock_financial_summary：财务汇总数据（YTD 累计值）
 
 ================================================================================
@@ -27,7 +28,7 @@ Step 6.1: _verify_field_mapping() - loop=False 预检字段映射
 Step 6.1.5: 检查日期列存在，空值率
 Step 6.2: wc.get(loop=True) 获取首季度数据
 Step 6.3: _validate_saved_data() 抽样校验
-Step 6.4: Excel 输出（只获取首季度）
+Step 6.4: 测试模式仅采集首季度，校验通过后才可全量
 
 【全量模式 (--financial-query)】
 1. 遍历 all_queries.py 中的所有问句
@@ -36,7 +37,6 @@ Step 6.4: Excel 输出（只获取首季度）
 4. 数据清洗（_clean_dataframe_columns）
 5. 保存数据库（_save_summary_to_db）
 6. 随机等待 10-20秒 防限流
-7. 合并 Excel 输出
 
 【字段映射机制 (_clean_dataframe_columns)】
 1. 从问句提取目标字段列表
@@ -47,7 +47,7 @@ Step 6.4: Excel 输出（只获取首季度）
 
 【单季度值计算 (get_quarterly_single)】
 - 流量指标：groupby(ts_code).diff() 计算差分
-- Q1：保持原 YTD 值（无上期）
+- Q1：保持原 YTD 值（diff() 后为 NaN）
 - 时点指标（总资产等）：不处理，直接使用
 
 【关键函数清单】
@@ -202,33 +202,24 @@ def save_concepts_to_db(df: pd.DataFrame, session) -> int:
 
 def update_cache_from_pywencai(save_to_db: bool = True):
     """
-    使用 pywencai 自动获取所有 A 股的概念、人气和市值，并将其保存到 Excel 文件和数据库。
-    
+    使用 pywencai 自动获取所有 A 股的概念、人气和市值，并将其保存到数据库。
+
     Args:
-        save_to_db: 是否同时保存到数据库，默认 True
+        save_to_db: 是否保存到数据库，默认 True
     """
     logger.info("正在通过问财获取所有 A 股的概念、人气及市值数据...")
     try:
         query_text = '非 st，主板或创业板或科创板，所属概念，人气排名，流通市值，总市值，所属同花顺行业，所属同花顺二级行业，行业平均 PE'
         res = wc.get(query=query_text, loop=True, sleep=2, cookie=None)
-        
+
         if res is None or res.empty:
             logger.error("未能从问财获取到数据。可能是 Cookie 已过期。")
             return
 
         logger.info(f"成功获取到 {len(res)} 条原始数据，正在处理...")
         transformed_df = _transform_raw_data(res)
-    
+
         if transformed_df is not None and not transformed_df.empty:
-            logger.info("正在将缓存数据写入 Excel 文件")
-            
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            excel_path = os.path.join(project_root, 'stock_concepts_cache.xlsx')
-            
-            transformed_df.to_excel(excel_path, index=False, engine='openpyxl')
-            logger.info(f"成功保存数据到：{excel_path}")
-            logger.info(f"共保存 {len(transformed_df)} 条股票数据")
-            
             if save_to_db:
                 logger.info("正在将缓存数据写入数据库...")
                 from datasource.database import get_session
@@ -236,7 +227,7 @@ def update_cache_from_pywencai(save_to_db: bool = True):
                     count = save_concepts_to_db(transformed_df, session)
                     logger.info(f"成功保存 {count} 条数据到数据库 stock_pools 表")
         else:
-            logger.warning("数据转换失败或结果为空，未写入 Excel 文件。")
+            logger.warning("数据转换失败或结果为空。")
 
     except Exception as e:
         logger.error(f"生成概念缓存时发生错误：{e}")
@@ -827,7 +818,7 @@ def _validate_saved_data(report_date: str, session, sample_count: int = 5) -> tu
 
 def execute_financial_queries(group_name: str = None, test_mode: bool = False, save_to_db: bool = True, incremental: bool = False):
     """
-    执行财务汇总数据查询并保存到 Excel 和 stock_financial_summary 表
+    执行财务汇总数据查询并保存到 stock_financial_summary 表
 
     Args:
         group_name: 指定要查询的组名（仅支持 FINANCIAL_SUMMARY）
@@ -838,26 +829,13 @@ def execute_financial_queries(group_name: str = None, test_mode: bool = False, s
     from tqdm import tqdm
     import sys
 
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.insert(0, project_root)
-
     from pywencai_queries.all_queries import ALL_QUERIES, START_YEAR, YEAR_LIST, REPORT_PERIOD_LIST
-
-    output_dir = os.path.join(project_root, 'output')
-    os.makedirs(output_dir, exist_ok=True)
-
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     groups_to_query = ALL_QUERIES
 
     logger.info(f"起始年份: {START_YEAR}")
     logger.info(f"年份列表: {YEAR_LIST}")
     logger.info(f"报告期数量: {len(REPORT_PERIOD_LIST)}")
-    logger.info(f"输出目录: {output_dir}")
-
-    group_names_cn = {
-        "FINANCIAL_SUMMARY": "核心财务指标汇总",
-    }
 
     first_query = groups_to_query["FINANCIAL_SUMMARY"][0]
     expected_date = _extract_expected_date(first_query)
@@ -1018,15 +996,7 @@ def execute_financial_queries(group_name: str = None, test_mode: bool = False, s
                 sleep_time = random.randint(10, 20)
                 time.sleep(sleep_time)
 
-    if all_results:
-        combined_df = pd.concat(all_results, ignore_index=True)
-        suffix = "_test" if test_mode else ""
-        output_filename = f"financial_FINANCIAL_SUMMARY{suffix}_{timestamp}.xlsx"
-        output_path = os.path.join(output_dir, output_filename)
-        combined_df.to_excel(output_path, index=False, engine='openpyxl')
-        logger.info(f"\n查询完成！总数据行数: {len(combined_df)}, Excel: {output_path}")
-    else:
-        logger.warning("\n未获取到任何有效数据")
+        logger.info(f"查询完成！共处理 {len(all_results)} 个报告期")
 
 
 if __name__ == '__main__':
@@ -1037,9 +1007,9 @@ if __name__ == '__main__':
     if base_dir not in sys.path:
         sys.path.insert(0, base_dir)
     
-    parser = argparse.ArgumentParser(description="股票概念缓存生成器")
-    parser.add_argument("--update-cache", action="store_true", help="更新股票概念缓存（同时保存到 Excel 和数据库）")
-    parser.add_argument("--no-db", action="store_true", help="更新缓存时不保存到数据库（只保存 Excel）")
+    parser = argparse.ArgumentParser(description="同花顺数据查询工具")
+    parser.add_argument("--update-cache", action="store_true", help="更新股票概念缓存（保存到数据库）")
+    parser.add_argument("--no-db", action="store_true", help="不保存到数据库（调试用）")
     parser.add_argument("--scan-popularity", action="store_true", help="扫描指定日期范围内人气排名")
     parser.add_argument("--start-date", type=str, default=None, help="扫描开始日期，格式 YYYY-MM-DD，默认为结束日期往前推 1 年")
     parser.add_argument("--end-date", type=str, default=None, help="扫描结束日期，格式 YYYY-MM-DD")
@@ -1048,10 +1018,10 @@ if __name__ == '__main__':
     parser.add_argument("--no-incremental", action="store_true", help="禁用增量更新（全量覆盖）")
     parser.add_argument("--force-update-date", type=str, default=None, help="强制更新指定日期的数据（先删除再插入）")
     parser.add_argument("--create-table", action="store_true", help="创建数据库表（如果不存在）")
-    parser.add_argument("--financial-query", action="store_true", help="执行财务数据查询并保存到 Excel")
+    parser.add_argument("--financial-query", action="store_true", help="执行财务数据查询并保存到数据库")
     parser.add_argument("--group", type=str, default=None, help="指定财务查询的组名（配合 --financial-query 使用）")
     parser.add_argument("--test", action="store_true", help="测试模式，每组只查询第一条问句")
-    parser.add_argument("--incremental", action="store_true", help="增量更新模式，跳过已有数据的报告期+组")
+    parser.add_argument("--incremental", action="store_true", help="增量更新模式，跳过已有数据的报告期")
     
     args = parser.parse_args()
     
