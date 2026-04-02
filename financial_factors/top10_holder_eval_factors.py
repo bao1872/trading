@@ -54,7 +54,7 @@ import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -780,47 +780,13 @@ def _grouped_agg(events: pd.DataFrame, action_type: str, cols: List[str]) -> pd.
 
 
 def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """基于传入事件全量重算股东画像。
+
+    注意：这里显式不再把 existing_profiles 伪造成 dummy events 回灌，
+    避免增量模式下旧样本被重复累计并污染画像统计。
+    """
     if events.empty:
         return pd.DataFrame()
-
-    if existing_profiles is not None and not existing_profiles.empty:
-        existing_holders = set(existing_profiles["holder_name_std"].dropna().unique())
-        new_holders_events = events[events["holder_name_std"].isin(existing_holders)]
-        if not new_holders_events.empty:
-            dummy_rows = []
-            for _, rp in existing_profiles.iterrows():
-                name = rp["holder_name_std"]
-                n_entry = int(rp["sample_entry"]) if pd.notna(rp.get("sample_entry")) else 0
-                n_add = int(rp["sample_add"]) if pd.notna(rp.get("sample_add")) else 0
-                n_reduce = int(rp["sample_reduce"]) if pd.notna(rp.get("sample_reduce")) else 0
-                n_total = int(rp["sample_total"]) if pd.notna(rp.get("sample_total")) else 0
-                if n_total == 0:
-                    continue
-                entry_er = rp["avg_excess_ret_60_entry"] if pd.notna(rp.get("avg_excess_ret_60_entry")) else 0.0
-                add_er = rp["avg_excess_ret_60_add"] if pd.notna(rp.get("avg_excess_ret_60_add")) else 0.0
-                entry_mdd = rp["avg_mdd_60_entry"] if pd.notna(rp.get("avg_mdd_60_entry")) else 0.0
-                add_mdd = rp["avg_mdd_60_add"] if pd.notna(rp.get("avg_mdd_60_add")) else 0.0
-                entry_wr = rp["win_rate_60_entry"] if pd.notna(rp.get("win_rate_60_entry")) else 0.5
-                add_wr = rp["win_rate_60_add"] if pd.notna(rp.get("win_rate_60_add")) else 0.5
-                holder_type = rp.get("holder_type")
-                industry_l2 = rp.get("industry_l2")
-                for _ in range(n_entry):
-                    dummy_rows.append({"holder_name_std": name, "holder_type": holder_type, "industry_l2": industry_l2,
-                                       "action_type": "entry", "future_excess_ret_20": entry_er, "future_excess_ret_60": entry_er,
-                                       "future_excess_ret_120": entry_er, "future_mdd_60": entry_mdd, "win_rate_60": entry_wr,
-                                       "ret_120": None, "turnover_value_mean_20": None, "mom_60": None})
-                for _ in range(n_add):
-                    dummy_rows.append({"holder_name_std": name, "holder_type": holder_type, "industry_l2": industry_l2,
-                                       "action_type": "add", "future_excess_ret_20": add_er, "future_excess_ret_60": add_er,
-                                       "future_excess_ret_120": add_er, "future_mdd_60": add_mdd, "win_rate_60": add_wr,
-                                       "ret_120": None, "turnover_value_mean_20": None, "mom_60": None})
-                for _ in range(n_reduce):
-                    dummy_rows.append({"holder_name_std": name, "holder_type": holder_type, "industry_l2": industry_l2,
-                                       "action_type": "reduce", "future_excess_ret_20": None, "future_excess_ret_60": None,
-                                       "future_excess_ret_120": None, "future_mdd_60": None, "win_rate_60": None,
-                                       "ret_120": None, "turnover_value_mean_20": None, "mom_60": None})
-            if dummy_rows:
-                events = pd.concat([events, pd.DataFrame(dummy_rows)], ignore_index=True)
 
     events = events.copy()
     for col in ["future_excess_ret_20", "future_excess_ret_60", "future_excess_ret_120",
@@ -874,12 +840,6 @@ def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.D
 
     for col in ["sample_total", "sample_entry", "sample_add", "sample_reduce", "sample_hold"]:
         profiles_df[col] = profiles_df[col].fillna(0).astype(int)
-
-    for col in ["future_excess_ret_20_entry", "future_excess_ret_60_entry", "future_excess_ret_120_entry",
-                "future_excess_ret_20_add", "future_excess_ret_60_add", "future_excess_ret_120_add",
-                "future_mdd_60_entry", "future_mdd_60_add"]:
-        if col in profiles_df.columns:
-            profiles_df[col] = profiles_df[col]
 
     prior_scores = profiles_df["holder_type"].map(map_holder_prior_score)
     profiles_df["prior_score"] = prior_scores
@@ -959,15 +919,13 @@ def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.D
         "future_excess_ret_20_add": "avg_excess_ret_20_add",
         "future_excess_ret_60_add": "avg_excess_ret_60_add",
         "future_excess_ret_120_add": "avg_excess_ret_120_add",
+        "future_mdd_60_entry": "avg_mdd_60_entry",
+        "future_mdd_60_add": "avg_mdd_60_add",
     }
     profiles_df = profiles_df.rename(columns=rename_cols)
     result_cols = [rename_cols.get(c, c) for c in result_cols]
     result_cols = [c for c in result_cols if c in profiles_df.columns]
-
-    new_profiles_df = profiles_df[result_cols].copy()
-    if existing_profiles is not None and not existing_profiles.empty:
-        new_profiles_df = merge_profiles(new_profiles_df, existing_profiles)
-    return new_profiles_df
+    return profiles_df[result_cols].copy()
 
 
 
@@ -988,19 +946,50 @@ def build_holder_industry_scores(events: pd.DataFrame, profiles: pd.DataFrame) -
     return result
 
 
-def compute_stock_scores(df: pd.DataFrame, profiles: pd.DataFrame, stock_df_map: Dict[str, pd.DataFrame],
+def format_report_key(value: object) -> str:
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.notna(ts):
+        return pd.Timestamp(ts).strftime("%Y%m%d")
+    return str(value)
+
+
+def filter_events_for_profile_asof(events: pd.DataFrame, effective_date: pd.Timestamp, min_realized_days: int = 90) -> pd.DataFrame:
+    """仅保留在当前时点之前、且后验观察窗口基本已走完的历史事件。
+
+    这里使用保守的 90 个自然日近似 60 个交易日，避免把尚未在当时真正可见的
+    future_excess_ret_60 / future_mdd_60 提前泄露到更早的评分时点。
+    """
+    if events.empty or pd.isna(effective_date):
+        return pd.DataFrame(columns=events.columns)
+    if "effective_date" not in events.columns:
+        return events.iloc[0:0].copy()
+    cutoff = pd.Timestamp(effective_date) - pd.Timedelta(days=min_realized_days)
+    eff = pd.to_datetime(events["effective_date"], errors="coerce")
+    mask = eff.notna() & (eff <= cutoff)
+    return events.loc[mask].copy()
+
+
+def build_quality_maps_asof(events: pd.DataFrame, effective_date: pd.Timestamp) -> Tuple[Dict[str, float], Dict[Tuple[str, str], float]]:
+    hist_events = filter_events_for_profile_asof(events, effective_date)
+    if hist_events.empty:
+        return {}, {}
+    hist_profiles = build_holder_profiles(hist_events)
+    profile_map = hist_profiles.set_index("holder_name_std")["final_holder_quality"].to_dict() if not hist_profiles.empty else {}
+    industry_map = build_holder_industry_scores(hist_events, hist_profiles) if not hist_profiles.empty else {}
+    return profile_map, industry_map
+
+
+def compute_stock_scores(df: pd.DataFrame, events: pd.DataFrame, stock_df_map: Dict[str, pd.DataFrame],
                          event_cache: Dict[Tuple[str, pd.Timestamp], EventMarketMetrics],
-                         holder_industry_quality_map: Optional[Dict[Tuple[str, str], float]] = None,
                          existing_scores: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    profile_map = profiles.set_index("holder_name_std")["final_holder_quality"].to_dict() if not profiles.empty else {}
     records: List[Dict[str, object]] = []
-    holder_industry_quality_map = holder_industry_quality_map or {}
     existing_keys: Set[Tuple[str, str]] = set()
     if existing_scores is not None and not existing_scores.empty:
         existing_keys = set(zip(
             existing_scores["ts_code"].astype(str),
-            existing_scores["report_date"].astype(str),
+            existing_scores["report_date"].map(format_report_key),
         ))
+    quality_cache: Dict[str, Tuple[Dict[str, float], Dict[Tuple[str, str], float]]] = {}
 
     for ts_code, g in df.groupby("ts_code"):
         stock_df = stock_df_map.get(ts_code)
@@ -1013,14 +1002,18 @@ def compute_stock_scores(df: pd.DataFrame, profiles: pd.DataFrame, stock_df_map:
             snap = g[g["report_date"] == report_date].copy().sort_values(["holder_rank", "holder_name_std"])
             ann_date = snap["ann_date"].dropna().min()
             metrics = event_cache.get((ts_code, pd.Timestamp(report_date)))
-            if (ts_code, str(report_date)) in existing_keys:
+            report_key = format_report_key(report_date)
+            if (ts_code, report_key) in existing_keys:
                 prev_snap = snap
-                prev_report_date = report_date
                 continue
             if pd.isna(ann_date) or metrics is None:
                 continue
 
             current_industry = snap["industry_l2"].dropna().iloc[0] if "industry_l2" in snap.columns and snap["industry_l2"].notna().any() else None
+            effective_key = metrics.effective_date.strftime("%Y%m%d")
+            if effective_key not in quality_cache:
+                quality_cache[effective_key] = build_quality_maps_asof(events, metrics.effective_date)
+            profile_map, holder_industry_quality_map = quality_cache[effective_key]
             base_quality = snap["holder_name_std"].map(profile_map).fillna(snap["holder_type"].map(map_holder_prior_score))
             if current_industry:
                 ind_quality = snap["holder_name_std"].map(lambda x: holder_industry_quality_map.get((x, str(current_industry)), np.nan))
@@ -1385,16 +1378,14 @@ def process_batch(limit: Optional[int], lookback_years: int, dry_run: bool,
     event_cache = build_event_metrics_cache(top10_df, stock_df_map, bench_df_map, industry_bench_map)
 
     existing_scores: Optional[pd.DataFrame] = None
-    existing_profiles: Optional[pd.DataFrame] = None
     if incremental and not dry_run:
         stock_codes = top10_df["ts_code"].unique().tolist()
-        existing_scores, existing_profiles = load_existing_data(stock_codes)
-        logger.info("增量模式：已有 scores %d 行, profiles %d 行", len(existing_scores), len(existing_profiles))
+        existing_scores, _ = load_existing_data(stock_codes)
+        logger.info("增量模式：已有 scores %d 行", len(existing_scores))
 
     events_df = build_change_events(top10_df.copy(), event_cache)
-    profiles_df = build_holder_profiles(events_df, existing_profiles=existing_profiles) if not events_df.empty else pd.DataFrame()
-    holder_industry_quality_map = build_holder_industry_scores(events_df, profiles_df) if not events_df.empty else {}
-    scores_df = compute_stock_scores(top10_df, profiles_df, stock_df_map, event_cache, holder_industry_quality_map, existing_scores=existing_scores)
+    profiles_df = build_holder_profiles(events_df) if not events_df.empty else pd.DataFrame()
+    scores_df = compute_stock_scores(top10_df, events_df, stock_df_map, event_cache, existing_scores=existing_scores)
 
     n1 = save_profiles(profiles_df, dry_run=dry_run)
     n2 = save_scores(scores_df, dry_run=dry_run)
@@ -1422,15 +1413,13 @@ def process_single(ts_code: str, lookback_years: int, dry_run: bool,
     event_cache = build_event_metrics_cache(top10_df, {ts_code: stock_df}, {ts_code: bench_df}, {})
 
     existing_scores: Optional[pd.DataFrame] = None
-    existing_profiles: Optional[pd.DataFrame] = None
     if incremental and not dry_run:
-        existing_scores, existing_profiles = load_existing_data([ts_code])
-        logger.info("增量模式：已有 scores %d 行, profiles %d 行", len(existing_scores), len(existing_profiles))
+        existing_scores, _ = load_existing_data([ts_code])
+        logger.info("增量模式：已有 scores %d 行", len(existing_scores))
 
     events_df = build_change_events(top10_df.copy(), event_cache)
-    profiles_df = build_holder_profiles(events_df, existing_profiles=existing_profiles) if not events_df.empty else pd.DataFrame()
-    holder_industry_quality_map = build_holder_industry_scores(events_df, profiles_df) if not events_df.empty else {}
-    scores_df = compute_stock_scores(top10_df, profiles_df, {ts_code: stock_df}, event_cache, holder_industry_quality_map, existing_scores=existing_scores)
+    profiles_df = build_holder_profiles(events_df) if not events_df.empty else pd.DataFrame()
+    scores_df = compute_stock_scores(top10_df, events_df, {ts_code: stock_df}, event_cache, existing_scores=existing_scores)
     n1 = save_profiles(profiles_df, dry_run=dry_run)
     n2 = save_scores(scores_df, dry_run=dry_run)
     logger.info("%s 完成：profiles=%s, scores=%s", ts_code, n1, n2)
@@ -1453,11 +1442,11 @@ def main() -> None:
     parser.add_argument("--fqt", type=int, default=0, help="复权类型：0 不复权")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--industry_file", type=str, default=DEFAULT_INDUSTRY_FILE, help="行业分类文件路径，默认 stock_concepts_cache.xlsx")
-    parser.add_argument("--incremental", action="store_true", default=True, help="增量模式：已有数据跳过，新数据写入（默认开启）")
+    parser.add_argument("--incremental", action="store_true", help="增量模式：已有数据跳过，新数据写入")
     parser.add_argument("--full", action="store_true", help="全量模式：清除历史后重新计算")
     args = parser.parse_args()
 
-    incremental = not args.full
+    incremental = args.incremental and not args.full
 
     ensure_output_tables()
 
