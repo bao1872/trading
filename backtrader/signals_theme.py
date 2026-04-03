@@ -21,19 +21,13 @@ from datasource.database import get_session, bulk_upsert
 
 
 def ensure_signal_tables(session) -> None:
-    """确保信号表存在，不存在则创建"""
-    from datasource.database import execute_sql, DATABASE_URL
-    is_postgres = not DATABASE_URL.startswith("sqlite")
-
-    def pk_sql():
-        if is_postgres:
-            return "id SERIAL PRIMARY KEY"
-        return "id INTEGER PRIMARY KEY AUTOINCREMENT"
+    """确保信号表存在，不存在则创建（PostgreSQL）"""
+    from datasource.database import execute_sql
 
     tables_sql = {
-        'theme_signals': f"""
+        'theme_signals': """
             CREATE TABLE IF NOT EXISTS theme_signals (
-                {pk_sql()},
+                id SERIAL PRIMARY KEY,
                 snapshot_date DATE NOT NULL,
                 period VARCHAR(20),
                 theme VARCHAR(100) NOT NULL,
@@ -49,9 +43,9 @@ def ensure_signal_tables(session) -> None:
                 UNIQUE(snapshot_date, theme)
             )
         """,
-        'concept_signals': f"""
+        'concept_signals': """
             CREATE TABLE IF NOT EXISTS concept_signals (
-                {pk_sql()},
+                id SERIAL PRIMARY KEY,
                 snapshot_date DATE NOT NULL,
                 concept VARCHAR(100) NOT NULL,
                 theme VARCHAR(100),
@@ -65,9 +59,9 @@ def ensure_signal_tables(session) -> None:
                 UNIQUE(snapshot_date, concept)
             )
         """,
-        'stock_anomaly_signals': f"""
+        'stock_anomaly_signals': """
             CREATE TABLE IF NOT EXISTS stock_anomaly_signals (
-                {pk_sql()},
+                id SERIAL PRIMARY KEY,
                 snapshot_date DATE NOT NULL,
                 code VARCHAR(20) NOT NULL,
                 name VARCHAR(50),
@@ -79,9 +73,9 @@ def ensure_signal_tables(session) -> None:
                 UNIQUE(snapshot_date, code)
             )
         """,
-        'limit_up_signals': f"""
+        'limit_up_signals': """
             CREATE TABLE IF NOT EXISTS limit_up_signals (
-                {pk_sql()},
+                id SERIAL PRIMARY KEY,
                 snapshot_date DATE NOT NULL,
                 theme VARCHAR(100),
                 streak_key VARCHAR(20),
@@ -345,6 +339,16 @@ def process_all_stocks_vectorized(
         target_date = pd.Timestamp(snapshot_date)
         target_date_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
         target_date_end = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+        # 确保时区一致：如果 all_data['bar_time'] 有时区，则转换 target_date_start/end
+        if 'bar_time' in all_data.columns and all_data['bar_time'].dt.tz is not None:
+            bar_time_tz = all_data['bar_time'].dt.tz
+            if target_date_start.tz is None:
+                target_date_start = target_date_start.tz_localize(bar_time_tz)
+                target_date_end = target_date_end.tz_localize(bar_time_tz)
+            else:
+                target_date_start = target_date_start.tz_convert(bar_time_tz)
+                target_date_end = target_date_end.tz_convert(bar_time_tz)
 
     all_data = all_data[all_data['ts_code'].isin(name_map.keys())]
 
