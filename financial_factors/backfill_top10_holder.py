@@ -41,7 +41,6 @@ import argparse
 import json
 import logging
 import os
-import pickle
 import signal
 import sys
 import time
@@ -85,7 +84,6 @@ logging.basicConfig(
 CACHE_TABLE = "stock_market_data_cache"
 CHECKPOINT_DIR = Path(__file__).parent / "checkpoints"
 CHECKPOINT_FILE = CHECKPOINT_DIR / "top10_holder_backfill.json"
-EVENT_CACHE_FILE = CHECKPOINT_DIR / "event_cache.pkl"
 BATCH_SIZE = 10
 MAX_RETRIES = 3
 RETRY_INTERVAL = 5
@@ -197,37 +195,30 @@ def load_profiles_from_db() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def load_event_cache() -> Dict:
-    if not EVENT_CACHE_FILE.exists():
-        return {}
-    try:
-        with open(EVENT_CACHE_FILE, "rb") as f:
-            return pickle.load(f)
-    except Exception as e:
-        logger.warning(f"读取 event_cache 失败: {e}")
-        return {}
-
-
-def save_event_cache(cache: Dict) -> None:
-    ensure_checkpoint_dir()
-    with open(EVENT_CACHE_FILE, "wb") as f:
-        pickle.dump(cache, f)
+def _flush_events_to_temp_table(events_batch: List[pd.DataFrame], temp_table: str) -> None:
+    """将事件批次写入临时表"""
+    if not events_batch:
+        return
+    batch_df = pd.concat(events_batch, ignore_index=True)
+    with get_session() as session:
+        batch_df.to_sql(temp_table, session.bind, if_exists="append", index=False, method="multi")
+        session.commit()
 
 
 def process_single_stock_build_events(
     ts_code: str,
     lookback_years: int,
     industry_file: Optional[str],
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict, Optional[str]]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[str]]:
+    """处理单只股票，构建变动事件（返回精简后的events）"""
     from financial_factors.top10_holder_eval_factors import (
         build_change_events,
         build_event_metrics_cache,
-        EventMarketMetrics,
     )
 
     top10_df = load_top10_data(ts_codes=[ts_code], lookback_years=lookback_years)
     if top10_df.empty:
-        return pd.DataFrame(), pd.DataFrame(), {}, f"无前十大流通股东数据"
+        return pd.DataFrame(), pd.DataFrame(), f"无前十大流通股东数据"
 
     industry_df = load_industry_info(industry_file)
     if not industry_df.empty:
@@ -236,27 +227,37 @@ def process_single_stock_build_events(
     ann_date_min = top10_df["ann_date"].dropna().min()
     report_date_min = top10_df["report_date"].dropna().min()
     if pd.isna(ann_date_min) or pd.isna(report_date_min):
-        return pd.DataFrame(), pd.DataFrame(), {}, "无有效日期"
+        return pd.DataFrame(), pd.DataFrame(), "无有效日期"
 
     start_date = min(ann_date_min, report_date_min)
     end_date = pd.Timestamp.today().normalize()
 
     stock_df = load_market_data_from_cache(ts_code, start_date - pd.Timedelta(days=250), end_date)
     if stock_df.empty:
-        return pd.DataFrame(), pd.DataFrame(), {}, "行情缓存为空"
+        return pd.DataFrame(), pd.DataFrame(), "行情缓存为空"
 
     bench_code = DEFAULT_BENCH
     bench_df = load_market_data_from_cache(bench_code, start_date - pd.Timedelta(days=250), end_date)
     if bench_df.empty:
-        return pd.DataFrame(), pd.DataFrame(), {}, f"基准指数 {bench_code} 行情缓存为空"
+        return pd.DataFrame(), pd.DataFrame(), f"基准指数 {bench_code} 行情缓存为空"
 
     top10_df = build_holder_tenure(top10_df)
 
     event_cache = build_event_metrics_cache(top10_df, {ts_code: stock_df}, {ts_code: bench_df}, {})
-
     events_df = build_change_events(top10_df.copy(), event_cache)
 
-    return top10_df, events_df, event_cache, None
+    # 只保留 build_holder_profiles 需要的列，减少内存占用
+    if not events_df.empty:
+        needed_cols = [
+            "holder_name_std", "holder_type", "action_type",
+            "future_excess_ret_20", "future_excess_ret_60", "future_excess_ret_120",
+            "future_mdd_60", "ret_120", "turnover_value_mean_20", "mom_60",
+            "industry_l2"
+        ]
+        available_cols = [c for c in needed_cols if c in events_df.columns]
+        events_df = events_df[available_cols]
+
+    return top10_df, events_df, None
 
 
 def process_single_stock_scores(
@@ -348,11 +349,33 @@ def run_compute_profiles(
     total = len(pool)
     logger.info(f"Phase 1: 计算全局股东画像，共 {total} 只股票...")
 
-    all_events_list: List[pd.DataFrame] = []
-    all_event_caches: List[Dict] = []
+    # 使用临时表存储 events，避免内存累积
+    TEMP_EVENTS_TABLE = "_temp_backfill_events"
+    with get_session() as session:
+        session.execute(text(f"DROP TABLE IF EXISTS {TEMP_EVENTS_TABLE}"))
+        session.execute(text(f"""
+            CREATE TEMP TABLE {TEMP_EVENTS_TABLE} (
+                holder_name_std TEXT,
+                holder_type TEXT,
+                action_type TEXT,
+                future_excess_ret_20 FLOAT,
+                future_excess_ret_60 FLOAT,
+                future_excess_ret_120 FLOAT,
+                future_mdd_60 FLOAT,
+                ret_120 FLOAT,
+                turnover_value_mean_20 FLOAT,
+                mom_60 FLOAT,
+                industry_l2 TEXT
+            )
+        """))
+        session.commit()
+
+    events_batch: List[pd.DataFrame] = []
+    BATCH_INSERT_SIZE = 50  # 每50只股票写入一次临时表
 
     pbar = tqdm(pool, desc="Phase1-构建事件", unit="股票")
     interrupted = False
+    total_events = 0
 
     def handle_interrupt(signum, frame):
         nonlocal interrupted
@@ -368,13 +391,11 @@ def run_compute_profiles(
 
             retry_count = 0
             error_msg = None
-            top10_df = pd.DataFrame()
             events_df = pd.DataFrame()
-            event_cache: Dict = {}
 
             while retry_count < MAX_RETRIES:
                 try:
-                    top10_df, events_df, event_cache, error_msg = process_single_stock_build_events(
+                    _, events_df, error_msg = process_single_stock_build_events(
                         ts_code=ts_code,
                         lookback_years=lookback_years,
                         industry_file=industry_file,
@@ -394,25 +415,36 @@ def run_compute_profiles(
                 continue
 
             if not events_df.empty:
-                events_df["_source_ts_code"] = ts_code
-                all_events_list.append(events_df)
-                all_event_caches.append(event_cache)
+                events_batch.append(events_df)
+                total_events += len(events_df)
 
-            pbar.set_postfix_str(f"已收集 {len(all_events_list)} 只")
+            # 批量写入临时表，释放内存
+            if len(events_batch) >= BATCH_INSERT_SIZE:
+                _flush_events_to_temp_table(events_batch, TEMP_EVENTS_TABLE)
+                events_batch.clear()
+
+            pbar.set_postfix_str(f"已处理 {i+1}/{total} 只，事件 {total_events} 条")
 
             if (i + 1) % 100 == 0:
-                logger.info(f"已处理 {i + 1}/{total} 只，收集事件 {sum(len(e) for e in all_events_list)} 条")
+                logger.info(f"已处理 {i + 1}/{total} 只，累计事件 {total_events} 条")
 
     finally:
         signal.signal(signal.SIGINT, old_handler)
 
-    if not all_events_list:
+    # 写入剩余数据
+    if events_batch:
+        _flush_events_to_temp_table(events_batch, TEMP_EVENTS_TABLE)
+        events_batch.clear()
+
+    if total_events == 0:
         logger.warning("无有效事件数据")
         return
 
-    logger.info(f"Phase 1: 合并所有事件，共 {sum(len(e) for e in all_events_list)} 条...")
-    all_events_df = pd.concat(all_events_list, ignore_index=True)
-    all_events_df.drop(columns=["_source_ts_code"], inplace=True, errors="ignore")
+    logger.info(f"Phase 1: 从临时表读取所有事件，共 {total_events} 条...")
+    with get_session() as session:
+        all_events_df = pd.read_sql(text(f"SELECT * FROM {TEMP_EVENTS_TABLE}"), session.bind)
+        session.execute(text(f"DROP TABLE IF EXISTS {TEMP_EVENTS_TABLE}"))
+        session.commit()
 
     logger.info("Phase 1: 计算全局股东画像...")
     global_profiles = build_holder_profiles(all_events_df, existing_profiles=None)
@@ -430,12 +462,6 @@ def run_compute_profiles(
             n = bulk_upsert(session, PROFILE_TABLE, global_profiles, ["holder_name_std"])
             session.commit()
         logger.info(f"写入 profiles {n} 行")
-
-    merged_event_cache: Dict = {}
-    for ec in all_event_caches:
-        merged_event_cache.update(ec)
-    logger.info(f"保存 event_cache ({len(merged_event_cache)} 条)...")
-    save_event_cache(merged_event_cache)
 
     logger.info("Phase 1 完成！请运行 Phase 2: --mode compute")
 
