@@ -286,3 +286,20 @@ def get_table_columns(conn: Any, table_name: str) -> List[str]:
 def get_session_legacy() -> Generator[Session, None, None]:
     """兼容旧代码的会话获取方式"""
     return get_session()
+
+
+def execute_sql(sql: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    """
+    执行SQL语句
+
+    Args:
+        sql: SQL语句
+        params: SQL参数
+
+    Returns:
+        执行结果
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        result = conn.execute(text(sql), params or {})
+        return result
