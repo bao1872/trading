@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-前十大流通股东评价体系指标计算脚本（Tushare）
-
 Purpose:
     1. 从数据库读取 stock_top10_holders_tushare 表中的历史前十大流通股东数据
-    2. 使用 Tushare Pro 获取个股与基准指数历史行情（含 turnover_rate）
-    3. 计算股东画像后验质量、个股结构分 / 稳定性分 / 质量分 / 耦合分 / 风险扣分
+    2. 使用数据库获取个股行情，Tushare获取基准指数行情
+    3. 计算股东画像后验质量、个股结构分/稳定性分/质量分/耦合分/风险扣分
     4. 写入数据库表:
        - stock_top10_holder_profiles_tushare
        - stock_top10_holder_eval_scores_tushare
@@ -16,8 +14,8 @@ Inputs:
         ts_code, stock_name, report_date, ann_date, holder_rank,
         holder_name, holder_type, hold_amount, hold_ratio,
         hold_float_ratio, hold_change
-    - 行情数据源: Tushare Pro (tushare_data.fetcher.fetch_market_data)
-      默认使用字段: open/high/low/close/vol/turnover/turnover_rate
+    - 个股行情: 数据库 stock_k_data (open/high/low/close/volume)
+    - 指数行情: Tushare Pro (tushare_data.fetcher.fetch_market_data)
 
 Outputs:
     - 数据库表: stock_top10_holder_profiles_tushare
@@ -87,6 +85,10 @@ DEFAULT_INDEX_MAP = {
     "北交所": "399673.SZ",
 }
 DEFAULT_INDUSTRY_FILE = "stock_concepts_cache.xlsx"
+DELTA_THRESHOLD_ABS_DEFAULT = 0.10
+DELTA_THRESHOLD_REL_DEFAULT = 0.05
+PROFILE_SCOPE_FULL = "full_sample"
+PROFILE_SCOPE_ASOF = "asof_runtime"
 
 
 @dataclass
@@ -201,6 +203,21 @@ def group_robust_zscore(values: pd.Series, groups: pd.Series) -> pd.Series:
     return out.fillna(global_z).fillna(0.0)
 
 
+def industry_neutralize(values: pd.Series, groups: pd.Series, min_group_size: int = 3) -> pd.Series:
+    """行业中性化：先做行业内去均值，再对中性化后的结果做全样本标准化。"""
+    values = pd.to_numeric(values, errors="coerce")
+    groups = groups.astype(str).fillna("未知行业")
+    neutral = values.copy().astype(float)
+    global_mean = values.mean()
+    for g, idx in groups.groupby(groups).groups.items():
+        sub = values.loc[idx]
+        if sub.notna().sum() >= min_group_size:
+            neutral.loc[idx] = sub - sub.mean()
+        else:
+            neutral.loc[idx] = sub - global_mean
+    return robust_zscore(neutral).fillna(0.0)
+
+
 def rank01(series: pd.Series) -> pd.Series:
     s = pd.to_numeric(series, errors="coerce")
     if s.notna().sum() <= 1:
@@ -215,6 +232,13 @@ def clip_score(series: pd.Series, lower: float, upper: float) -> pd.Series:
 def parse_date_column(series: pd.Series) -> pd.Series:
     s = pd.to_datetime(series.astype(str).str[:8], format="%Y%m%d", errors="coerce")
     return s
+
+
+def _safe_add_column(session, table_name: str, column_def: str) -> None:
+    try:
+        session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_def}"))
+    except Exception:
+        pass
 
 
 def ensure_output_tables() -> None:
@@ -244,6 +268,9 @@ def ensure_output_tables() -> None:
         scenefit_growth REAL,
         scenefit_industry_l2 REAL,
         final_holder_quality REAL,
+        profile_scope TEXT,
+        profile_asof_date TEXT,
+        profile_note TEXT,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """
@@ -259,6 +286,8 @@ def ensure_output_tables() -> None:
         report_date TEXT NOT NULL,
         ann_date TEXT,
         effective_date TEXT,
+        quality_profile_scope TEXT,
+        quality_profile_asof_date TEXT,
         cr3 REAL,
         cr5 REAL,
         cr10 REAL,
@@ -331,8 +360,12 @@ def ensure_output_tables() -> None:
     with get_session() as session:
         session.execute(text(create_profile_sql))
         session.execute(text(create_score_sql))
+        _safe_add_column(session, PROFILE_TABLE, "profile_scope TEXT")
+        _safe_add_column(session, PROFILE_TABLE, "profile_asof_date TEXT")
+        _safe_add_column(session, PROFILE_TABLE, "profile_note TEXT")
+        _safe_add_column(session, SCORE_TABLE, "quality_profile_scope TEXT")
+        _safe_add_column(session, SCORE_TABLE, "quality_profile_asof_date TEXT")
         session.commit()
-
 
 def get_stock_pool(limit: Optional[int] = None) -> List[Tuple[str, Optional[str]]]:
     with get_session() as session:
@@ -422,18 +455,60 @@ def infer_effective_date(ann_date: pd.Timestamp, trading_index: pd.DatetimeIndex
     return pd.Timestamp(trading_index[pos])
 
 
-def load_market_data(ts_code: str, start_date: pd.Timestamp, end_date: pd.Timestamp,
-                     bench_code: str = DEFAULT_BENCH, fqt: int = 0) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    start = (start_date - pd.Timedelta(days=250)).strftime("%Y%m%d")
+def load_market_data_from_db(ts_code: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+    """从数据库加载单只股票行情数据"""
+    from sqlalchemy import text
+    from datasource.database import get_session
+
+    sql = """
+        SELECT bar_time as datetime, open, high, low, close, volume
+        FROM stock_k_data
+        WHERE ts_code = :ts_code AND freq = 'd'
+          AND bar_time >= :start_date AND bar_time <= :end_date
+        ORDER BY bar_time
+    """
+
+    with get_session() as session:
+        result = session.execute(text(sql), {
+            'ts_code': ts_code,
+            'start_date': start_date.strftime('%Y-%m-%d'),
+            'end_date': end_date.strftime('%Y-%m-%d')
+        })
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
+
+    if df.empty:
+        return pd.DataFrame()
+
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    df = df.set_index('datetime').sort_index()
+    return df
+
+
+def load_index_data_from_tushare(index_code: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+    """从Tushare加载指数行情数据"""
+    start = (start_date - pd.Timedelta(days=10)).strftime("%Y%m%d")
     end = end_date.strftime("%Y%m%d")
-    stock_df = fetch_market_data(ts_code, start, end, fqt=fqt)
-    bench_df = fetch_market_data(bench_code, start, end, fqt=fqt)
+    df = fetch_market_data(index_code, start, end, fqt=0)
+    if not df.empty:
+        if 'date' in df.columns and 'datetime' not in df.columns:
+            df = df.rename(columns={'date': 'datetime'})
+        if df.index.name == 'datetime':
+            df.index = pd.to_datetime(df.index)
+    return df
+
+
+def load_market_data(ts_code: str, start_date: pd.Timestamp, end_date: pd.Timestamp,
+                     bench_code: str = DEFAULT_BENCH) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """加载个股行情(数据库)和基准指数行情(Tushare)"""
+    stock_df = load_market_data_from_db(ts_code, start_date, end_date)
+    bench_df = load_index_data_from_tushare(bench_code, start_date, end_date)
     return stock_df, bench_df
 
 
 
 def build_industry_benchmarks(stock_df_map: Dict[str, pd.DataFrame], industry_df: pd.DataFrame,
                               industry_col: str = "industry_l2") -> Dict[str, pd.DataFrame]:
+    """返回行业收益面板（列=股票代码），供后续构造 leave-one-out 行业基准。"""
     if industry_df is None or industry_df.empty or industry_col not in industry_df.columns:
         return {}
     code_to_ind = industry_df.set_index("ts_code")[industry_col].to_dict()
@@ -451,11 +526,16 @@ def build_industry_benchmarks(stock_df_map: Dict[str, pd.DataFrame], industry_df
         panel = pd.concat(series_list, axis=1)
         if panel.empty:
             continue
-        ew_ret = panel.mean(axis=1, skipna=True).fillna(0.0)
-        close = (1.0 + ew_ret).cumprod()
-        result[ind] = pd.DataFrame({"close": close})
+        result[ind] = panel.sort_index()
     return result
 
+
+def _panel_to_close_df(panel: pd.DataFrame) -> pd.DataFrame:
+    if panel is None or panel.empty:
+        return pd.DataFrame()
+    ew_ret = panel.mean(axis=1, skipna=True).fillna(0.0)
+    close = (1.0 + ew_ret).cumprod()
+    return pd.DataFrame({"close": close})
 
 def build_event_metrics_cache(df: pd.DataFrame, stock_df_map: Dict[str, pd.DataFrame],
                               bench_df_map: Dict[str, pd.DataFrame],
@@ -474,12 +554,15 @@ def build_event_metrics_cache(df: pd.DataFrame, stock_df_map: Dict[str, pd.DataF
         industry_l2 = snap["industry_l2"].dropna().iloc[0] if "industry_l2" in snap.columns and snap["industry_l2"].notna().any() else None
         bench_df = None
         if industry_bench_map and industry_l2 in industry_bench_map:
-            bench_df = industry_bench_map.get(industry_l2)
+            panel = industry_bench_map.get(industry_l2)
+            if panel is not None and not panel.empty:
+                loo_panel = panel.drop(columns=[ts_code], errors="ignore")
+                if not loo_panel.empty:
+                    bench_df = _panel_to_close_df(loo_panel)
         if bench_df is None or bench_df.empty:
             bench_df = bench_df_map.get(ts_code, pd.DataFrame())
         cache[(ts_code, pd.Timestamp(report_date))] = calc_event_market_metrics(stock_df, bench_df, effective_date)
     return cache
-
 
 def calc_future_return(prices: pd.Series, start_idx: int, horizon: int) -> Optional[float]:
     end_idx = start_idx + horizon
@@ -562,10 +645,29 @@ def calc_event_market_metrics(stock_df: pd.DataFrame, bench_df: pd.DataFrame,
 
     if "turnover_rate" in stock_df.columns and pos >= 19:
         turnover_rate_mean_20 = float(pd.to_numeric(stock_df["turnover_rate"].iloc[pos - 19: pos + 1], errors="coerce").mean())
+    elif "volume" in stock_df.columns and pos >= 19:
+        vol_series = pd.to_numeric(stock_df["volume"].iloc[pos - 19: pos + 1], errors="coerce").dropna()
+        if len(vol_series) >= 10:
+            vol_mean = vol_series.mean()
+            vol_std = vol_series.std()
+            if vol_mean and vol_mean > 0 and vol_std and vol_std > 0:
+                turnover_rate_mean_20 = float(vol_std / vol_mean)
+            else:
+                turnover_rate_mean_20 = None
+        else:
+            turnover_rate_mean_20 = None
     else:
         turnover_rate_mean_20 = None
+
     if "turnover" in stock_df.columns and pos >= 19:
         turnover_value_mean_20 = float(pd.to_numeric(stock_df["turnover"].iloc[pos - 19: pos + 1], errors="coerce").mean())
+    elif "volume" in stock_df.columns and "close" in stock_df.columns and pos >= 19:
+        vol_series = pd.to_numeric(stock_df["volume"].iloc[pos - 19: pos + 1], errors="coerce").dropna()
+        close_series = pd.to_numeric(stock_df["close"].iloc[pos - 19: pos + 1], errors="coerce").dropna()
+        if len(vol_series) >= 10 and len(close_series) >= 10:
+            turnover_value_mean_20 = float((vol_series * close_series).mean())
+        else:
+            turnover_value_mean_20 = None
     else:
         turnover_value_mean_20 = None
 
@@ -614,8 +716,62 @@ def build_holder_tenure(df: pd.DataFrame) -> pd.DataFrame:
 
 
 
+def _parse_hold_change_signal(v: object) -> Optional[float]:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    if isinstance(v, str):
+        s = v.strip().upper()
+        if not s:
+            return None
+        if any(k in s for k in ["新进", "新增", "增持"]):
+            return 1.0
+        if any(k in s for k in ["退出", "减持", "减少"]):
+            return -1.0
+        if any(k in s for k in ["不变", "持平"]):
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return None
+    try:
+        return float(v)
+    except Exception:
+        return None
+
+
+def _classify_overlap_action(cur_row: pd.Series, prev_row: pd.Series,
+                             abs_threshold: float = DELTA_THRESHOLD_ABS_DEFAULT,
+                             rel_threshold: float = DELTA_THRESHOLD_REL_DEFAULT) -> Tuple[str, Optional[float], Optional[float]]:
+    cur_ratio = safe_float(cur_row.get("hold_float_ratio"))
+    prev_ratio = safe_float(prev_row.get("hold_float_ratio"))
+    cur_amt = safe_float(cur_row.get("hold_amount"))
+    prev_amt = safe_float(prev_row.get("hold_amount"))
+    delta_ratio = None if cur_ratio is None or prev_ratio is None else cur_ratio - prev_ratio
+    delta_amt = None if cur_amt is None or prev_amt is None else cur_amt - prev_amt
+    rel_change = None
+    if delta_ratio is not None and prev_ratio is not None and abs(prev_ratio) > EPS:
+        rel_change = abs(delta_ratio) / abs(prev_ratio)
+
+    hold_change_signal = _parse_hold_change_signal(cur_row.get("hold_change"))
+    if hold_change_signal is not None:
+        if hold_change_signal > 0:
+            return "add", delta_ratio, delta_amt
+        if hold_change_signal < 0:
+            return "reduce", delta_ratio, delta_amt
+        return "hold", delta_ratio, delta_amt
+
+    if delta_ratio is None:
+        return "hold", delta_ratio, delta_amt
+    if (delta_ratio > abs_threshold) or (rel_change is not None and rel_change > rel_threshold and delta_ratio > 0):
+        return "add", delta_ratio, delta_amt
+    if (delta_ratio < -abs_threshold) or (rel_change is not None and rel_change > rel_threshold and delta_ratio < 0):
+        return "reduce", delta_ratio, delta_amt
+    return "hold", delta_ratio, delta_amt
+
+
 def build_change_events(df: pd.DataFrame, event_cache: Dict[Tuple[str, pd.Timestamp], EventMarketMetrics],
-                        delta_threshold: float = 0.01) -> pd.DataFrame:
+                        delta_threshold_abs: float = DELTA_THRESHOLD_ABS_DEFAULT,
+                        delta_threshold_rel: float = DELTA_THRESHOLD_REL_DEFAULT) -> pd.DataFrame:
     records: List[Dict[str, object]] = []
     by_stock = df.groupby("ts_code")
 
@@ -624,40 +780,46 @@ def build_change_events(df: pd.DataFrame, event_cache: Dict[Tuple[str, pd.Timest
         prev_snap: Optional[pd.DataFrame] = None
         prev_report_date: Optional[pd.Timestamp] = None
 
-        for report_date in reports:
+        for i, report_date in enumerate(reports):
             snap = g[g["report_date"] == report_date].copy().sort_values(["holder_rank", "holder_name_std"])
             ann_date = snap["ann_date"].dropna().min()
             metrics = event_cache.get((ts_code, pd.Timestamp(report_date)))
             if pd.isna(ann_date) or metrics is None:
                 continue
+            if i == 0 or prev_snap is None:
+                prev_snap = snap
+                prev_report_date = report_date
+                continue
 
             cur_map = {row["holder_name_std"]: row for _, row in snap.iterrows()}
-            prev_map = {} if prev_snap is None else {row["holder_name_std"]: row for _, row in prev_snap.iterrows()}
+            prev_map = {row["holder_name_std"]: row for _, row in prev_snap.iterrows()}
             names = sorted(set(cur_map.keys()) | set(prev_map.keys()))
 
             for name in names:
                 cur = cur_map.get(name)
                 prev = prev_map.get(name)
-                cur_ratio = safe_float(cur["hold_float_ratio"]) if cur is not None else None
-                prev_ratio = safe_float(prev["hold_float_ratio"]) if prev is not None else None
-                cur_amt = safe_float(cur["hold_amount"]) if cur is not None else None
-                prev_amt = safe_float(prev["hold_amount"]) if prev is not None else None
-                delta_ratio = None if cur_ratio is None or prev_ratio is None else cur_ratio - prev_ratio
-                delta_amt = None if cur_amt is None or prev_amt is None else cur_amt - prev_amt
-
                 if cur is not None and prev is None:
                     action_type = "entry"
+                    cur_ratio = safe_float(cur.get("hold_float_ratio"))
+                    prev_ratio = None
+                    cur_amt = safe_float(cur.get("hold_amount"))
+                    prev_amt = None
+                    delta_ratio = cur_ratio
+                    delta_amt = cur_amt
                 elif cur is None and prev is not None:
                     action_type = "exit"
+                    cur_ratio = None
+                    prev_ratio = safe_float(prev.get("hold_float_ratio"))
+                    cur_amt = None
+                    prev_amt = safe_float(prev.get("hold_amount"))
+                    delta_ratio = None if prev_ratio is None else -prev_ratio
+                    delta_amt = None if prev_amt is None else -prev_amt
                 else:
-                    if delta_ratio is None:
-                        action_type = "hold"
-                    elif delta_ratio > delta_threshold:
-                        action_type = "add"
-                    elif delta_ratio < -delta_threshold:
-                        action_type = "reduce"
-                    else:
-                        action_type = "hold"
+                    action_type, delta_ratio, delta_amt = _classify_overlap_action(cur, prev, delta_threshold_abs, delta_threshold_rel)
+                    cur_ratio = safe_float(cur.get("hold_float_ratio"))
+                    prev_ratio = safe_float(prev.get("hold_float_ratio"))
+                    cur_amt = safe_float(cur.get("hold_amount"))
+                    prev_amt = safe_float(prev.get("hold_amount"))
 
                 base_row = cur if cur is not None else prev
                 records.append({
@@ -706,7 +868,6 @@ def build_change_events(df: pd.DataFrame, event_cache: Dict[Tuple[str, pd.Timest
 
     return pd.DataFrame(records)
 
-
 def load_existing_data(stock_codes: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     with get_session() as session:
         scores_df = query_df(session, SCORE_TABLE)
@@ -717,41 +878,6 @@ def load_existing_data(stock_codes: List[str]) -> Tuple[pd.DataFrame, pd.DataFra
     else:
         existing_scores = scores_df.copy()
     return existing_scores, profiles_df
-
-
-def merge_profiles(new_profiles: pd.DataFrame, existing_profiles: pd.DataFrame) -> pd.DataFrame:
-    if existing_profiles.empty or new_profiles.empty:
-        return new_profiles
-
-    count_cols = ["sample_entry", "sample_add", "sample_reduce", "sample_hold", "sample_total"]
-    mean_cols = [
-        "avg_excess_ret_20_entry", "avg_excess_ret_60_entry", "avg_excess_ret_120_entry",
-        "avg_excess_ret_20_add", "avg_excess_ret_60_add", "avg_excess_ret_120_add",
-        "win_rate_60_entry", "win_rate_60_add",
-        "avg_mdd_60_entry", "avg_mdd_60_add",
-    ]
-
-    merged = new_profiles.copy()
-    for _, row in existing_profiles.iterrows():
-        name = row["holder_name_std"]
-        match = merged[merged["holder_name_std"] == name]
-        if match.empty:
-            merged = pd.concat([merged, row.to_frame().T], ignore_index=True)
-            continue
-        idx = match.index[0]
-        n_new = int(row["sample_total"]) if "sample_total" in row and pd.notna(row["sample_total"]) else 0
-        n_cur = int(merged.at[idx, "sample_total"])
-        total = n_new + n_cur
-        if total == 0:
-            continue
-        for col in mean_cols:
-            if col in row.index and pd.notna(row[col]) and col in merged.columns:
-                cur_val = merged.at[idx, col] if pd.notna(merged.at[idx, col]) else 0.0
-                merged.at[idx, col] = (n_cur * cur_val + n_new * float(row[col])) / total
-        for col in count_cols:
-            if col in row.index and col in merged.columns:
-                merged.at[idx, col] = int(merged.at[idx, col]) + int(row[col]) if pd.notna(row[col]) else int(merged.at[idx, col])
-    return merged
 
 
 def _safe_mean(s: pd.Series) -> float:
@@ -768,22 +894,14 @@ def _safe_win_rate(s: pd.Series) -> float:
     return float((s > 0).mean())
 
 
-def _grouped_agg(events: pd.DataFrame, action_type: str, cols: List[str]) -> pd.DataFrame:
-    df = events[events["action_type"] == action_type]
-    if df.empty:
-        return pd.DataFrame()
-    agg_dict = {c: _safe_mean for c in cols}
-    agg_dict["future_excess_ret_60"] = _safe_mean
-    result = df.groupby("holder_name_std")[cols].agg(_safe_mean)
-    result["win_rate_60"] = df.groupby("holder_name_std")["future_excess_ret_60"].apply(_safe_win_rate)
-    return result
-
-
-def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.DataFrame] = None,
+                          profile_scope: str = PROFILE_SCOPE_FULL,
+                          profile_asof_date: Optional[object] = None,
+                          profile_note: Optional[str] = None) -> pd.DataFrame:
     """基于传入事件全量重算股东画像。
 
-    注意：这里显式不再把 existing_profiles 伪造成 dummy events 回灌，
-    避免增量模式下旧样本被重复累计并污染画像统计。
+    existing_profiles 保留兼容但不参与回灌；数据库只保存 full_sample，
+    历史评分运行时则构建 as-of 画像。
     """
     if events.empty:
         return pd.DataFrame()
@@ -800,15 +918,11 @@ def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.D
     }).rename(columns={"action_type": "sample_total"})
 
     agg_cols = ["future_excess_ret_20", "future_excess_ret_60", "future_excess_ret_120", "future_mdd_60"]
-    entry_agg = events[events["action_type"] == "entry"].groupby("holder_name_std").agg({
-        c: _safe_mean for c in agg_cols
-    })
+    entry_agg = events[events["action_type"] == "entry"].groupby("holder_name_std").agg({c: _safe_mean for c in agg_cols})
     entry_agg.columns = [f"{c}_entry" for c in entry_agg.columns]
     entry_agg["win_rate_60_entry"] = events[events["action_type"] == "entry"].groupby("holder_name_std")["future_excess_ret_60"].apply(_safe_win_rate)
 
-    add_agg = events[events["action_type"] == "add"].groupby("holder_name_std").agg({
-        c: _safe_mean for c in agg_cols
-    })
+    add_agg = events[events["action_type"] == "add"].groupby("holder_name_std").agg({c: _safe_mean for c in agg_cols})
     add_agg.columns = [f"{c}_add" for c in add_agg.columns]
     add_agg["win_rate_60_add"] = events[events["action_type"] == "add"].groupby("holder_name_std")["future_excess_ret_60"].apply(_safe_win_rate)
 
@@ -831,7 +945,7 @@ def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.D
             + 25 * (_safe_mean(entry_s) or 0.0)
             + 20 * ((add_wr or 0.5) - 0.5)
             + 10 * ((entry_wr or 0.5) - 0.5)
-            - 20 * abs(_safe_mean(gt[gt["action_type"] == "add"]["future_mdd_60"]) or 0.0)
+            + 20 * min(_safe_mean(gt[gt["action_type"] == "add"]["future_mdd_60"]) or 0.0, 0.0)
         )
         type_mu[str(holder_type)] = 50 + mu * 100
 
@@ -841,22 +955,21 @@ def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.D
     for col in ["sample_total", "sample_entry", "sample_add", "sample_reduce", "sample_hold"]:
         profiles_df[col] = profiles_df[col].fillna(0).astype(int)
 
-    prior_scores = profiles_df["holder_type"].map(map_holder_prior_score)
-    profiles_df["prior_score"] = prior_scores
+    profiles_df["prior_score"] = profiles_df["holder_type"].map(map_holder_prior_score)
 
     posterior_raw = (
         45 * profiles_df["future_excess_ret_60_add"].fillna(0)
         + 25 * profiles_df["future_excess_ret_60_entry"].fillna(0)
         + 20 * ((profiles_df["win_rate_60_add"].fillna(0.5) - 0.5))
         + 10 * ((profiles_df["win_rate_60_entry"].fillna(0.5) - 0.5))
-        - 20 * abs(profiles_df["future_mdd_60_add"].fillna(0))
+        + 20 * np.minimum(profiles_df["future_mdd_60_add"].fillna(0), 0)
     )
     profiles_df["posterior_score_raw"] = 50 + posterior_raw * 100
 
     profiles_df["type_mu"] = profiles_df["holder_type"].astype(str).map(type_mu).fillna(50.0)
     n_i = profiles_df["sample_entry"].fillna(0) + profiles_df["sample_add"].fillna(0)
-    k = 10.0
-    profiles_df["posterior_score_shrink"] = (n_i / (n_i + k)) * profiles_df["posterior_score_raw"] + (k / (n_i + k)) * profiles_df["type_mu"]
+    post_w = np.where(n_i < 2, 0.05, np.where(n_i < 3, 0.12, np.where(n_i < 5, 0.25, n_i / (n_i + 8.0))))
+    profiles_df["posterior_score_shrink"] = post_w * profiles_df["posterior_score_raw"] + (1.0 - post_w) * profiles_df["type_mu"]
 
     ret_120_median = events.groupby("holder_name_std")["ret_120"].median()
     turnover_median = events.groupby("holder_name_std")["turnover_value_mean_20"].median()
@@ -876,7 +989,6 @@ def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.D
 
         industry_means = g.dropna(subset=["industry_l2"]).groupby("industry_l2")["future_excess_ret_60"].mean()
         scenefit_industry = 50 + (float(industry_means.mean()) * 100 if len(industry_means) > 0 else 0.0)
-
         return {
             "holder_name_std": holder,
             "scenefit_lowpos": scenefit_lowpos,
@@ -885,7 +997,7 @@ def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.D
             "scenefit_industry_l2": scenefit_industry,
         }
 
-    scenefit_list = events.groupby("holder_name_std").apply(_scenefit_for_holder).tolist()
+    scenefit_list = events.groupby("holder_name_std").apply(_scenefit_for_holder, include_groups=False).tolist()
     scenefit_df = pd.DataFrame(scenefit_list).set_index("holder_name_std")
     profiles_df = profiles_df.join(scenefit_df, on="holder_name_std", how="left")
 
@@ -897,11 +1009,16 @@ def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.D
     )
 
     final_holder_quality = np.where(
-        n_i < 5,
-        0.60 * profiles_df["prior_score"] + 0.30 * profiles_df["posterior_score_shrink"] + 0.10 * profiles_df["scenefit_score"],
-        0.35 * profiles_df["prior_score"] + 0.45 * profiles_df["posterior_score_shrink"] + 0.20 * profiles_df["scenefit_score"],
+        n_i < 2,
+        0.85 * profiles_df["prior_score"] + 0.10 * profiles_df["posterior_score_shrink"] + 0.05 * profiles_df["scenefit_score"],
+        np.where(n_i < 5,
+                 0.65 * profiles_df["prior_score"] + 0.20 * profiles_df["posterior_score_shrink"] + 0.15 * profiles_df["scenefit_score"],
+                 0.35 * profiles_df["prior_score"] + 0.45 * profiles_df["posterior_score_shrink"] + 0.20 * profiles_df["scenefit_score"])
     )
     profiles_df["final_holder_quality"] = final_holder_quality
+    profiles_df["profile_scope"] = profile_scope
+    profiles_df["profile_asof_date"] = pd.Timestamp(profile_asof_date).strftime("%Y%m%d") if profile_asof_date is not None and pd.notna(profile_asof_date) else None
+    profiles_df["profile_note"] = profile_note or ("数据库仅保存全样本画像；历史评分运行时使用 as-of 画像，不直接写库" if profile_scope == PROFILE_SCOPE_FULL else "运行时 as-of 画像")
 
     result_cols = [
         "holder_name_std", "holder_type", "sample_total", "sample_entry", "sample_add",
@@ -910,7 +1027,7 @@ def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.D
         "future_excess_ret_120_add", "win_rate_60_entry", "win_rate_60_add",
         "avg_mdd_60_entry", "avg_mdd_60_add", "posterior_score_raw", "posterior_score_shrink",
         "scenefit_lowpos", "scenefit_smallcap", "scenefit_growth", "scenefit_industry_l2",
-        "final_holder_quality",
+        "final_holder_quality", "profile_scope", "profile_asof_date", "profile_note",
     ]
     rename_cols = {
         "future_excess_ret_20_entry": "avg_excess_ret_20_entry",
@@ -926,8 +1043,6 @@ def build_holder_profiles(events: pd.DataFrame, existing_profiles: Optional[pd.D
     result_cols = [rename_cols.get(c, c) for c in result_cols]
     result_cols = [c for c in result_cols if c in profiles_df.columns]
     return profiles_df[result_cols].copy()
-
-
 
 def build_holder_industry_scores(events: pd.DataFrame, profiles: pd.DataFrame) -> Dict[Tuple[str, str], float]:
     if events.empty or profiles.empty or "industry_l2" not in events.columns:
@@ -953,31 +1068,52 @@ def format_report_key(value: object) -> str:
     return str(value)
 
 
-def filter_events_for_profile_asof(events: pd.DataFrame, effective_date: pd.Timestamp, min_realized_days: int = 90) -> pd.DataFrame:
-    """仅保留在当前时点之前、且后验观察窗口基本已走完的历史事件。
+def filter_events_for_profile_asof(events: pd.DataFrame, effective_date: pd.Timestamp,
+                                  min_realized_bdays: int = 60,
+                                  prefer_long_horizon: bool = True) -> pd.DataFrame:
+    """仅保留在当前评分时点之前、且关键未来窗口已经足够实现的历史事件。
 
-    这里使用保守的 90 个自然日近似 60 个交易日，避免把尚未在当时真正可见的
-    future_excess_ret_60 / future_mdd_60 提前泄露到更早的评分时点。
+    默认要求 60 个交易日窗口完整实现；若 120 日窗口样本充足，则优先保留完整 120 日样本。
+    这样既避免前视，也避免对短历史样本过滤过严。
     """
     if events.empty or pd.isna(effective_date):
         return pd.DataFrame(columns=events.columns)
     if "effective_date" not in events.columns:
         return events.iloc[0:0].copy()
-    cutoff = pd.Timestamp(effective_date) - pd.Timedelta(days=min_realized_days)
     eff = pd.to_datetime(events["effective_date"], errors="coerce")
-    mask = eff.notna() & (eff <= cutoff)
-    return events.loc[mask].copy()
+    asof = pd.Timestamp(effective_date)
+    cutoff60 = asof - pd.offsets.BDay(min_realized_bdays)
+    mask60 = eff.notna() & (eff <= cutoff60)
+    if "future_excess_ret_60" in events.columns:
+        mask60 &= pd.to_numeric(events["future_excess_ret_60"], errors="coerce").notna()
+    if "future_mdd_60" in events.columns:
+        mask60 &= pd.to_numeric(events["future_mdd_60"], errors="coerce").notna()
 
+    hist = events.loc[mask60].copy()
+    if hist.empty:
+        return hist
+
+    if prefer_long_horizon and "future_excess_ret_120" in hist.columns:
+        mask120 = pd.to_datetime(hist["effective_date"], errors="coerce") <= (asof - pd.offsets.BDay(120))
+        mask120 &= pd.to_numeric(hist["future_excess_ret_120"], errors="coerce").notna()
+        hist120 = hist.loc[mask120].copy()
+        if len(hist120) >= max(8, int(len(hist) * 0.4)):
+            return hist120
+    return hist
 
 def build_quality_maps_asof(events: pd.DataFrame, effective_date: pd.Timestamp) -> Tuple[Dict[str, float], Dict[Tuple[str, str], float]]:
     hist_events = filter_events_for_profile_asof(events, effective_date)
     if hist_events.empty:
         return {}, {}
-    hist_profiles = build_holder_profiles(hist_events)
+    hist_profiles = build_holder_profiles(
+        hist_events,
+        profile_scope=PROFILE_SCOPE_ASOF,
+        profile_asof_date=effective_date,
+        profile_note="运行时 as-of 画像，不写入数据库",
+    )
     profile_map = hist_profiles.set_index("holder_name_std")["final_holder_quality"].to_dict() if not hist_profiles.empty else {}
     industry_map = build_holder_industry_scores(hist_events, hist_profiles) if not hist_profiles.empty else {}
     return profile_map, industry_map
-
 
 def compute_stock_scores(df: pd.DataFrame, events: pd.DataFrame, stock_df_map: Dict[str, pd.DataFrame],
                          event_cache: Dict[Tuple[str, pd.Timestamp], EventMarketMetrics],
@@ -1082,12 +1218,13 @@ def compute_stock_scores(df: pd.DataFrame, events: pd.DataFrame, stock_df_map: D
                     prev_ratio = safe_float(prev_row["hold_float_ratio"]) or 0.0
                     delta = cur_ratio - prev_ratio
                     turnover_struct_val += abs(delta)
-                    if delta > 0.01:
+                    overlap_action, _, _ = _classify_overlap_action(cur_row, prev_row)
+                    q = safe_float(cur_row["holder_quality"]) or 50.0
+                    if overlap_action == "add":
                         add_count += 1
-                        q = safe_float(cur_row["holder_quality"]) or 50.0
-                        add_quality_numer += delta * q
-                        add_quality_denom += delta
-                    elif delta < -0.01:
+                        add_quality_numer += max(delta, 0.0) * q
+                        add_quality_denom += max(delta, 0.0)
+                    elif overlap_action == "reduce":
                         reduce_count += 1
 
                     rank_cur = int(cur_row["holder_rank"])
@@ -1098,7 +1235,6 @@ def compute_stock_scores(df: pd.DataFrame, events: pd.DataFrame, stock_df_map: D
                         head_net += delta
                     else:
                         tail_net += delta
-                    q = safe_float(cur_row["holder_quality"]) or 50.0
                     if q >= 70:
                         quality_net_add_val += delta
 
@@ -1128,6 +1264,8 @@ def compute_stock_scores(df: pd.DataFrame, events: pd.DataFrame, stock_df_map: D
                 "report_date": report_date.strftime("%Y%m%d") if isinstance(report_date, pd.Timestamp) else str(report_date),
                 "ann_date": ann_date.strftime("%Y%m%d") if isinstance(ann_date, pd.Timestamp) else str(ann_date),
                 "effective_date": metrics.effective_date.strftime("%Y%m%d"),
+                "quality_profile_scope": PROFILE_SCOPE_ASOF,
+                "quality_profile_asof_date": metrics.effective_date.strftime("%Y%m%d"),
                 "cr3": cr3,
                 "cr5": cr5,
                 "cr10": cr10,
@@ -1214,10 +1352,10 @@ def compute_stock_scores(df: pd.DataFrame, events: pd.DataFrame, stock_df_map: D
     )
 
     industry_key = result["industry_l2"].fillna("未知行业") if "industry_l2" in result.columns else pd.Series(["全市场"] * len(result), index=result.index)
-    result["score_change_neutral"] = clip_score(12.5 + 5 * group_robust_zscore(score_change_raw, industry_key), 0, 25)
-    result["score_stability_neutral"] = clip_score(10 + 4 * group_robust_zscore(score_stability_raw, industry_key), 0, 20)
-    result["score_quality_neutral"] = clip_score(15 + 6 * group_robust_zscore(score_quality_raw, industry_key), 0, 30)
-    result["score_interaction_neutral"] = clip_score(7.5 + 3 * group_robust_zscore(score_interaction_raw, industry_key), 0, 15)
+    result["score_change_neutral"] = clip_score(12.5 + 5 * industry_neutralize(score_change_raw, industry_key), 0, 25)
+    result["score_stability_neutral"] = clip_score(10 + 4 * industry_neutralize(score_stability_raw, industry_key), 0, 20)
+    result["score_quality_neutral"] = clip_score(15 + 6 * industry_neutralize(score_quality_raw, industry_key), 0, 30)
+    result["score_interaction_neutral"] = clip_score(7.5 + 3 * industry_neutralize(score_interaction_raw, industry_key), 0, 15)
 
     result["score_change"] = clip_score(12.5 + 5 * score_change_raw, 0, 25)
     result["score_stability"] = clip_score(10 + 4 * score_stability_raw, 0, 20)
@@ -1228,7 +1366,6 @@ def compute_stock_scores(df: pd.DataFrame, events: pd.DataFrame, stock_df_map: D
     risk -= ((rank01(result["highpos_crowded"]) >= 0.85).astype(float) * 2.0)
     risk -= (((pd.to_numeric(result["quality_net_add"], errors="coerce") < 0) & (rank01(result["quality_net_add"].fillna(0).abs()) >= 0.70)).astype(float) * 3.0)
     risk -= (pd.to_numeric(result["head_tail_divergence_flag"], errors="coerce").fillna(0) * 2.0)
-    risk += (pd.to_numeric(result["head_tail_support_flag"], errors="coerce").fillna(0) * 1.0)
     risk -= (((pd.to_numeric(result["overlap_ratio"], errors="coerce") <= 0.4).astype(float)) * 2.0)
     risk -= (((pd.to_numeric(result["entry_weighted_quality"], errors="coerce") < 45).astype(float)) * 1.0)
     result["score_risk"] = risk.clip(lower=-10, upper=1)
@@ -1359,7 +1496,7 @@ def process_batch(limit: Optional[int], lookback_years: int, dry_run: bool,
         start_date = min(g["ann_date"].dropna().min(), g["report_date"].dropna().min())
         end_date = pd.Timestamp.today().normalize()
         try:
-            stock_df, bench_df = load_market_data(ts_code, start_date, end_date, bench_code=bench_code, fqt=fqt)
+            stock_df, bench_df = load_market_data(ts_code, start_date, end_date, bench_code=bench_code)
             if stock_df.empty:
                 logger.warning("%s Tushare 行情为空，跳过", ts_code)
                 continue
@@ -1384,7 +1521,11 @@ def process_batch(limit: Optional[int], lookback_years: int, dry_run: bool,
         logger.info("增量模式：已有 scores %d 行", len(existing_scores))
 
     events_df = build_change_events(top10_df.copy(), event_cache)
-    profiles_df = build_holder_profiles(events_df) if not events_df.empty else pd.DataFrame()
+    profiles_df = build_holder_profiles(
+        events_df,
+        profile_scope=PROFILE_SCOPE_FULL,
+        profile_note="数据库保存的是全样本画像；历史评分运行时按 as-of 重建画像"
+    ) if not events_df.empty else pd.DataFrame()
     scores_df = compute_stock_scores(top10_df, events_df, stock_df_map, event_cache, existing_scores=existing_scores)
 
     n1 = save_profiles(profiles_df, dry_run=dry_run)
@@ -1406,7 +1547,7 @@ def process_single(ts_code: str, lookback_years: int, dry_run: bool,
     top10_df = build_holder_tenure(top10_df)
     start_date = min(top10_df["ann_date"].dropna().min(), top10_df["report_date"].dropna().min())
     end_date = pd.Timestamp.today().normalize()
-    stock_df, bench_df = load_market_data(ts_code, start_date, end_date, bench_code=bench_code, fqt=fqt)
+    stock_df, bench_df = load_market_data(ts_code, start_date, end_date, bench_code=bench_code)
     if stock_df.empty:
         logger.warning("%s 无可用行情数据", ts_code)
         return
@@ -1418,7 +1559,11 @@ def process_single(ts_code: str, lookback_years: int, dry_run: bool,
         logger.info("增量模式：已有 scores %d 行", len(existing_scores))
 
     events_df = build_change_events(top10_df.copy(), event_cache)
-    profiles_df = build_holder_profiles(events_df) if not events_df.empty else pd.DataFrame()
+    profiles_df = build_holder_profiles(
+        events_df,
+        profile_scope=PROFILE_SCOPE_FULL,
+        profile_note="数据库保存的是全样本画像；历史评分运行时按 as-of 重建画像"
+    ) if not events_df.empty else pd.DataFrame()
     scores_df = compute_stock_scores(top10_df, events_df, {ts_code: stock_df}, event_cache, existing_scores=existing_scores)
     n1 = save_profiles(profiles_df, dry_run=dry_run)
     n2 = save_scores(scores_df, dry_run=dry_run)
