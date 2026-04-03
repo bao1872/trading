@@ -567,9 +567,36 @@ def get_scanned_dates() -> set:
     return set(df["dt"].tolist())
 
 
-def batch_backfill(start_date: str, bars: int, log_level: str, end_date: str = None, codes: str = None) -> None:
-    import qstock as qs
+def get_trade_dates_from_tushare(start_date: str, end_date: str) -> List[str]:
+    """从 Tushare Pro 获取交易日列表
+    
+    Args:
+        start_date: 开始日期 (YYYY-MM-DD 或 YYYYMMDD)
+        end_date: 结束日期 (YYYY-MM-DD 或 YYYYMMDD)
+    
+    Returns:
+        交易日列表 (YYYY-MM-DD 格式，按日期升序排列)
+    """
+    import tushare as ts
+    from tushare_data.config import TS_TOKEN
+    
+    # 统一转换为 YYYYMMDD 格式
+    start = start_date.replace("-", "")
+    end = end_date.replace("-", "")
+    
+    pro = ts.pro_api(TS_TOKEN)
+    df = pro.trade_cal(exchange='SSE', start_date=start, end_date=end, is_open='1')
+    
+    if df is None or df.empty:
+        return []
+    
+    # 按日期升序排列，并转换为 YYYY-MM-DD 格式
+    df = df.sort_values('cal_date', ascending=True)
+    trade_dates = df['cal_date'].tolist()
+    return [d[:4] + "-" + d[4:6] + "-" + d[6:8] for d in trade_dates]
 
+
+def batch_backfill(start_date: str, bars: int, log_level: str, end_date: str = None, codes: str = None) -> None:
     logging.basicConfig(
         level=getattr(logging, str(log_level).upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -578,8 +605,7 @@ def batch_backfill(start_date: str, bars: int, log_level: str, end_date: str = N
     today = datetime.now().strftime("%Y-%m-%d")
     end_date = end_date or today
 
-    trade_dates = qs.get_dates(start_date, end_date)
-    trade_dates = [d[:4] + "-" + d[4:6] + "-" + d[6:8] for d in trade_dates]
+    trade_dates = get_trade_dates_from_tushare(start_date, end_date)
 
     scanned = get_scanned_dates()
     to_scan = [d for d in trade_dates if d not in scanned]
