@@ -2305,7 +2305,7 @@ def render_first_day_launch_page(session):
         today_k_sql = f"""
             SELECT ts_code, close
             FROM stock_k_data
-            WHERE freq = 'd' AND bar_time LIKE :date || '%'
+            WHERE freq = 'd' AND bar_time::date = :date
             AND ts_code IN ('{ts_codes_str}')
         """
         df_today = query_sql(session, today_k_sql, {"date": selected_date})
@@ -2314,7 +2314,7 @@ def render_first_day_launch_page(session):
         prev_k_sql = f"""
             SELECT ts_code, close as prev_close
             FROM stock_k_data
-            WHERE freq = 'd' AND bar_time LIKE :date || '%'
+            WHERE freq = 'd' AND bar_time::date = :date
             AND ts_code IN ('{ts_codes_str}')
         """
         df_prev = query_sql(session, prev_k_sql, {"date": prev_date})
