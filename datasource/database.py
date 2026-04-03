@@ -233,10 +233,17 @@ def query_df(
     # 构建ORDER BY
     order_sql = ""
     if order_by:
-        if order_by.startswith("-"):
-            order_sql = f"ORDER BY {order_by[1:]} DESC"
-        else:
-            order_sql = f"ORDER BY {order_by} ASC"
+        # 支持多字段排序，格式: "+field1,-field2" 或 "field1,-field2"
+        order_parts = []
+        for field in order_by.split(","):
+            field = field.strip()
+            if field.startswith("-"):
+                order_parts.append(f"{field[1:]} DESC")
+            elif field.startswith("+"):
+                order_parts.append(f"{field[1:]} ASC")
+            else:
+                order_parts.append(f"{field} ASC")
+        order_sql = "ORDER BY " + ", ".join(order_parts)
 
     # 构建LIMIT和OFFSET
     limit_sql = f"LIMIT {limit}" if limit else ""
