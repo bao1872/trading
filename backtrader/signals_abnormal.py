@@ -67,19 +67,13 @@ def calculate_5day_rolling_zscore_vectorized(
 
 
 def ensure_signal_tables(session) -> None:
-    """确保信号表存在，不存在则创建"""
-    from datasource.database import execute_sql, DATABASE_URL
-    is_postgres = not DATABASE_URL.startswith("sqlite")
-
-    def pk_sql():
-        if is_postgres:
-            return "id SERIAL PRIMARY KEY"
-        return "id INTEGER PRIMARY KEY AUTOINCREMENT"
+    """确保信号表存在，不存在则创建（PostgreSQL）"""
+    from datasource.database import execute_sql
 
     tables_sql = {
-        'theme_signals_rolling': f"""
+        'theme_signals_rolling': """
             CREATE TABLE IF NOT EXISTS theme_signals_rolling (
-                {pk_sql()},
+                id SERIAL PRIMARY KEY,
                 snapshot_date DATE NOT NULL,
                 period VARCHAR(20),
                 theme VARCHAR(100) NOT NULL,
@@ -95,9 +89,9 @@ def ensure_signal_tables(session) -> None:
                 UNIQUE(snapshot_date, theme)
             )
         """,
-        'concept_signals_rolling': f"""
+        'concept_signals_rolling': """
             CREATE TABLE IF NOT EXISTS concept_signals_rolling (
-                {pk_sql()},
+                id SERIAL PRIMARY KEY,
                 snapshot_date DATE NOT NULL,
                 concept VARCHAR(100) NOT NULL,
                 theme VARCHAR(100),
@@ -111,9 +105,9 @@ def ensure_signal_tables(session) -> None:
                 UNIQUE(snapshot_date, concept)
             )
         """,
-        'stock_anomaly_signals_rolling': f"""
+        'stock_anomaly_signals_rolling': """
             CREATE TABLE IF NOT EXISTS stock_anomaly_signals_rolling (
-                {pk_sql()},
+                id SERIAL PRIMARY KEY,
                 snapshot_date DATE NOT NULL,
                 code VARCHAR(20) NOT NULL,
                 name VARCHAR(50),
@@ -205,6 +199,11 @@ def calculate_volume_cv_and_spearman(
 
         window_start = snapshot_ts - pd.Timedelta(days=6)
         window_end = snapshot_ts + pd.Timedelta(days=1)
+
+        # 确保时区一致：将 window_start/end 转换为与 df.index 相同的时区
+        if df.index.tz is not None:
+            window_start = window_start.tz_localize(df.index.tz) if window_start.tz is None else window_start.tz_convert(df.index.tz)
+            window_end = window_end.tz_localize(df.index.tz) if window_end.tz is None else window_end.tz_convert(df.index.tz)
 
         mask = (df.index >= window_start) & (df.index <= window_end)
         window_volumes = df.loc[mask, 'volume'].dropna()
