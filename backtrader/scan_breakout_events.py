@@ -533,7 +533,7 @@ def ensure_tables_exist():
     );
     """
     engine = get_engine()
-    with engine.connect() as conn:
+    with engine.begin() as conn:
         conn.execute(text(dir_turn_table))
         conn.execute(text(pullback_table))
     engine.dispose()
@@ -686,18 +686,20 @@ def main():
         if market is None:
             continue
 
-        # 使用不写入的版本收集事件
-        code, _, dir_events, pull_events = process_stock_no_write(ts_code, name, freqs[0] if freqs else "d", args.bars, target_date)
-        if code == -1:
-            skipped_no_data += 1
-            continue
-        if code == -2:
-            skipped_insufficient += 1
-            continue
+        # 遍历所有周期
+        for freq in freqs:
+            # 使用不写入的版本收集事件
+            code, _, dir_events, pull_events = process_stock_no_write(ts_code, name, freq, args.bars, target_date)
+            if code == -1:
+                skipped_no_data += 1
+                continue
+            if code == -2:
+                skipped_insufficient += 1
+                continue
 
-        day_dir_events.extend(dir_events)
-        day_pullback_events.extend(pull_events)
-        processed += 1
+            day_dir_events.extend(dir_events)
+            day_pullback_events.extend(pull_events)
+            processed += 1
 
         if idx % 500 == 0:
             logger.info("已处理 %s / %s", idx, len(stock_list))
@@ -706,13 +708,31 @@ def main():
     if day_dir_events or day_pullback_events:
         from datasource.database import bulk_upsert
         engine = get_engine()
-        with engine.connect() as conn:
-            if day_dir_events:
-                bulk_upsert(conn, "breakout_dir_turn_events", pd.DataFrame(day_dir_events), ["ts_code", "freq", "event_time"])
-            if day_pullback_events:
-                bulk_upsert(conn, "breakout_pullback_buy_events", pd.DataFrame(day_pullback_events), ["ts_code", "freq", "buy_time"])
-            conn.commit()
-        engine.dispose()
+        try:
+            # 使用 engine.begin() 自动管理事务
+            with engine.begin() as conn:
+                if day_dir_events:
+                    bulk_upsert(conn, "breakout_dir_turn_events", pd.DataFrame(day_dir_events), ["ts_code", "freq", "event_time"], auto_commit=False)
+                if day_pullback_events:
+                    bulk_upsert(conn, "breakout_pullback_buy_events", pd.DataFrame(day_pullback_events), ["ts_code", "freq", "buy_time"], auto_commit=False)
+            logger.info("成功写入数据库: 翻多事件 %s 个, 回踩买点 %s 个", len(day_dir_events), len(day_pullback_events))
+        except Exception as e:
+            logger.error("数据库连接或写入异常: %s", e)
+            # 保存到本地文件作为备份
+            import json
+            from datetime import datetime
+            backup_file = f"breakout_events_backup_{target_date}_{datetime.now().strftime('%H%M%S')}.json"
+            backup_data = {
+                "target_date": target_date,
+                "dir_turn_events": day_dir_events,
+                "pullback_events": day_pullback_events,
+                "error": str(e)
+            }
+            with open(backup_file, 'w', encoding='utf-8') as f:
+                json.dump(backup_data, f, ensure_ascii=False, indent=2)
+            logger.warning("事件数据已备份到文件: %s", backup_file)
+        finally:
+            engine.dispose()
 
     logger.info("扫描完成！共处理 %s 只股票 (截止 %s)", processed, target_date)
     logger.info("翻多事件: %s 个，回踩买点: %s 个", len(day_dir_events), len(day_pullback_events))

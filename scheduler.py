@@ -5,29 +5,27 @@
 
 功能：集中管理所有定时调度任务
 作者：项目团队
-修改日期：2026-03-05
+修改日期：2026-04-03
 版本：v1.0.0
 
 ================================================================================
 当前任务列表（共 2 个任务）
 ================================================================================
 
-1. 背离扫描任务 (task_背离扫描) - [已授权]
-   - 函数：scan_divergence_task()
-   - 触发器：Cron (每 5 分钟整点)
-   - 执行时间：周一至周五 09:25-11:30, 13:00-15:00
-   - 功能：扫描所有股票的 1m/5m/15m/60m 周期背离信号
-   - 配置：ENABLE_DIVERGENCE_SCAN=true
-   - 日志：scheduler.log 中搜索 "背离扫描"
+1. 数据集构建任务 (task_数据集构建) - [已授权]
+   - 函数：build_dataset_task()
+   - 触发器：Cron (每天 15:01)
+   - 执行时间：周一至周五 15:01（收盘后）
+   - 功能：执行 python app/build_dataset.py --update
+   - 日志：scheduler.log 中搜索 "数据集构建"
    - 状态：✅ 已授权并启用
 
-2. 选股任务 (task_选股) - [已授权]
-   - 函数：stock_picker_task()
-   - 触发器：Cron (每天 15:02)
-   - 执行时间：周一至周五 15:02（收盘后）
-   - 功能：执行 AMP + 底背离选股策略，仅保存到数据库
-   - 配置：ENABLE_STOCK_PICKER=true
-   - 日志：scheduler.log 中搜索 "选股任务"
+2. 信号组合任务 (task_信号组合) - [已授权]
+   - 函数：signals_combined_task()
+   - 触发器：Cron (每天 15:20)
+   - 执行时间：周一至周五 15:20（收盘后）
+   - 功能：执行 python backtrader/signals_combined.py --date 当天日期 --db
+   - 日志：scheduler.log 中搜索 "信号组合"
    - 状态：✅ 已授权并启用
 
 ================================================================================
@@ -116,10 +114,6 @@
 环境变量配置 (.env 文件)
 ================================================================================
 
-# 已授权任务配置
-ENABLE_DIVERGENCE_SCAN=true      # 背离扫描任务
-ENABLE_STOCK_PICKER=true        # 选股任务
-
 # 日志配置
 LOG_LEVEL=INFO                  # 日志级别：DEBUG, INFO, WARNING, ERROR
 LOG_FILE=scheduler.log         # 日志文件路径
@@ -136,8 +130,8 @@ LOG_FILE=scheduler.log         # 日志文件路径
 - 不允许创建或调度任何未在配置中显式指定的任务
 - 所有任务必须经过明确授权才能注册到调度器
 - 当前已授权 2 个任务：
-  1. 背离扫描任务
-  2. 选股任务
+  1. 数据集构建任务
+  2. 信号组合任务
 
 如需添加新任务，必须：
 1. 在本文档头部明确列出任务信息
@@ -153,13 +147,10 @@ LOG_FILE=scheduler.log         # 日志文件路径
     Q1: 任务没有按时执行？
     A: 检查 .env 中任务开关是否开启，确认当前是否在交易时段
     
-    Q2: 重复收到相同的背离通知？
-    A: 检查去重逻辑，确认 notified_divergences 集合是否正确维护
-    
-    Q3: 调度器无法启动？
+    Q2: 调度器无法启动？
     A: 检查 Python 版本（需要 3.8+），检查依赖是否安装
     
-    Q4: 日志文件过大？
+    Q3: 日志文件过大？
     A: 实施日志轮转或定期清理旧日志
 
 调试模式：
@@ -169,13 +160,6 @@ LOG_FILE=scheduler.log         # 日志文件路径
     
     # 查看调度器详细信息
     grep -i "apscheduler" scheduler.log
-
-手动触发任务：
-    # 在 Python 交互环境中
-    from scheduler import scan_divergence_task, cleanup_temp_files_task
-    
-    scan_divergence_task()      # 手动执行背离扫描
-    cleanup_temp_files_task()   # 手动执行文件清理
 
 ================================================================================
 """
@@ -202,10 +186,6 @@ if dotenv_path.exists():
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
-
-# 全局去重记录（在调度器生命周期内持久化）
-# key: (symbol, period, type, indicator)
-global_notified_divergences = set()
 
 # 配置日志
 logging.basicConfig(
@@ -348,95 +328,97 @@ class TaskScheduler:
         logger.info("调度器已关闭")
 
 
-def scan_divergence_task():
-    """背离扫描任务 - 已授权（定时扫描模式，不生成文件）"""
-    from app.quote_snapshot import scan_all_stocks
-    from scheduler import global_notified_divergences
-    
-    logger.info("开始执行背离扫描任务")
-    
-    # 股票列表现在从数据库读取，stock_list_path 参数仅用于向后兼容
-    stock_list_path = PROJECT_ROOT / 'stock.xlsx'
-    stock_cache_path = PROJECT_ROOT / 'stock_concepts_cache.xlsx'
-    output_dir = PROJECT_ROOT / '背离扫描'
-    
-    # 确保输出目录存在
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    try:
-        # 执行扫描（定时扫描模式：generate_files=False，不生成任何文件）
-        # 使用全局去重记录，避免重复推送
-        result = scan_all_stocks(
-            stock_list_path=str(stock_list_path),
-            stock_cache_path=str(stock_cache_path),
-            output_dir=str(output_dir),
-            notify=True,
-            notified_divergences=global_notified_divergences,  # 使用全局去重记录
-            generate_files=False,  # 定时扫描不生成文件
-        )
-        
-        if result:
-            logger.info(f"背离扫描完成，发现 {len(result)} 只有背离信号的股票")
-        else:
-            logger.info("背离扫描完成，未发现背离信号")
-    
-    except Exception as e:
-        logger.error(f"背离扫描任务执行失败：{e}", exc_info=True)
-        raise
-
-
-def stock_picker_task():
-    """选股任务 - 已授权（收盘后执行，仅保存到数据库）"""
+def build_dataset_task():
+    """数据集构建任务 - 已授权（收盘后执行）"""
     import subprocess
-    from datetime import datetime
     
-    logger.info("开始执行选股任务")
+    logger.info("开始执行数据集构建任务")
     
     try:
-        # 获取当天日期
-        today = datetime.now().strftime("%Y-%m-%d")
-        
-        # 调用 stock_picker.py 进行选股
-        # 使用 --no-xlsx 参数，仅保存到数据库
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "selections" / "stock_picker.py"),
-            "--date", today,
-            "--no-xlsx",  # 不保存 Excel 文件
+            str(PROJECT_ROOT / "app" / "build_dataset.py"),
+            "--update",
         ]
         
         logger.info(f"执行命令：{' '.join(cmd)}")
         
-        # 执行命令并捕获输出
         result = subprocess.run(
             cmd,
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=7200,  # 2 小时超时
+            timeout=3600,  # 1 小时超时
         )
         
-        # 记录输出
         if result.stdout:
             for line in result.stdout.strip().split('\n'):
-                logger.info(f"选股任务：{line}")
+                logger.info(f"数据集构建：{line}")
         
         if result.stderr:
             for line in result.stderr.strip().split('\n'):
-                logger.warning(f"选股任务：{line}")
+                logger.warning(f"数据集构建：{line}")
         
-        # 检查执行结果
         if result.returncode == 0:
-            logger.info("✅ 选股任务执行完成")
+            logger.info("✅ 数据集构建任务执行完成")
         else:
-            logger.error(f"❌ 选股任务执行失败，退出码：{result.returncode}")
-            raise RuntimeError(f"选股任务失败：{result.stderr}")
+            logger.error(f"❌ 数据集构建任务执行失败，退出码：{result.returncode}")
+            raise RuntimeError(f"数据集构建任务失败：{result.stderr}")
     
     except subprocess.TimeoutExpired:
-        logger.error("❌ 选股任务超时（超过 2 小时）")
+        logger.error("❌ 数据集构建任务超时（超过 1 小时）")
         raise
     except Exception as e:
-        logger.error(f"❌ 选股任务执行失败：{e}", exc_info=True)
+        logger.error(f"❌ 数据集构建任务执行失败：{e}", exc_info=True)
+        raise
+
+
+def signals_combined_task():
+    """信号组合任务 - 已授权（收盘后执行）"""
+    import subprocess
+    from datetime import datetime
+    
+    logger.info("开始执行信号组合任务")
+    
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        cmd = [
+            sys.executable,
+            str(PROJECT_ROOT / "backtrader" / "signals_combined.py"),
+            "--date", today,
+            "--db",
+        ]
+        
+        logger.info(f"执行命令：{' '.join(cmd)}")
+        
+        result = subprocess.run(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=1800,  # 30 分钟超时
+        )
+        
+        if result.stdout:
+            for line in result.stdout.strip().split('\n'):
+                logger.info(f"信号组合：{line}")
+        
+        if result.stderr:
+            for line in result.stderr.strip().split('\n'):
+                logger.warning(f"信号组合：{line}")
+        
+        if result.returncode == 0:
+            logger.info("✅ 信号组合任务执行完成")
+        else:
+            logger.error(f"❌ 信号组合任务执行失败，退出码：{result.returncode}")
+            raise RuntimeError(f"信号组合任务失败：{result.stderr}")
+    
+    except subprocess.TimeoutExpired:
+        logger.error("❌ 信号组合任务超时（超过 30 分钟）")
+        raise
+    except Exception as e:
+        logger.error(f"❌ 信号组合任务执行失败：{e}", exc_info=True)
         raise
 
 
@@ -449,76 +431,27 @@ def main():
     # 创建调度器
     scheduler = TaskScheduler(use_async=False)
     
-    # 从环境变量读取任务配置（仅支持已授权的任务）
-    ENABLE_DIVERGENCE_SCAN = os.getenv('ENABLE_DIVERGENCE_SCAN', 'true').lower() == 'true'
-    ENABLE_STOCK_PICKER = os.getenv('ENABLE_STOCK_PICKER', 'true').lower() == 'true'
+    # 数据集构建任务 - 每个交易日 15:01 执行（收盘后）
+    scheduler.register_task(
+        name='数据集构建',
+        func=build_dataset_task,
+        trigger='cron',
+        job_id='task_数据集构建',
+        hour=15,
+        minute=1,
+        day_of_week='mon-fri',  # 工作日
+    )
     
-    # 背离扫描任务 - 每 5 分钟整点执行（仅在 A 股交易时段）
-    # 交易时段：9:25-11:30（上午），13:00-15:00（下午）
-    # 注意：9:25 是集合竞价结束时间，9:30 开始连续竞价
-    if ENABLE_DIVERGENCE_SCAN:
-        # 上午：9 点 (25-55 分), 10 点 (0-55 分), 11 点 (0-30 分)
-        scheduler.register_task(
-            name='背离扫描',
-            func=scan_divergence_task,
-            trigger='cron',
-            job_id='task_背离扫描_am',
-            minute='25,30,35,40,45,50,55',  # 9 点从 25 分开始
-            hour='9',  # 9 点
-            day_of_week='mon-fri',  # 工作日
-        )
-        scheduler.register_task(
-            name='背离扫描',
-            func=scan_divergence_task,
-            trigger='cron',
-            job_id='task_背离扫描_am2',
-            minute='*/5',  # 每 5 分钟
-            hour='10',  # 10 点整小时
-            day_of_week='mon-fri',  # 工作日
-        )
-        scheduler.register_task(
-            name='背离扫描',
-            func=scan_divergence_task,
-            trigger='cron',
-            job_id='task_背离扫描_am3',
-            minute='0,5,10,15,20,25,30',  # 11 点到 30 分结束
-            hour='11',  # 11 点
-            day_of_week='mon-fri',  # 工作日
-        )
-        # 下午：13 点 (0-55 分), 14 点 (0-55 分), 15 点 (0 分)
-        scheduler.register_task(
-            name='背离扫描',
-            func=scan_divergence_task,
-            trigger='cron',
-            job_id='task_背离扫描_pm',
-            minute='*/5',  # 每 5 分钟
-            hour='13-14',  # 13-14 点
-            day_of_week='mon-fri',  # 工作日
-        )
-        scheduler.register_task(
-            name='背离扫描',
-            func=scan_divergence_task,
-            trigger='cron',
-            job_id='task_背离扫描_pm2',
-            minute='0',  # 15 点只在 0 分执行（收盘）
-            hour='15',  # 15 点
-            day_of_week='mon-fri',  # 工作日
-        )
-    else:
-        logger.warning("背离扫描任务未启用（ENABLE_DIVERGENCE_SCAN=false）")
-    
-    # 选股任务 - 每天 15:02 执行（收盘后）
-    if ENABLE_STOCK_PICKER:
-        scheduler.register_task(
-            name='选股任务',
-            func=stock_picker_task,
-            trigger='cron',
-            hour=15,
-            minute=2,
-            day_of_week='mon-fri',  # 工作日
-        )
-    else:
-        logger.warning("选股任务未启用（ENABLE_STOCK_PICKER=false）")
+    # 信号组合任务 - 每个交易日 15:20 执行（收盘后）
+    scheduler.register_task(
+        name='信号组合',
+        func=signals_combined_task,
+        trigger='cron',
+        job_id='task_信号组合',
+        hour=15,
+        minute=20,
+        day_of_week='mon-fri',  # 工作日
+    )
     
     logger.info(f"已注册 {len(scheduler.tasks)} 个已授权任务")
     logger.info(f"任务列表：{list(scheduler.tasks.keys())}")
