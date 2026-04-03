@@ -290,8 +290,9 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
 
             try:
                 if bar_type == "w":
-                    df = get_kline_data(api, symbol, "d", fetch_count)
-                    if df.empty or len(df) < 100:
+                    # 周线直接获取，不允许重采样
+                    df = get_kline_data(api, symbol, "w", fetch_count)
+                    if df.empty:
                         continue
                     df = df.set_index("datetime")
                     if newest_time:
@@ -299,7 +300,6 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
                         df = df[df.index > newest_time]
                     if df.empty:
                         continue
-                    df = resample_to_weekly(df)
                 else:
                     period_map = {"60": "60m", "d": "d"}
                     pytdx_period = period_map.get(bar_type, bar_type)
