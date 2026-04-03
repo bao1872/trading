@@ -222,9 +222,17 @@ def query_df(
                 col_name = match.group(1)
                 operator = match.group(2) or '='
                 safe_key = col_name.replace(' ', '_').replace('-', '_')
-                placeholder = f":{safe_key}"
-                where_clauses.append(f"{col_name} {operator} {placeholder}")
-                params[safe_key] = value
+                
+                # 处理列表类型的 IN 查询
+                if isinstance(value, (list, tuple)):
+                    placeholders = [f":{safe_key}_{i}" for i in range(len(value))]
+                    where_clauses.append(f"{col_name} IN ({', '.join(placeholders)})")
+                    for i, v in enumerate(value):
+                        params[f"{safe_key}_{i}"] = v
+                else:
+                    placeholder = f":{safe_key}"
+                    where_clauses.append(f"{col_name} {operator} {placeholder}")
+                    params[safe_key] = value
 
     where_sql = ""
     if where_clauses:
