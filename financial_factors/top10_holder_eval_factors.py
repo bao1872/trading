@@ -234,11 +234,12 @@ def parse_date_column(series: pd.Series) -> pd.Series:
     return s
 
 
-def _safe_add_column(session, table_name: str, column_def: str) -> None:
+def _safe_add_column(conn, table_name: str, column_def: str) -> None:
     try:
-        session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_def}"))
-    except Exception:
-        pass
+        conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_def}"))
+        logger.info(f"Added column {column_def} to {table_name}")
+    except Exception as e:
+        logger.debug(f"Column may already exist: {column_def} - {e}")
 
 
 def ensure_output_tables() -> None:
@@ -268,9 +269,6 @@ def ensure_output_tables() -> None:
         scenefit_growth REAL,
         scenefit_industry_l2 REAL,
         final_holder_quality REAL,
-        profile_scope TEXT,
-        profile_asof_date TEXT,
-        profile_note TEXT,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """
@@ -286,8 +284,6 @@ def ensure_output_tables() -> None:
         report_date TEXT NOT NULL,
         ann_date TEXT,
         effective_date TEXT,
-        quality_profile_scope TEXT,
-        quality_profile_asof_date TEXT,
         cr3 REAL,
         cr5 REAL,
         cr10 REAL,
@@ -357,15 +353,25 @@ def ensure_output_tables() -> None:
     )
     """
 
-    with get_session() as session:
-        session.execute(text(create_profile_sql))
-        session.execute(text(create_score_sql))
-        _safe_add_column(session, PROFILE_TABLE, "profile_scope TEXT")
-        _safe_add_column(session, PROFILE_TABLE, "profile_asof_date TEXT")
-        _safe_add_column(session, PROFILE_TABLE, "profile_note TEXT")
-        _safe_add_column(session, SCORE_TABLE, "quality_profile_scope TEXT")
-        _safe_add_column(session, SCORE_TABLE, "quality_profile_asof_date TEXT")
-        session.commit()
+    # 使用 engine.begin() 确保DDL事务正确提交
+    from datasource.database import get_engine
+    logger.info("Creating output tables...")
+    try:
+        with get_engine().begin() as conn:
+            logger.info(f"Creating {PROFILE_TABLE}...")
+            conn.execute(text(create_profile_sql))
+            logger.info(f"Creating {SCORE_TABLE}...")
+            conn.execute(text(create_score_sql))
+            # 添加扩展列（如果表已存在则忽略错误）
+            _safe_add_column(conn, PROFILE_TABLE, "profile_scope TEXT")
+            _safe_add_column(conn, PROFILE_TABLE, "profile_asof_date TEXT")
+            _safe_add_column(conn, PROFILE_TABLE, "profile_note TEXT")
+            _safe_add_column(conn, SCORE_TABLE, "quality_profile_scope TEXT")
+            _safe_add_column(conn, SCORE_TABLE, "quality_profile_asof_date TEXT")
+        logger.info("Output tables created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create output tables: {e}")
+        raise
 
 def get_stock_pool(limit: Optional[int] = None) -> List[Tuple[str, Optional[str]]]:
     with get_session() as session:
