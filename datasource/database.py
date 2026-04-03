@@ -262,15 +262,55 @@ def query_df(
 
     # 执行查询
     result = conn.execute(text(sql), params)
+    return _result_to_df(result)
+
+
+def _result_to_df(result) -> pd.DataFrame:
+    """
+    将 SQLAlchemy 查询结果转换为 DataFrame
+
+    Args:
+        result: SQLAlchemy Result 对象
+
+    Returns:
+        查询结果 DataFrame
+    """
     rows = result.fetchall()
+    columns = result.keys()
 
-    # 转换为DataFrame
     if rows:
-        df = pd.DataFrame(rows, columns=result.keys())
+        return pd.DataFrame(rows, columns=columns)
     else:
-        df = pd.DataFrame(columns=result.keys() if result.keys() else [])
+        return pd.DataFrame(columns=columns if columns else [])
 
-    return df
+
+def query_sql(
+    conn: Any,
+    sql: str,
+    params: Optional[Dict[str, Any]] = None
+) -> pd.DataFrame:
+    """
+    执行原始 SQL 查询并返回 DataFrame
+
+    Args:
+        conn: SQLAlchemy Connection 或 Session 对象
+        sql: SQL 查询语句（字符串或 text 对象）
+        params: 查询参数字典
+
+    Returns:
+        查询结果 DataFrame
+    """
+    from sqlalchemy import text
+
+    if params is None:
+        params = {}
+
+    # 确保 sql 是 text 对象
+    if isinstance(sql, str):
+        sql = text(sql)
+
+    result = conn.execute(sql, params)
+    return _result_to_df(result)
 
 
 def table_exists(conn: Any, table_name: str) -> bool:
