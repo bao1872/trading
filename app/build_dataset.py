@@ -221,11 +221,11 @@ def _cleanup_incomplete_week(df: pd.DataFrame) -> pd.DataFrame:
 
 def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
     """
-    增量更新数据集：从数据库读取最新时间戳，只拉取新增数据
+    增量更新数据集：从数据库读取最新时间戳，只拉取当天的新数据
 
     参数：
         bar_type: 'd'日线, 'w'周线, '60'60分钟
-        bar_count: K 线数量上限
+        bar_count: K 线数量上限（仅用于首次获取）
     """
     if bar_type == "w" and not _is_market_close_for_weekly():
         print(f"\n⏭️  周线更新跳过：仅在周五 15:00 后更新（当前 {datetime.now().strftime('%Y-%m-%d %H:%M')} 不满足条件）")
@@ -238,7 +238,7 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
     db_freq = db_freq_map.get(bar_type, bar_type)
 
     print(f"\n{'='*70}")
-    print(f"🔄 增量更新 {bar_type} 数据 ({bar_count} bar)")
+    print(f"🔄 增量更新 {bar_type} 数据（仅获取当天）")
     print(f"{'='*70}\n")
 
     with get_session() as session:
@@ -255,17 +255,19 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
     missing_codes = all_codes - existing_codes
     need_update_codes = existing_codes
 
+    today = pd.Timestamp.today().normalize()
+
     print(f"已有股票: {len(existing_codes)} 只")
     print(f"缺失股票: {len(missing_codes)} 只")
-    print(f"需要检查更新的: {len(need_update_codes)} 只")
+    print(f"目标日期: {today.strftime('%Y-%m-%d')}")
 
     api = connect_pytdx()
     data_cache: Dict[str, Dict] = {}
 
     def should_update(symbol, newest_time):
+        """判断是否需要更新：如果最新数据不是今天，则需要更新"""
         if newest_time is None:
             return True
-        today = pd.Timestamp.today().normalize()
         return newest_time < today
 
     try:
@@ -274,21 +276,26 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
             name = row["name"]
 
             if symbol in missing_codes:
+                # 缺失的股票：获取全部历史数据
                 newest_time = None
+                fetch_count = bar_count
             elif symbol in need_update_codes:
                 newest_time = existing_dates.get(symbol, None)
                 if not should_update(symbol, newest_time):
                     continue
+                # 已有股票：只获取最近10条（足够覆盖当天）
+                fetch_count = 10
             else:
                 continue
 
             try:
                 if bar_type == "w":
-                    df = get_kline_data(api, symbol, "d", bar_count)
+                    df = get_kline_data(api, symbol, "d", fetch_count)
                     if df.empty or len(df) < 100:
                         continue
                     df = df.set_index("datetime")
                     if newest_time:
+                        # 只保留比数据库新的数据
                         df = df[df.index > newest_time]
                     if df.empty:
                         continue
@@ -296,14 +303,15 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
                 else:
                     period_map = {"60": "60m", "d": "d"}
                     pytdx_period = period_map.get(bar_type, bar_type)
-                    df = get_kline_data(api, symbol, pytdx_period, bar_count)
-                    if df.empty or len(df) < 100:
+                    df = get_kline_data(api, symbol, pytdx_period, fetch_count)
+                    if df.empty:
                         continue
                     df = df.set_index("datetime")
                     if newest_time:
+                        # 只保留比数据库新的数据
                         df = df[df.index > newest_time]
 
-                if df.empty or len(df) < 50:
+                if df.empty:
                     continue
 
                 data_cache[symbol] = {
@@ -318,7 +326,9 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
         api.disconnect()
 
     if data_cache:
-        print(f"\n获取到 {len(data_cache)} 只股票的新数据，正在保存到数据库...")
+        total_new_bars = sum(len(d["data"]) for d in data_cache.values())
+        print(f"\n获取到 {len(data_cache)} 只股票的新数据，共 {total_new_bars} 条K线")
+        print(f"正在保存到数据库...")
         with get_session() as session:
             save_to_database(session, data_cache, bar_type)
         print(f"\n✅ 更新完成")
