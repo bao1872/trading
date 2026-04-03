@@ -221,7 +221,7 @@ def _cleanup_incomplete_week(df: pd.DataFrame) -> pd.DataFrame:
 
 def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
     """
-    增量更新数据集：从数据库读取最新时间戳，只拉取当天的新数据
+    增量更新数据集：只拉取当天的新数据
 
     参数：
         bar_type: 'd'日线, 'w'周线, '60'60分钟
@@ -232,6 +232,7 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
         return
 
     from datasource.database import query_df
+    from sqlalchemy import text
     import pandas as pd
 
     db_freq_map = {'d': 'd', 'w': 'w', '60': '60m'}
@@ -241,52 +242,39 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
     print(f"🔄 增量更新 {bar_type} 数据（仅获取当天）")
     print(f"{'='*70}\n")
 
+    # 查询该周期最新的数据日期（不分股票，只查一条）
     with get_session() as session:
-        existing_df = query_df(session, "stock_k_data", filters={"freq": db_freq}, columns=["ts_code", "bar_time"])
-        if not existing_df.empty:
-            existing_df["bar_time"] = pd.to_datetime(existing_df["bar_time"])
-            existing_dates = existing_df.groupby("ts_code")["bar_time"].max()
-        else:
-            existing_dates = pd.Series(dtype="datetime64[ns]")
-
-    existing_codes = set(existing_dates.index)
-    all_codes = set(cache_df['ts_code'].apply(lambda x: x.split('.')[0]))
-
-    missing_codes = all_codes - existing_codes
-    need_update_codes = existing_codes
+        result = session.execute(
+            text("SELECT MAX(bar_time) as max_time FROM stock_k_data WHERE freq = :freq"),
+            {"freq": db_freq}
+        ).fetchone()
+        db_latest_time = result[0] if result and result[0] else None
+        if db_latest_time:
+            db_latest_time = pd.to_datetime(db_latest_time).normalize()
 
     today = pd.Timestamp.today().normalize()
+    need_full_update = (db_latest_time is None) or (db_latest_time < today)
 
-    print(f"已有股票: {len(existing_codes)} 只")
-    print(f"缺失股票: {len(missing_codes)} 只")
+    print(f"数据库最新日期: {db_latest_time.strftime('%Y-%m-%d') if db_latest_time else '无数据'}")
     print(f"目标日期: {today.strftime('%Y-%m-%d')}")
+    print(f"需要更新: {'是' if need_full_update else '否'}")
+
+    if not need_full_update:
+        print(f"\n✅ 数据已是最新，无需更新")
+        return
+
+    all_codes = set(cache_df['ts_code'].apply(lambda x: x.split('.')[0]))
 
     api = connect_pytdx()
     data_cache: Dict[str, Dict] = {}
-
-    def should_update(symbol, newest_time):
-        """判断是否需要更新：如果最新数据不是今天，则需要更新"""
-        if newest_time is None:
-            return True
-        return newest_time < today
 
     try:
         for _, row in tqdm(cache_df.iterrows(), total=len(cache_df), desc=f"更新{bar_type}"):
             symbol = row["ts_code"].split(".")[0]
             name = row["name"]
 
-            if symbol in missing_codes:
-                # 缺失的股票：获取全部历史数据
-                newest_time = None
-                fetch_count = bar_count
-            elif symbol in need_update_codes:
-                newest_time = existing_dates.get(symbol, None)
-                if not should_update(symbol, newest_time):
-                    continue
-                # 已有股票：只获取最近10条（足够覆盖当天）
-                fetch_count = 10
-            else:
-                continue
+            # 所有股票都只获取最近10条（足够覆盖当天）
+            fetch_count = 10
 
             try:
                 if bar_type == "w":
@@ -295,9 +283,8 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
                     if df.empty:
                         continue
                     df = df.set_index("datetime")
-                    if newest_time:
-                        # 只保留比数据库新的数据
-                        df = df[df.index > newest_time]
+                    # 只保留当天的数据
+                    df = df[df.index >= today]
                     if df.empty:
                         continue
                 else:
@@ -307,12 +294,10 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
                     if df.empty:
                         continue
                     df = df.set_index("datetime")
-                    if newest_time:
-                        # 只保留比数据库新的数据
-                        df = df[df.index > newest_time]
-
-                if df.empty:
-                    continue
+                    # 只保留当天的数据
+                    df = df[df.index >= today]
+                    if df.empty:
+                        continue
 
                 data_cache[symbol] = {
                     "name": name,
