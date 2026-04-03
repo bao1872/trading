@@ -407,10 +407,12 @@ def process_stock_for_dates(
     dates: List[str],
 ) -> Dict[str, Tuple[List[Dict], List[Dict]]]:
     """
-    对已加载的行情数据，按日期列表逐个计算事件
+    对已加载的行情数据，一次计算全量因子，批量提取多个日期的事件
+
+    优化：从"逐日期重复计算"改为"全量计算+日期筛选"，避免重复调用 MergedEngine.run()
 
     Args:
-        preloaded_data: 从DB加载的行情数据
+        preloaded_data: 从DB加载的行情数据（需覆盖所有待回补日期）
         ts_code: 股票代码
         name: 股票名称
         freq: 周期 ('d', '60m')
@@ -430,22 +432,18 @@ def process_stock_for_dates(
     if preloaded_data is None or len(preloaded_data) < 50:
         return results
 
+    # 1. 一次计算全量因子（覆盖所有待回补日期）
+    try:
+        args = build_engine_args(ts_code, freq, bars)
+        engine = MergedEngine(preloaded_data, args)
+        engine.run()
+        result_df = engine.df
+    except Exception as e:
+        logger.warning("计算 %s %s 全量因子失败: %s", ts_code, freq, e)
+        return {date: ([], []) for date in dates}
+
+    # 2. 从全量结果中批量提取各日期的事件
     for target_date in dates:
-        df = preloaded_data[preloaded_data.index <= target_date].copy()
-        if len(df) < 50:
-            results[target_date] = ([], [])
-            continue
-
-        try:
-            args = build_engine_args(ts_code, freq, bars)
-            engine = MergedEngine(df, args)
-            engine.run()
-            result_df = engine.df
-        except Exception as e:
-            logger.warning("计算 %s %s %s 因子失败: %s", ts_code, freq, target_date, e)
-            results[target_date] = ([], [])
-            continue
-
         dir_events = extract_dir_turn_events(result_df, ts_code, name, freq, target_date)
         pullback_events = extract_pullback_buy_events(result_df, ts_code, name, freq, target_date)
         results[target_date] = (dir_events, pullback_events)
@@ -569,7 +567,7 @@ def get_scanned_dates() -> set:
     return set(df["dt"].tolist())
 
 
-def batch_backfill(start_date: str, bars: int, log_level: str, end_date: str = None) -> None:
+def batch_backfill(start_date: str, bars: int, log_level: str, end_date: str = None, codes: str = None) -> None:
     import qstock as qs
 
     logging.basicConfig(
@@ -600,7 +598,11 @@ def batch_backfill(start_date: str, bars: int, log_level: str, end_date: str = N
     total_pullback = 0
     processed = 0
 
-    stock_list = load_stock_pool_from_db()
+    # 支持指定股票代码
+    if codes:
+        stock_list = [{"ts_code": c.strip(), "name": ""} for c in codes.split(",") if c.strip()]
+    else:
+        stock_list = load_stock_pool_from_db()
     logger.info("股票池: %d 只", len(stock_list))
 
     freq = "d"
@@ -655,6 +657,7 @@ def main():
             bars=args.bars,
             log_level=args.log_level,
             end_date=args.end_date if args.end_date else None,
+            codes=args.codes if args.codes else None,
         )
         return
 
