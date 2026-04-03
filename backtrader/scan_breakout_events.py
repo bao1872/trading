@@ -711,6 +711,7 @@ def main():
                 bulk_upsert(conn, "breakout_dir_turn_events", pd.DataFrame(day_dir_events), ["ts_code", "freq", "event_time"])
             if day_pullback_events:
                 bulk_upsert(conn, "breakout_pullback_buy_events", pd.DataFrame(day_pullback_events), ["ts_code", "freq", "buy_time"])
+            conn.commit()
         engine.dispose()
 
     logger.info("扫描完成！共处理 %s 只股票 (截止 %s)", processed, target_date)

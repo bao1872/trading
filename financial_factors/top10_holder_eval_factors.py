@@ -541,7 +541,13 @@ def build_event_metrics_cache(df: pd.DataFrame, stock_df_map: Dict[str, pd.DataF
                               bench_df_map: Dict[str, pd.DataFrame],
                               industry_bench_map: Optional[Dict[str, pd.DataFrame]] = None) -> Dict[Tuple[str, pd.Timestamp], EventMarketMetrics]:
     cache: Dict[Tuple[str, pd.Timestamp], EventMarketMetrics] = {}
-    for (ts_code, report_date), snap in df.groupby(["ts_code", "report_date"]):
+    groups = list(df.groupby(["ts_code", "report_date"]))
+    total_groups = len(groups)
+    logger.info("构建事件市场指标缓存: %s 个事件...", total_groups)
+
+    for idx, ((ts_code, report_date), snap) in enumerate(groups, 1):
+        if idx % 100 == 0 or idx == total_groups:
+            logger.info("  缓存进度: %s/%s 个事件", idx, total_groups)
         stock_df = stock_df_map.get(ts_code)
         if stock_df is None or stock_df.empty:
             continue
@@ -774,8 +780,12 @@ def build_change_events(df: pd.DataFrame, event_cache: Dict[Tuple[str, pd.Timest
                         delta_threshold_rel: float = DELTA_THRESHOLD_REL_DEFAULT) -> pd.DataFrame:
     records: List[Dict[str, object]] = []
     by_stock = df.groupby("ts_code")
+    total_stocks = len(by_stock)
+    logger.info("处理 %s 只股票的变动事件...", total_stocks)
 
-    for ts_code, g in by_stock:
+    for idx, (ts_code, g) in enumerate(by_stock, 1):
+        if idx % 50 == 0 or idx == total_stocks:
+            logger.info("  处理进度: %s/%s 只股票", idx, total_stocks)
         reports = sorted(g["report_date"].dropna().unique())
         prev_snap: Optional[pd.DataFrame] = None
         prev_report_date: Optional[pd.Timestamp] = None
@@ -1127,7 +1137,13 @@ def compute_stock_scores(df: pd.DataFrame, events: pd.DataFrame, stock_df_map: D
         ))
     quality_cache: Dict[str, Tuple[Dict[str, float], Dict[Tuple[str, str], float]]] = {}
 
-    for ts_code, g in df.groupby("ts_code"):
+    stock_groups = list(df.groupby("ts_code"))
+    total_stocks = len(stock_groups)
+    logger.info("计算 %s 只股票的评分...", total_stocks)
+
+    for idx, (ts_code, g) in enumerate(stock_groups, 1):
+        if idx % 50 == 0 or idx == total_stocks:
+            logger.info("  计算进度: %s/%s 只股票", idx, total_stocks)
         stock_df = stock_df_map.get(ts_code)
         if stock_df is None or stock_df.empty:
             continue
@@ -1472,20 +1488,33 @@ def save_scores(df: pd.DataFrame, dry_run: bool = False) -> int:
 def process_batch(limit: Optional[int], lookback_years: int, dry_run: bool,
                   bench_code: str, fqt: int, industry_file: Optional[str],
                   incremental: bool = True) -> None:
+    logger.info("=" * 60)
+    logger.info("开始批量处理: limit=%s, lookback_years=%s", limit, lookback_years)
+    logger.info("=" * 60)
+
     pool = get_stock_pool(limit)
     if not pool:
         logger.warning("未找到股票池")
         return
+    logger.info("股票池数量: %s", len(pool))
 
     ts_codes = [x[0] for x in pool]
+    logger.info("加载前十大股东数据...")
     top10_df = load_top10_data(ts_codes=ts_codes, lookback_years=lookback_years)
     if top10_df.empty:
         logger.warning("%s 表为空或无有效样本", INPUT_TABLE)
         return
+    logger.info("前十大股东数据: %s 行", len(top10_df))
+
+    logger.info("加载行业信息...")
     industry_df = load_industry_info(industry_file)
     if not industry_df.empty:
         top10_df = top10_df.merge(industry_df.drop(columns=["name"], errors="ignore"), on="ts_code", how="left")
+        logger.info("行业信息合并完成")
+
+    logger.info("构建股东任期...")
     top10_df = build_holder_tenure(top10_df)
+    logger.info("涉及股票数量: %s", top10_df["ts_code"].nunique())
 
     stock_df_map: Dict[str, pd.DataFrame] = {}
     bench_df_map: Dict[str, pd.DataFrame] = {}
@@ -1507,11 +1536,15 @@ def process_batch(limit: Optional[int], lookback_years: int, dry_run: bool,
 
     valid_codes = [c for c in top10_df["ts_code"].drop_duplicates() if c in stock_df_map]
     top10_df = top10_df[top10_df["ts_code"].isin(valid_codes)].copy()
+    logger.info("有效股票数量: %s", len(valid_codes))
     if top10_df.empty:
         logger.warning("无可计算样本")
         return
 
+    logger.info("构建行业基准...")
     industry_bench_map = build_industry_benchmarks(stock_df_map, industry_df, "industry_l2") if not industry_df.empty else {}
+    logger.info("行业基准数量: %s", len(industry_bench_map))
+
     event_cache = build_event_metrics_cache(top10_df, stock_df_map, bench_df_map, industry_bench_map)
 
     existing_scores: Optional[pd.DataFrame] = None
@@ -1520,17 +1553,28 @@ def process_batch(limit: Optional[int], lookback_years: int, dry_run: bool,
         existing_scores, _ = load_existing_data(stock_codes)
         logger.info("增量模式：已有 scores %d 行", len(existing_scores))
 
+    logger.info("构建股东变动事件...")
     events_df = build_change_events(top10_df.copy(), event_cache)
+    logger.info("事件数量: %s", len(events_df))
+
+    logger.info("构建股东画像...")
     profiles_df = build_holder_profiles(
         events_df,
         profile_scope=PROFILE_SCOPE_FULL,
         profile_note="数据库保存的是全样本画像；历史评分运行时按 as-of 重建画像"
     ) if not events_df.empty else pd.DataFrame()
-    scores_df = compute_stock_scores(top10_df, events_df, stock_df_map, event_cache, existing_scores=existing_scores)
+    logger.info("画像数量: %s", len(profiles_df))
 
+    logger.info("计算股票评分...")
+    scores_df = compute_stock_scores(top10_df, events_df, stock_df_map, event_cache, existing_scores=existing_scores)
+    logger.info("评分数量: %s", len(scores_df))
+
+    logger.info("保存结果到数据库...")
     n1 = save_profiles(profiles_df, dry_run=dry_run)
     n2 = save_scores(scores_df, dry_run=dry_run)
-    logger.info("完成：profiles=%s, scores=%s", n1, n2)
+    logger.info("=" * 60)
+    logger.info("处理完成：profiles=%s, scores=%s", n1, n2)
+    logger.info("=" * 60)
 
 
 def process_single(ts_code: str, lookback_years: int, dry_run: bool,
