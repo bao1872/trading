@@ -389,15 +389,25 @@ def process_all_stocks_vectorized(
     if target_date:
         snapshot_mask = (all_data['bar_time'] >= target_date_start) & (all_data['bar_time'] <= target_date_end)
         snapshot_data = all_data[snapshot_mask].copy()
+        print(f"  快照过滤: {len(all_data)} -> {len(snapshot_data)} 行 (日期范围 {target_date_start} ~ {target_date_end})")
+        if snapshot_data.empty:
+            print(f"  ⚠️ 警告: 快照日期 {snapshot_date} 无数据!")
+            print(f"     bar_time范围: {all_data['bar_time'].min()} ~ {all_data['bar_time'].max()}")
+            return pd.DataFrame()
     else:
         snapshot_data = all_data.groupby('ts_code').last().reset_index()
 
     if filter_rising:
+        before_filter = len(snapshot_data)
         snapshot_data = snapshot_data[
             (snapshot_data['price_change'] > 0) &
             (~snapshot_data['body_down']) &
             (snapshot_data['price_change'] <= 0.30)
         ]
+        print(f"  上涨过滤: {before_filter} -> {len(snapshot_data)} 行")
+        if snapshot_data.empty:
+            print(f"  ⚠️ 警告: 过滤后无数据 (可能市场下跌)")
+            return pd.DataFrame()
 
     results = []
     for _, row in snapshot_data.iterrows():
