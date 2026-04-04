@@ -219,12 +219,11 @@ def time_series_score(series: pd.Series, direction: str, lookback: int = 12) -> 
 
 
 def create_engine_or_raise():
+    """创建PostgreSQL数据库引擎"""
     if create_engine is None or text is None:
         raise ImportError("当前环境未安装 sqlalchemy，无法使用数据库模式。可先用 --excel-path 调试，或在项目环境中安装 sqlalchemy。")
     if not DATABASE_URL:
         raise ValueError("未找到 DATABASE_URL。请在项目 config.py 中配置，或通过环境变量传入。")
-    if DATABASE_URL.startswith("sqlite"):
-        return create_engine(DATABASE_URL, connect_args={"check_same_thread": False}, pool_pre_ping=True)
     return create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
@@ -539,23 +538,15 @@ def fetch_already_processed(engine) -> set:
 
 
 def ensure_output_table_exists(engine):
+    """确保输出表存在（PostgreSQL）"""
     with engine.connect() as conn:
-        if engine.dialect.name == "postgresql":
-            exists = conn.execute(
-                text("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = :name"),
-                {"name": OUTPUT_TABLE},
-            ).fetchone()[0] > 0
-            pk_def = "id SERIAL PRIMARY KEY"
-            float_type = "DOUBLE PRECISION"
-            ts_default = "CURRENT_TIMESTAMP"
-        else:
-            exists = conn.execute(
-                text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = :name"),
-                {"name": OUTPUT_TABLE},
-            ).fetchone()[0] > 0
-            pk_def = "id INTEGER PRIMARY KEY AUTOINCREMENT"
-            float_type = "FLOAT"
-            ts_default = "CURRENT_TIMESTAMP"
+        exists = conn.execute(
+            text("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = :name"),
+            {"name": OUTPUT_TABLE},
+        ).fetchone()[0] > 0
+        pk_def = "id SERIAL PRIMARY KEY"
+        float_type = "DOUBLE PRECISION"
+        ts_default = "CURRENT_TIMESTAMP"
 
         if not exists:
             logger.info(f"创建表 {OUTPUT_TABLE} ...")

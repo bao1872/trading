@@ -36,7 +36,7 @@ How to Run:
     python backtrader/scan_breakout_events.py --date 2026-03-30 --log-level DEBUG
 
     # 批量回补（从开始日期到上一交易日，自动跳过已扫描的日期，只扫日线）
-    python backtrader/scan_breakout_events.py --batch-backfill 2026-02-01
+    python backtrader/scan_breakout_events.py --batch-backfill 2025-02-01
 
     # 批量回补指定日期范围
     python backtrader/scan_breakout_events.py --batch-backfill 2026-02-01 --end-date 2026-03-15
@@ -76,9 +76,8 @@ logger = logging.getLogger("breakout_events")
 
 
 def get_engine():
+    """获取PostgreSQL数据库引擎"""
     url = os.environ.get("DATABASE_URL", DATABASE_URL)
-    if url.startswith("sqlite"):
-        return create_engine(url, connect_args={"check_same_thread": False})
     return create_engine(url, pool_pre_ping=True, pool_recycle=1800)
 
 
@@ -452,17 +451,10 @@ def process_stock_for_dates(
 
 
 def ensure_tables_exist():
-    from datasource.database import DATABASE_URL
-    is_postgres = not DATABASE_URL.startswith("sqlite")
-
-    def pk_sql():
-        if is_postgres:
-            return "id SERIAL PRIMARY KEY"
-        return "id INTEGER PRIMARY KEY AUTOINCREMENT"
-
-    dir_turn_table = f"""
+    """确保事件表存在（PostgreSQL）"""
+    dir_turn_table = """
     CREATE TABLE IF NOT EXISTS breakout_dir_turn_events (
-        {pk_sql()},
+        id SERIAL PRIMARY KEY,
         ts_code VARCHAR(20) NOT NULL,
         name VARCHAR(50),
         event_time VARCHAR(30) NOT NULL,
@@ -500,9 +492,9 @@ def ensure_tables_exist():
         UNIQUE(ts_code, freq, event_time)
     );
     """
-    pullback_table = f"""
+    pullback_table = """
     CREATE TABLE IF NOT EXISTS breakout_pullback_buy_events (
-        {pk_sql()},
+        id SERIAL PRIMARY KEY,
         ts_code VARCHAR(20) NOT NULL,
         name VARCHAR(50),
         buy_time VARCHAR(30) NOT NULL,

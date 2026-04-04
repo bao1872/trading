@@ -23,13 +23,16 @@ _engine: Optional[Engine] = None
 
 
 def get_engine() -> Engine:
-    """获取数据库引擎（单例模式）"""
+    """获取PostgreSQL数据库引擎（单例模式，优化连接池配置）"""
     global _engine
     if _engine is None:
         _engine = create_engine(
             DATABASE_URL,
-            pool_pre_ping=True,  # 连接前ping测试，避免使用已断开的连接
-            pool_recycle=3600,   # 连接1小时后回收
+            pool_size=10,           # 基础连接数
+            max_overflow=20,        # 最大溢出连接
+            pool_pre_ping=True,     # 连接前ping测试，避免使用已断开的连接
+            pool_recycle=3600,      # 连接1小时后回收
+            pool_timeout=30,        # 获取连接超时（秒）
             echo=False
         )
     return _engine
@@ -314,27 +317,17 @@ def query_sql(
 
 
 def table_exists(conn: Any, table_name: str) -> bool:
-    """检查表是否存在"""
-    if DATABASE_URL.startswith("postgresql"):
-        sql = "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = :table_name)"
-    else:
-        sql = "SELECT name FROM sqlite_master WHERE type='table' AND name=:table_name"
-
+    """检查表是否存在（PostgreSQL）"""
+    sql = "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = :table_name)"
     result = conn.execute(text(sql), {"table_name": table_name})
     return bool(result.scalar())
 
 
 def get_table_columns(conn: Any, table_name: str) -> List[str]:
-    """获取表的列名列表"""
-    if DATABASE_URL.startswith("postgresql"):
-        sql = "SELECT column_name FROM information_schema.columns WHERE table_name = :table_name"
-        result = conn.execute(text(sql), {"table_name": table_name})
-        return [row[0] for row in result.fetchall()]
-    else:
-        # SQLite
-        sql = f"PRAGMA table_info({table_name})"
-        result = conn.execute(text(sql))
-        return [row[1] for row in result.fetchall()]
+    """获取表的列名列表（PostgreSQL）"""
+    sql = "SELECT column_name FROM information_schema.columns WHERE table_name = :table_name"
+    result = conn.execute(text(sql), {"table_name": table_name})
+    return [row[0] for row in result.fetchall()]
 
 
 # 为了保持向后兼容，保留旧的函数签名

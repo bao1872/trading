@@ -49,12 +49,10 @@ _db_engine = None
 
 
 def get_db_engine():
+    """获取PostgreSQL数据库引擎"""
     global _db_engine
     if _db_engine is None:
-        if DATABASE_URL.startswith("sqlite"):
-            _db_engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-        else:
-            _db_engine = create_engine(DATABASE_URL, pool_size=5, max_overflow=10, pool_recycle=3600)
+        _db_engine = create_engine(DATABASE_URL, pool_size=5, max_overflow=10, pool_recycle=3600)
     return _db_engine
 
 

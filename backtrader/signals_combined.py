@@ -12,7 +12,7 @@ Usage:
     python signals_combined.py --date 2026-04-02 --limit-stocks 100 --db
 
     # 回补信号（一次性加载数据，遍历日期计算）
-    python signals_combined.py --backfill 2026-03-01 --db
+    python signals_combined.py --backfill 2025-11-03 --db
     python signals_combined.py --backfill 2026-03-01 --end-date 2026-03-15 --db
 
 Examples:
