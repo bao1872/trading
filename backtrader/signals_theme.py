@@ -641,23 +641,27 @@ def generate_signals(
 
     top_themes_list = theme_df.head(top_n_themes)['theme'].tolist() if not theme_df.empty else []
 
-    cross_df = volume_df[volume_df['zscore'] > zscore_threshold].copy()
-    cross_df['themes'] = cross_df['code'].map(
-        lambda x: get_stock_themes(s2c.get(x, []), concept_to_theme, excluded)
-    )
-    cross_df['themes_str'] = cross_df['themes'].map(lambda x: ','.join(x) if x else '')
-    cross_df = cross_df[cross_df['themes'].map(lambda x: any(t in top_themes_list for t in x))]
-    cross_df = cross_df.sort_values('zscore', ascending=False)
+    cross_df = volume_df[volume_df['zscore'] > zscore_threshold].copy() if 'zscore' in volume_df.columns else pd.DataFrame()
+    if not cross_df.empty:
+        cross_df['themes'] = cross_df['code'].map(
+            lambda x: get_stock_themes(s2c.get(x, []), concept_to_theme, excluded)
+        )
+        cross_df['themes_str'] = cross_df['themes'].map(lambda x: ','.join(x) if x else '')
+        cross_df = cross_df[cross_df['themes'].map(lambda x: any(t in top_themes_list for t in x))]
+        cross_df = cross_df.sort_values('zscore', ascending=False)
 
-    anomalous_df = volume_df[volume_df['zscore'] > zscore_threshold].copy()
-    anomalous_df['themes'] = anomalous_df['code'].map(
-        lambda x: get_stock_themes(s2c.get(x, []), concept_to_theme, excluded)
-    )
-    anomalous_df['themes_str'] = anomalous_df['themes'].map(lambda x: ','.join(x) if x else '')
-    anomalous_df['concepts_str'] = anomalous_df['code'].map(
-        lambda x: ','.join(s2c.get(x, [])) if s2c.get(x) else ''
-    )
-    anomalous_df = anomalous_df.sort_values('zscore', ascending=False)
+    anomalous_df = volume_df[volume_df['zscore'] > zscore_threshold].copy() if 'zscore' in volume_df.columns else pd.DataFrame()
+    if not anomalous_df.empty:
+        anomalous_df['themes'] = anomalous_df['code'].map(
+            lambda x: get_stock_themes(s2c.get(x, []), concept_to_theme, excluded)
+        )
+        anomalous_df['themes_str'] = anomalous_df['themes'].map(lambda x: ','.join(x) if x else '')
+        anomalous_df['concepts_str'] = anomalous_df['code'].map(
+            lambda x: ','.join(s2c.get(x, [])) if s2c.get(x) else ''
+        )
+        anomalous_df = anomalous_df.sort_values('zscore', ascending=False)
+    else:
+        anomalous_df = pd.DataFrame(columns=['code', 'name', 'zscore', 'volume', 'rolling_mean', 'date', 'price_change', 'themes', 'themes_str', 'concepts_str'])
 
     print("聚合涨跌停...")
     limit_up_df = volume_df[volume_df['is_limit_up'] == True].copy()
