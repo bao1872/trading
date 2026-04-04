@@ -192,11 +192,8 @@ def iter_k_data_with_names(
     }
     db_freq = freq_to_db.get(freq, freq)
 
+    # 只按 freq 过滤，时间范围在加载后用 pandas 处理
     filters = {"freq": db_freq}
-    if start_date:
-        filters["bar_time >= "] = start_date
-    if end_date:
-        filters["bar_time <= "] = end_date
 
     with get_session() as session:
         df = query_df(
@@ -209,7 +206,20 @@ def iter_k_data_with_names(
     if df.empty:
         return
 
+    # 统一转换为 datetime 格式
     df["bar_time"] = pd.to_datetime(df["bar_time"])
+
+    # 使用 pandas 进行时间过滤（避免 SQL 字符串比较问题）
+    if start_date:
+        start_ts = pd.Timestamp(start_date)
+        df = df[df["bar_time"] >= start_ts]
+    if end_date:
+        end_ts = pd.Timestamp(end_date)
+        df = df[df["bar_time"] <= end_ts]
+
+    if df.empty:
+        return
+
     codes = df['ts_code'].unique()
 
     if limit_stocks:
