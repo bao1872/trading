@@ -111,7 +111,7 @@ def fetch_kline_pytdx(
             d = pd.DataFrame(recs)
 
             if "datetime" in d.columns:
-                d["dt"] = pd.to_datetime(d["datetime"])
+                d["dt"] = pd.to_datetime(d["datetime"]).tz_localize(None)
             elif {"year", "month", "day", "hour", "minute"}.issubset(d.columns):
                 d["dt"] = pd.to_datetime(d[["year", "month", "day", "hour", "minute"]].astype(int))
             else:

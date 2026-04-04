@@ -54,7 +54,7 @@ def fetch_kline(ts_code: str, freq: str, bars: int):
         api.disconnect()
         if klines:
             df = pd.DataFrame(klines)
-            df["datetime"] = pd.to_datetime(df["datetime"])
+            df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
             return df
     except Exception:
         pass

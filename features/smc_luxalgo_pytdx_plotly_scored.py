@@ -1589,7 +1589,7 @@ def fetch_data(symbol: str, freq: str, bars: int):
         client.disconnect()
         raise RuntimeError(f"缺少字段: {miss}, 当前={list(df.columns)}")
 
-    df["datetime"] = pd.to_datetime(df["datetime"])
+    df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
     df = df.sort_values("datetime").drop_duplicates(subset=["datetime"]).set_index("datetime")
     return df[["open", "high", "low", "close", "vol", "amount"]].astype(float), client
 

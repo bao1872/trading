@@ -141,9 +141,9 @@ def get_kline_data(api: TdxHq_API, symbol: str, period: str, count: int = 255) -
     df = pd.DataFrame(all_bars)
     
     if 'datetime' in df.columns:
-        df['datetime'] = pd.to_datetime(df['datetime'])
+        df['datetime'] = pd.to_datetime(df['datetime']).dt.tz_localize(None)
     elif {'year', 'month', 'day', 'hour', 'minute'}.issubset(df.columns):
-        df['datetime'] = pd.to_datetime(df[['year', 'month', 'day', 'hour', 'minute']].astype(int))
+        df['datetime'] = pd.to_datetime(df[['year', 'month', 'day', 'hour', 'minute']].astype(int)).dt.tz_localize(None)
     
     df = df[['datetime', 'open', 'high', 'low', 'close', 'vol', 'amount']]
     df.columns = ['datetime', 'open', 'high', 'low', 'close', 'volume', 'amount']

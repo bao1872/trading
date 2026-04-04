@@ -431,7 +431,7 @@ def fetch_data(symbol: str, freq: str, bars: int) -> pd.DataFrame:
         if not klines:
             return pd.DataFrame()
         df = pd.DataFrame(klines)
-        df["datetime"] = pd.to_datetime(df["datetime"])
+        df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
         df = df.set_index("datetime")
         df = df.rename(columns={"vol": "volume"})
         for col in ["open", "high", "low", "close", "volume"]:

@@ -91,7 +91,7 @@ def fetch_kline_pytdx(symbol: str, start: str, end: str, freq, api=None) -> pd.D
                 break
             d = pd.DataFrame(recs)
             if "datetime" in d.columns:
-                d["date"] = pd.to_datetime(d["datetime"])
+                d["date"] = pd.to_datetime(d["datetime"]).tz_localize(None)
             else:
                 raise RuntimeError("pytdx 返回数据缺少 datetime 列")
             if "vol" in d.columns:

@@ -56,7 +56,7 @@ def fetch_daily_pytdx(symbol: str, start: str, end: str) -> pd.DataFrame:
                 break
 
             if "datetime" in df.columns:
-                df["datetime"] = pd.to_datetime(df["datetime"])
+                df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
                 df = df.set_index("datetime")
             elif {"year", "month", "day", "hour", "minute"}.issubset(df.columns):
                 df["datetime"] = pd.to_datetime(

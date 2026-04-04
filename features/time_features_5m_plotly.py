@@ -82,7 +82,7 @@ def fetch_pytdx_5m(symbol: str, start: str, end: str, freq_hint: str) -> tuple[p
                 break
             d = pd.DataFrame(recs)
             if "datetime" in d.columns:
-                d["dt"] = pd.to_datetime(d["datetime"])
+                d["dt"] = pd.to_datetime(d["datetime"]).tz_localize(None)
             elif {"year", "month", "day", "hour", "minute"}.issubset(d.columns):
                 d["dt"] = pd.to_datetime(d[["year", "month", "day", "hour", "minute"]].astype(int))
             else:

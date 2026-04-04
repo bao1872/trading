@@ -57,7 +57,7 @@ def fetch_df(symbol: str, freq: str, bars: int) -> Tuple[pd.DataFrame, str]:
         df = raw.copy()
         if "datetime" not in df.columns:
             raise RuntimeError("get_kline_data 返回缺少 datetime 列")
-        df["datetime"] = pd.to_datetime(df["datetime"])
+        df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
         df = df.sort_values("datetime").set_index("datetime")
 
         need_cols = ["open", "high", "low", "close", "volume"]

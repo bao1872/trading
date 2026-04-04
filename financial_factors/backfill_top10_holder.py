@@ -160,6 +160,8 @@ def load_market_data(ts_code: str, start_date: pd.Timestamp, end_date: pd.Timest
             df = df.rename(columns={"bar_time": "trade_date", "volume": "vol"})
             df = df.set_index("trade_date")
             df.index = pd.to_datetime(df.index)
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
             df.index.name = None
         return df
     except Exception as e:

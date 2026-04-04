@@ -56,9 +56,9 @@ def fetch_daily_pytdx(symbol: str, start: str, end: str, *, max_bars: int = 800)
             if df.empty:
                 break
             if "datetime" in df.columns:
-                df["date"] = pd.to_datetime(df["datetime"])
+                df["date"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
             elif {"year", "month", "day", "hour", "minute"}.issubset(df.columns):
-                df["date"] = pd.to_datetime(df[["year", "month", "day", "hour", "minute"]].astype(int))
+                df["date"] = pd.to_datetime(df[["year", "month", "day", "hour", "minute"]].astype(int)).dt.tz_localize(None)
             else:
                 raise RuntimeError("pytdx 返回数据缺少时间列")
             if "vol" in df.columns:

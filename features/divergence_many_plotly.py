@@ -169,7 +169,7 @@ def fetch_bars_pytdx(symbol: str, freq: str, start: str, end: str, *, max_pages:
                 break
 
             if "datetime" in df.columns:
-                df["datetime"] = pd.to_datetime(df["datetime"])
+                df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
                 df = df.set_index("datetime")
             elif {"year", "month", "day", "hour", "minute"}.issubset(df.columns):
                 df["datetime"] = pd.to_datetime(df[["year", "month", "day", "hour", "minute"]].astype(int))

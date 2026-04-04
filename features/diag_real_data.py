@@ -9,7 +9,7 @@ api.connect("115.238.90.165", 7709)
 klines = api.get_security_bars(category=9, market=0, code="000001", start=0, count=80)
 api.disconnect()
 df = pd.DataFrame(klines)
-df["datetime"] = pd.to_datetime(df["datetime"])
+df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
 df = df.set_index("datetime")
 for col in ["open", "high", "low", "close"]:
     df[col] = pd.to_numeric(df[col], errors="coerce")

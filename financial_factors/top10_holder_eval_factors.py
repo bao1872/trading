@@ -447,18 +447,28 @@ def load_industry_info(industry_file: Optional[str] = None) -> pd.DataFrame:
     return df
 
 
+def _ensure_naive_index(idx: pd.DatetimeIndex) -> None:
+    if idx.tz is not None:
+        idx.tz_localize(None, copy=False)
+
+def _ensure_ts_naive(ts) -> None:
+    if isinstance(ts, pd.Timestamp) and ts.tzinfo is not None:
+        ts.tz_localize(None, copy=False)
+
+
 def infer_effective_date(ann_date: pd.Timestamp, trading_index: pd.DatetimeIndex) -> Optional[pd.Timestamp]:
     if pd.isna(ann_date):
         return None
-    pos = trading_index.searchsorted(ann_date)
-    if pos >= len(trading_index):
+    trading_index_naive = trading_index.tz_localize(None) if hasattr(trading_index, 'tz') and trading_index.tz else trading_index
+    ann_date_naive = pd.Timestamp(ann_date).tz_localize(None) if pd.Timestamp(ann_date).tzinfo else pd.Timestamp(ann_date)
+    pos = trading_index_naive.searchsorted(ann_date_naive)
+    if pos >= len(trading_index_naive):
         return None
-    # 若公告日在交易日内，当天收盘后披露无法稳定判断，这里保守取下一交易日
-    if trading_index[pos] == ann_date:
+    if trading_index_naive[pos] == ann_date_naive:
         pos += 1
-    if pos >= len(trading_index):
+    if pos >= len(trading_index_naive):
         return None
-    return pd.Timestamp(trading_index[pos])
+    return pd.Timestamp(trading_index_naive[pos])
 
 
 def load_market_data_from_db(ts_code: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
@@ -486,6 +496,8 @@ def load_market_data_from_db(ts_code: str, start_date: pd.Timestamp, end_date: p
         return pd.DataFrame()
 
     df['datetime'] = pd.to_datetime(df['datetime'])
+    if hasattr(df['datetime'].dtype, 'tz') and df['datetime'].dt.tz is not None:
+        df['datetime'] = df['datetime'].dt.tz_localize(None)
     df = df.set_index('datetime').sort_index()
     return df
 
@@ -629,6 +641,8 @@ def calc_event_market_metrics(stock_df: pd.DataFrame, bench_df: pd.DataFrame,
     close = stock_df["close"].dropna()
     bench_close = bench_df["close"].dropna() if not bench_df.empty and "close" in bench_df.columns else pd.Series(dtype=float)
     trading_index = close.index
+    _ensure_naive_index(trading_index)
+    _ensure_ts_naive(effective_date)
     pos = trading_index.searchsorted(effective_date)
     if pos >= len(trading_index):
         pos = len(trading_index) - 1
@@ -639,7 +653,9 @@ def calc_event_market_metrics(stock_df: pd.DataFrame, bench_df: pd.DataFrame,
     future_ret_60 = calc_future_return(close, pos, 60)
     future_ret_120 = calc_future_return(close, pos, 120)
 
-    bench_pos = bench_close.index.searchsorted(effective_date) if len(bench_close) > 0 else -1
+    if len(bench_close) > 0:
+        _ensure_naive_index(bench_close.index)
+        bench_pos = bench_close.index.searchsorted(effective_date)
     if len(bench_close) > 0 and bench_pos >= len(bench_close):
         bench_pos = len(bench_close) - 1
     bench_ret_20 = calc_future_return(bench_close, bench_pos, 20) if bench_pos >= 0 else None

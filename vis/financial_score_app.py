@@ -1103,7 +1103,7 @@ def render_watchlist_page(session, sidebar):
                     if kline_df is None or kline_df.empty:
                         st.warning("暂无数据")
                     else:
-                        kline_df['bar_time'] = pd.to_datetime(kline_df['bar_time'])
+                        kline_df['bar_time'] = pd.to_datetime(kline_df['bar_time']).dt.tz_localize(None)
                         kline_df = kline_df.set_index('bar_time')
 
                         fig = build_kline_chart(
