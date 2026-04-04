@@ -220,7 +220,8 @@ def query_df(
     if filters:
         for key, value in filters.items():
             # 支持操作符: >=, <=, >, <, !=, =
-            match = re.match(r'^(\w+)\s*(>=|<=|>|<|!=|=)?$', key)
+            # 注意：key 可能包含尾部空格，如 "bar_time >= "
+            match = re.match(r'^(\w+)\s*(>=|<=|>|<|!=|=)?\s*$', key)
             if match:
                 col_name = match.group(1)
                 operator = match.group(2) or '='
