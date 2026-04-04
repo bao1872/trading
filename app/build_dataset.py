@@ -13,8 +13,23 @@
     PostgreSQL 远程数据库 (config.DATABASE_URL)
 
 运行命令：
+    # 构建所有周期数据（首次运行）
     python app/build_dataset.py
+
+    # 增量更新所有周期到当天
     python app/build_dataset.py --update
+
+    # 只回补日线数据（1300 bar）
+    python app/build_dataset.py --period d
+
+    # 只回补周线数据（500 bar）
+    python app/build_dataset.py --period w
+
+    # 只回补60分钟数据（2000 bar）
+    python app/build_dataset.py --period 60
+
+    # 测试模式（只处理前10只股票）
+    python app/build_dataset.py --period d --limit 10
 
 注意：
     这是一个耗时操作，只需要运行一次
@@ -331,6 +346,8 @@ def main():
     parser = argparse.ArgumentParser(description="构建多周期数据集（保存到数据库）")
     parser.add_argument("--update", action="store_true", help="增量更新到当天")
     parser.add_argument("--limit", type=int, default=None, help="限制处理的股票数量（用于测试）")
+    parser.add_argument("--period", type=str, choices=["d", "w", "60"], default=None,
+                        help="只回补指定周期: d=日线, w=周线, 60=60分钟")
     args = parser.parse_args()
 
     from datasource.database import query_df
@@ -365,6 +382,26 @@ def main():
         else:
             fetch_and_save_data(cache_df, "60", cfg["bars"])
 
+    # 如果只回补指定周期
+    if args.period:
+        cfg = PERIOD_CONFIG[args.period]
+        print(f"\n{'='*70}")
+        print(f"📊 单独回补 {cfg['desc']} 数据 ({cfg['bars']} bar)")
+        print(f"{'='*70}\n")
+
+        if args.period == "d":
+            do_daily()
+        elif args.period == "w":
+            do_weekly()
+        elif args.period == "60":
+            do_min60()
+
+        print(f"\n{'='*70}")
+        print(f"✅ {cfg['desc']} 回补完成")
+        print(f"{'='*70}\n")
+        return
+
+    # 全量回补所有周期
     if args.update:
         print(f"\n{'='*70}")
         print(f"🔄 增量更新模式：将数据集更新到当天")
