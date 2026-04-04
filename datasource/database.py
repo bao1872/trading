@@ -216,6 +216,7 @@ def query_df(
     # 构建WHERE子句
     where_clauses = []
     params = {}
+    param_counter = {}  # 用于处理同一列多条件的参数名冲突
 
     if filters:
         for key, value in filters.items():
@@ -225,7 +226,18 @@ def query_df(
             if match:
                 col_name = match.group(1)
                 operator = match.group(2) or '='
-                safe_key = col_name.replace(' ', '_').replace('-', '_')
+                
+                # 生成唯一的参数名，避免同列多条件时参数名冲突
+                base_key = col_name.replace(' ', '_').replace('-', '_')
+                if base_key not in param_counter:
+                    param_counter[base_key] = 0
+                else:
+                    param_counter[base_key] += 1
+                
+                if operator == '=' and param_counter[base_key] == 0:
+                    safe_key = base_key
+                else:
+                    safe_key = f"{base_key}_{param_counter[base_key]}"
                 
                 # 处理列表类型的 IN 查询
                 if isinstance(value, (list, tuple)):
