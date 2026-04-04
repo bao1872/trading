@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""
-构建多周期数据集
+"""构建多周期数据集
 
 用途：
     获取股票池全量股票的多周期行情数据并保存到数据库
 
-数据规格：
-    - 日线：500 bar
+数据规格（在 PERIOD_CONFIG 中配置）：
+    - 日线：1300 bar
     - 周线：500 bar
     - 60分钟：2000 bar
 
@@ -37,6 +36,13 @@ if base_dir not in sys.path:
 
 from datasource.pytdx_client import connect_pytdx, get_kline_data
 from datasource.database import get_session, bulk_upsert
+
+# 各周期数据配置
+PERIOD_CONFIG = {
+    "d": {"bars": 1300, "desc": "日线"},
+    "w": {"bars": 500, "desc": "周线"},
+    "60": {"bars": 2000, "desc": "60分钟"},
+}
 
 
 def resample_to_weekly(df_daily: pd.DataFrame) -> pd.DataFrame:
@@ -339,22 +345,25 @@ def main():
     print(f"股票池总数: {len(cache_df)}")
 
     def do_daily():
+        cfg = PERIOD_CONFIG["d"]
         if args.update:
-            update_dataset(cache_df, "d", 500)
+            update_dataset(cache_df, "d", cfg["bars"])
         else:
-            fetch_and_save_data(cache_df, "d", 500)
+            fetch_and_save_data(cache_df, "d", cfg["bars"])
 
     def do_weekly():
+        cfg = PERIOD_CONFIG["w"]
         if args.update:
-            update_dataset(cache_df, "w", 500)
+            update_dataset(cache_df, "w", cfg["bars"])
         else:
-            fetch_and_save_data(cache_df, "w", 500)
+            fetch_and_save_data(cache_df, "w", cfg["bars"])
 
     def do_min60():
+        cfg = PERIOD_CONFIG["60"]
         if args.update:
-            update_dataset(cache_df, "60", 2000)
+            update_dataset(cache_df, "60", cfg["bars"])
         else:
-            fetch_and_save_data(cache_df, "60", 2000)
+            fetch_and_save_data(cache_df, "60", cfg["bars"])
 
     if args.update:
         print(f"\n{'='*70}")
