@@ -49,12 +49,10 @@ def calculate_5day_rolling_zscore_vectorized(
 
     snapshot_start = snapshot_ts.replace(hour=0, minute=0, second=0, microsecond=0)
     snapshot_end = snapshot_ts.replace(hour=23, minute=59, second=59, microsecond=999999)
-    
-    # 将 snapshot_start/end 转换为与 bar_time 相同的时区
-    bar_time_tz = all_data['bar_time'].dt.tz
-    snapshot_start = snapshot_start.tz_localize(bar_time_tz)
-    snapshot_end = snapshot_end.tz_localize(bar_time_tz)
-    
+
+    # 统一移除时区，避免比较问题
+    all_data['bar_time'] = pd.to_datetime(all_data['bar_time']).dt.tz_localize(None)
+
     mask = (all_data['bar_time'] >= snapshot_start) & (all_data['bar_time'] <= snapshot_end)
     snapshot_data = all_data[mask].copy()
 
@@ -206,9 +204,8 @@ def calculate_volume_cv_and_spearman(
         window_start = snapshot_ts - pd.Timedelta(days=6)
         window_end = snapshot_ts + pd.Timedelta(days=1)
 
-        # 将 window_start/end 转换为与 df.index 相同的时区
-        window_start = window_start.tz_localize(df.index.tz)
-        window_end = window_end.tz_localize(df.index.tz)
+        # 统一移除时区，避免比较问题
+        df.index = df.index.tz_localize(None) if df.index.tz else df.index
 
         mask = (df.index >= window_start) & (df.index <= window_end)
         window_volumes = df.loc[mask, 'volume'].dropna()

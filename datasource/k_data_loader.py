@@ -90,7 +90,7 @@ def load_k_data(
     if df.empty:
         return pd.DataFrame() if ts_code else {}
 
-    df["bar_time"] = pd.to_datetime(df["bar_time"])
+    df["bar_time"] = pd.to_datetime(df["bar_time"]).dt.tz_localize(None)
     df = df.sort_values(["ts_code", "bar_time"])
 
     if ts_code:
@@ -151,7 +151,7 @@ def iter_k_data(
     if df.empty:
         return
 
-    df["bar_time"] = pd.to_datetime(df["bar_time"])
+    df["bar_time"] = pd.to_datetime(df["bar_time"]).dt.tz_localize(None)
     codes = df['ts_code'].unique()
     name_map = build_name_map(list(codes))
 
@@ -207,7 +207,7 @@ def iter_k_data_with_names(
         return
 
     # 统一转换为 datetime 格式
-    df["bar_time"] = pd.to_datetime(df["bar_time"])
+    df["bar_time"] = pd.to_datetime(df["bar_time"]).dt.tz_localize(None)
 
     # 使用 pandas 进行时间过滤（避免 SQL 字符串比较问题）
     if start_date:
@@ -279,7 +279,7 @@ def load_k_data_as_dict(
     if df.empty:
         return {}
 
-    df["bar_time"] = pd.to_datetime(df["bar_time"])
+    df["bar_time"] = pd.to_datetime(df["bar_time"]).dt.tz_localize(None)
     df = df.sort_values(["ts_code", "bar_time"])
 
     result = {}

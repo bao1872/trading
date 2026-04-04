@@ -339,11 +339,9 @@ def process_all_stocks_vectorized(
         target_date = pd.Timestamp(snapshot_date)
         target_date_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
         target_date_end = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-        
-        # 将 target_date_start/end 转换为与 bar_time 相同的时区
-        bar_time_tz = all_data['bar_time'].dt.tz
-        target_date_start = target_date_start.tz_localize(bar_time_tz)
-        target_date_end = target_date_end.tz_localize(bar_time_tz)
+
+        # 统一移除时区，避免比较问题
+        all_data['bar_time'] = pd.to_datetime(all_data['bar_time']).dt.tz_localize(None)
 
     all_data = all_data[all_data['ts_code'].isin(name_map.keys())]
 
