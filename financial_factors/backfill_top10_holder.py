@@ -8,7 +8,7 @@
     Phase 2: 基于全局画像计算个股评分（从缓存读，很快）
 
 核心逻辑（SSOT）：
-    - 行情数据读取：load_market_data_from_cache（只读缓存，不调 Tushare）
+    - 行情数据读取：load_market_data（从 stock_k_data 读取）
     - 评价计算：top10_holder_eval_factors.py 的 compute_stock_scores / build_holder_profiles
 
 用法：
@@ -81,7 +81,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-CACHE_TABLE = "stock_market_data_cache"
 CHECKPOINT_DIR = Path(__file__).parent / "checkpoints"
 CHECKPOINT_FILE = CHECKPOINT_DIR / "top10_holder_backfill.json"
 BATCH_SIZE = 10
@@ -133,28 +132,9 @@ def clean_output_tables() -> Tuple[int, int]:
     return n_scores, n_profiles
 
 
-def ensure_cache_table() -> None:
-    sql = f"""
-    CREATE TABLE IF NOT EXISTS {CACHE_TABLE} (
-        ts_code TEXT NOT NULL,
-        trade_date TEXT NOT NULL,
-        open REAL,
-        high REAL,
-        low REAL,
-        close REAL,
-        vol REAL,
-        turnover REAL,
-        turnover_rate REAL,
-        PRIMARY KEY (ts_code, trade_date)
-    )
-    """
-    with get_session() as session:
-        session.execute(text(sql))
-        session.commit()
-
-
 def get_cached_codes() -> Set[str]:
-    sql = f"SELECT DISTINCT ts_code FROM {CACHE_TABLE}"
+    """从 stock_k_data 获取有日线数据的股票列表"""
+    sql = "SELECT DISTINCT ts_code FROM stock_k_data WHERE freq = 'd'"
     try:
         with get_session() as session:
             df = pd.read_sql(text(sql), session.bind)
@@ -163,25 +143,27 @@ def get_cached_codes() -> Set[str]:
         return set()
 
 
-def load_market_data_from_cache(ts_code: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+def load_market_data(ts_code: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+    """从 stock_k_data 读取日线行情"""
     start_str = start_date.strftime("%Y-%m-%d")
     end_str = end_date.strftime("%Y-%m-%d")
-    sql = f"""
-        SELECT trade_date, open, high, low, close, vol, turnover, turnover_rate
-        FROM {CACHE_TABLE}
-        WHERE ts_code = :ts_code AND trade_date BETWEEN :start AND :end
-        ORDER BY trade_date
+    sql = """
+        SELECT bar_time, open, high, low, close, volume
+        FROM stock_k_data
+        WHERE ts_code = :ts_code AND freq = 'd' AND bar_time BETWEEN :start AND :end
+        ORDER BY bar_time
     """
     try:
         with get_session() as session:
             df = pd.read_sql(text(sql), session.bind, params={"ts_code": ts_code, "start": start_str, "end": end_str})
         if not df.empty:
+            df = df.rename(columns={"bar_time": "trade_date", "volume": "vol"})
             df = df.set_index("trade_date")
             df.index = pd.to_datetime(df.index)
             df.index.name = None
         return df
     except Exception as e:
-        logger.warning(f"读取缓存失败 {ts_code}: {e}")
+        logger.warning(f"读取行情失败 {ts_code}: {e}")
         return pd.DataFrame()
 
 
@@ -232,12 +214,12 @@ def process_single_stock_build_events(
     start_date = min(ann_date_min, report_date_min)
     end_date = pd.Timestamp.today().normalize()
 
-    stock_df = load_market_data_from_cache(ts_code, start_date - pd.Timedelta(days=250), end_date)
+    stock_df = load_market_data(ts_code, start_date - pd.Timedelta(days=250), end_date)
     if stock_df.empty:
         return pd.DataFrame(), pd.DataFrame(), "行情缓存为空"
 
     bench_code = DEFAULT_BENCH
-    bench_df = load_market_data_from_cache(bench_code, start_date - pd.Timedelta(days=250), end_date)
+    bench_df = load_market_data(bench_code, start_date - pd.Timedelta(days=250), end_date)
     if bench_df.empty:
         return pd.DataFrame(), pd.DataFrame(), f"基准指数 {bench_code} 行情缓存为空"
 
@@ -290,12 +272,12 @@ def process_single_stock_scores(
     start_date = min(ann_date_min, report_date_min)
     end_date = pd.Timestamp.today().normalize()
 
-    stock_df = load_market_data_from_cache(ts_code, start_date - pd.Timedelta(days=250), end_date)
+    stock_df = load_market_data(ts_code, start_date - pd.Timedelta(days=250), end_date)
     if stock_df.empty:
         return pd.DataFrame(), "行情缓存为空"
 
     bench_code = DEFAULT_BENCH
-    bench_df = load_market_data_from_cache(bench_code, start_date - pd.Timedelta(days=250), end_date)
+    bench_df = load_market_data(bench_code, start_date - pd.Timedelta(days=250), end_date)
     if bench_df.empty:
         return pd.DataFrame(), f"基准指数 {bench_code} 行情缓存为空"
 
@@ -331,7 +313,6 @@ def run_compute_profiles(
     clean: bool,
 ) -> None:
     ensure_output_tables()
-    ensure_cache_table()
 
     if clean:
         n_scores, n_profiles = clean_output_tables()
@@ -474,7 +455,6 @@ def run_compute_scores(
     clean: bool,
 ) -> None:
     ensure_output_tables()
-    ensure_cache_table()
 
     if clean:
         with get_session() as session:

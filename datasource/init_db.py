@@ -35,7 +35,6 @@ def check_tables():
     """检查数据库表是否存在"""
     expected_tables = [
         'stock_k_data',
-        'stock_market_data_cache',
         'first_day_launch_scores',
         'financial_quarterly_data',
         'stock_financial_score_pool',
