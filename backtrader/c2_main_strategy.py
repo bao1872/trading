@@ -33,7 +33,7 @@ C2 主版策略脚本（日线低位 + 转强确认 + 严格周线 DSA 位置过
    python backtrader/c2_main_strategy.py --select-date 2024-01-15 --max-stocks 100
 
 4) 回补模式（计算历史日期范围内的选股结果）：
-   python backtrader/c2_main_strategy.py --backfill 2024-01-01
+   python backtrader/c2_main_strategy.py --backfill 2025-03-01
 
 5) 回补模式（指定日期范围）：
    python backtrader/c2_main_strategy.py --backfill 2024-01-01 --end-date 2024-03-01
@@ -369,10 +369,15 @@ def check_signal_on_date(df: pd.DataFrame, cfg: StrategyConfig, target_date: pd.
     Returns:
         如果满足信号，返回包含指标的字典；否则返回 None
     """
-    if target_date not in df.index:
+    # 将索引转换为日期（去除时间部分）进行匹配
+    df_dates = df.index.normalize()
+    target_date_normalized = target_date.normalize() if hasattr(target_date, 'normalize') else pd.Timestamp(target_date).normalize()
+
+    if target_date_normalized not in df_dates:
         return None
 
-    row = df.loc[target_date]
+    # 获取匹配的行
+    row = df.loc[df_dates == target_date_normalized].iloc[0]
 
     # 检查必要字段是否存在
     required = ["w_dsa_pivot_pos_01", "dsa_pivot_pos_01", "signed_vwap_dev_pct",
