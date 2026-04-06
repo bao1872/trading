@@ -1,0 +1,23 @@
+factor,IC,Rank_IC,best_Q_rr,Q1_rr,Q5_rr,Q1_ret20,Q5_ret20,error
+signed_vwap_dev_pct,-0.082,-0.1125,Q1,0.451,0.096,0.03757,0.00952,
+dsa_pivot_pos_01,-0.0571,-0.0949,Q2,0.31,0.047,0.02581,0.00441,
+lh_hh_low_pos,-0.0569,-0.0905,Q1,0.323,0.033,0.02718,0.00322,
+trend_aligned_vwap_dev_pct,0.0814,0.0763,Q5,0.023,0.352,0.00197,0.03333,
+w_dsa_pivot_pos_01,-0.0384,-0.0601,Q1,0.313,0.064,0.02542,0.00596,
+bb_pos_01,-0.0261,-0.054,Q1,0.22,0.089,0.0195,0.00807,
+w_signed_vwap_dev_pct,-0.0428,-0.048,Q3,0.241,0.042,0.02223,0.00421,
+dist_to_rope_atr,-0.0203,-0.0376,Q1,0.226,0.129,0.01976,0.01099,
+channel_pos_01,-0.0203,-0.0376,Q1,0.226,0.129,0.01976,0.01099,
+bb_width_percentile,0.0413,0.0366,Q5,0.162,0.355,0.01282,0.03187,
+bb_width_change_5,0.0391,0.0334,Q5,0.1,0.268,0.00815,0.02443,
+range_break_up_strength,0.0049,-0.0269,Q2,0.169,0.186,0.01354,0.01755,
+rope_pivot_pos_01,0.0138,0.021,Q5,0.166,0.248,0.0136,0.02173,
+bars_since_dir_change,-0.0077,-0.0187,Q1,0.221,0.155,0.01864,0.01276,
+bb_width_norm,0.0617,0.0119,Q5,0.13,0.313,0.00826,0.03177,
+range_width_atr,0.0018,0.0093,Q2,0.158,0.143,0.01557,0.01129,
+bull_vwap_dev_pct,,,,,,,,Bin labels must be one fewer than the number of bin edges
+bear_vwap_dev_pct,,,,,,,,Bin labels must be one fewer than the number of bin edges
+rope_slope_atr_5,,,,,,,,Bin labels must be one fewer than the number of bin edges
+range_pos_01,,,,,,,,Bin labels must be one fewer than the number of bin edges
+bb_expand_streak,,,,,,,,Bin labels must be one fewer than the number of bin edges
+bb_contract_streak,,,,,,,,Bin labels must be one fewer than the number of bin edges

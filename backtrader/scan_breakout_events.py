@@ -152,7 +152,7 @@ def load_kline_data_from_db(
         return None
 
     df = df.sort_values("bar_time", ascending=True)
-    df["datetime"] = pd.to_datetime(df["bar_time"]).dt.tz_localize(None)
+    df["datetime"] = pd.to_datetime(df["bar_time"])
     df = df.set_index("datetime")
     df = df[["open", "high", "low", "close", "volume"]].astype(float)
     df = df.rename(columns={"volume": "vol"})

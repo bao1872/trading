@@ -1,0 +1,3 @@
+stage,event_n,max_signals_per_day,signal_rank_by,n,ret_20,mae_20,wr_20,rr_20,ret_40,mae_40,wr_40,rr_40
+before,1146,5,signed_vwap_dev_pct,1146,0.03332,-0.06563,0.63,0.508,0.07531,-0.07827,0.7138,0.962
+after,454,5,signed_vwap_dev_pct,454,0.01291,-0.07938,0.4846,0.163,0.03141,-0.10887,0.5022,0.288
