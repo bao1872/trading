@@ -39,7 +39,7 @@ from features.merged_dsa_atr_rope_bb_factors import (
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-OUT_DIR = "backtrader/buy_point_explorer"
+OUT_DIR = "buy_point_explorer"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 RET_WINDOWS = [5, 10, 20, 40, 60]
@@ -1086,6 +1086,148 @@ def analyze_18_rope_coil_explosion(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
 
 
 # =========================
+# C2 + rope enhancement analyses 19
+# =========================
+def build_c2_rope_enhanced_events(
+    df: pd.DataFrame,
+    dsa_thr: float = 0.35,
+    bars_thr: int = 3,
+    vwap_thr: Optional[float] = -1.0,
+    enhancement: str = "base",
+    cooldown: int = EVENT_DEDUP_BARS,
+) -> pd.DataFrame:
+    work = add_rope_coil_features(df)
+    need = [
+        "symbol", "datetime", "open", "high", "low", "close",
+        "dsa_pivot_pos_01", "signed_vwap_dev_pct", "rope_dir", "bars_since_dir_change",
+        "range_break_up", "range_break_up_strength", "dist_to_rope_atr",
+        "trigger_break_up", "trigger_break_up_strong", "trigger_above_rope", "trigger_depart_from_rope",
+        "near_rope_ratio_5_loose", "near_rope_streak_loose", "coil_loose", "not_too_high",
+        "bb_pos_01", "bb_width_percentile",
+        "hit20_10", "hit20_15", "hit40_20",
+    ] + [f"ret_{w}" for w in [5, 10, 20, 40, 60]] + [f"max_dd_{w}" for w in [5, 10, 20, 40, 60]] + [f"win_{w}" for w in [5, 10, 20, 40, 60]]
+    need = [c for c in need if c in work.columns]
+    sub = work[need].dropna(subset=[c for c in ["ret_20", "ret_40", "dsa_pivot_pos_01", "rope_dir", "bars_since_dir_change"] if c in need]).copy()
+
+    mask = (
+        (sub["dsa_pivot_pos_01"] <= dsa_thr)
+        & (sub["rope_dir"] == 1)
+        & (sub["bars_since_dir_change"] <= bars_thr)
+    )
+    if vwap_thr is not None and "signed_vwap_dev_pct" in sub.columns:
+        mask &= (sub["signed_vwap_dev_pct"] <= vwap_thr)
+
+    enh_masks = {
+        "base": pd.Series(True, index=sub.index),
+        "break_up": (sub.get("trigger_break_up", 0) == 1),
+        "break_up_strong": (sub.get("trigger_break_up_strong", 0) == 1),
+        "depart_from_rope": (sub.get("trigger_depart_from_rope", 0) == 1),
+        "break_strong_depart": (sub.get("trigger_break_up_strong", 0) == 1) & (sub.get("trigger_depart_from_rope", 0) == 1),
+        "break_strong_depart_above": (sub.get("trigger_break_up_strong", 0) == 1) & (sub.get("trigger_depart_from_rope", 0) == 1) & (sub.get("trigger_above_rope", 0) == 1),
+    }
+    if enhancement not in enh_masks:
+        raise ValueError(f"未知 enhancement: {enhancement}")
+    mask &= enh_masks[enhancement].fillna(False)
+    events = dedup_events(sub[mask].copy(), cooldown).reset_index(drop=True)
+    events["enhancement"] = enhancement
+    return events
+
+
+def analyze_19_c2_rope_enhancement(
+    df: pd.DataFrame,
+    dsa_thr: float,
+    bars_thr: int,
+    vwap_thr: Optional[float],
+) -> Dict[str, pd.DataFrame]:
+    print("\n" + "=" * 70)
+    print("# 层次⑲: C2 + rope增强过滤对比")
+    print("=" * 70)
+    variants = [
+        ("C2_base", "base"),
+        ("C2_plus_break_up", "break_up"),
+        ("C2_plus_break_up_strong", "break_up_strong"),
+        ("C2_plus_depart_from_rope", "depart_from_rope"),
+        ("C2_plus_break_strong_depart", "break_strong_depart"),
+        ("C2_plus_break_strong_depart_above", "break_strong_depart_above"),
+    ]
+    rows = []
+    all_events = []
+    for name, code in variants:
+        g = build_c2_rope_enhanced_events(
+            df,
+            dsa_thr=dsa_thr,
+            bars_thr=bars_thr,
+            vwap_thr=vwap_thr,
+            enhancement=code,
+            cooldown=EVENT_DEDUP_BARS,
+        )
+        if len(g) == 0:
+            continue
+        gg = g.copy()
+        gg["variant_name"] = name
+        all_events.append(gg)
+        row = {"variant": name, "event_n": len(g)}
+        stats = summarize_events_plus(g, [20, 40])
+        for k, v in stats.items():
+            if k == "n":
+                continue
+            row[k] = v
+        rows.append(row)
+    summary = pd.DataFrame(rows)
+    if not summary.empty:
+        summary = summary.sort_values(["rr_20", "hit20_15", "hit40_20"], ascending=False)
+        print(summary.to_string(index=False))
+        summary.to_csv(f"{OUT_DIR}/19_c2_rope_enhancement_summary.csv", index=False)
+    events_df = pd.concat(all_events, ignore_index=True) if all_events else pd.DataFrame()
+    if not events_df.empty:
+        events_df.to_csv(f"{OUT_DIR}/19_c2_rope_enhancement_events.csv", index=False)
+
+    base = build_c2_rope_enhanced_events(
+        df,
+        dsa_thr=dsa_thr,
+        bars_thr=bars_thr,
+        vwap_thr=vwap_thr,
+        enhancement="base",
+        cooldown=EVENT_DEDUP_BARS,
+    )
+    score_df = pd.DataFrame()
+    if len(base):
+        tmp = base.copy()
+        tmp["enh_score"] = (
+            tmp.get("trigger_break_up", 0).astype(int)
+            + tmp.get("trigger_break_up_strong", 0).astype(int)
+            + tmp.get("trigger_depart_from_rope", 0).astype(int)
+            + tmp.get("trigger_above_rope", 0).astype(int)
+        )
+        score_rows = []
+        buckets = {
+            "score_0": tmp["enh_score"] == 0,
+            "score_1": tmp["enh_score"] == 1,
+            "score_2": tmp["enh_score"] == 2,
+            "score_3plus": tmp["enh_score"] >= 3,
+        }
+        for name, m in buckets.items():
+            g = tmp[m.fillna(False)]
+            if len(g) < 20:
+                continue
+            row = {"bucket": name, "event_n": len(g)}
+            stats = summarize_events_plus(g, [20, 40])
+            for k, v in stats.items():
+                if k == "n":
+                    continue
+                row[k] = v
+            score_rows.append(row)
+        score_df = pd.DataFrame(score_rows)
+        if not score_df.empty:
+            score_df = score_df.sort_values(["rr_20", "hit20_15", "hit40_20"], ascending=False)
+            print("\n[c2 enhancement score compare]")
+            print(score_df.to_string(index=False))
+            score_df.to_csv(f"{OUT_DIR}/19_c2_rope_enhancement_score_compare.csv", index=False)
+
+    return {"summary": summary, "events": events_df, "score": score_df}
+
+
+# =========================
 # Main
 # =========================
 def main() -> None:
@@ -1169,6 +1311,7 @@ def main() -> None:
 
     analyze_17_c2_local_state_compare(base_events)
     analyze_18_rope_coil_explosion(df)
+    analyze_19_c2_rope_enhancement(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr)
 
     print(f"\n{'='*70}")
     print(f"# 全部完成! 结果保存在 {OUT_DIR}/")
