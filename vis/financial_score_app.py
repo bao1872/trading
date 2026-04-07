@@ -2373,7 +2373,7 @@ def render_first_day_launch_page(session):
         LEFT JOIN stock_financial_score_pool fs ON c2.symbol = fs.ts_code
             AND fs.report_date = (
                 SELECT MAX(report_date) FROM stock_financial_score_pool
-                WHERE ts_code = c2.symbol AND report_date <= c2.select_date
+                WHERE ts_code = c2.symbol AND report_date::date <= c2.select_date
             )
         WHERE c2.select_date = :select_date
         ORDER BY c2.signed_vwap_dev_pct ASC
