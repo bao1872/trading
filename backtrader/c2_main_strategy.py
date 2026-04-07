@@ -414,7 +414,7 @@ def check_signal_on_date(df: pd.DataFrame, cfg: StrategyConfig, target_date: pd.
     return result
 
 
-def scan_stocks_for_signals(select_date: str, cfg: StrategyConfig, max_stocks: Optional[int] = None) -> pd.DataFrame:
+def scan_stocks_for_signals(select_date: str, cfg: StrategyConfig, max_stocks: Optional[int] = None, symbols: Optional[List[str]] = None) -> pd.DataFrame:
     """
     扫描股票池，找出指定日期满足买入信号的股票（从数据库读取数据）
 
@@ -422,6 +422,7 @@ def scan_stocks_for_signals(select_date: str, cfg: StrategyConfig, max_stocks: O
         select_date: 选股日期，格式 "YYYY-MM-DD"
         cfg: 策略配置
         max_stocks: 最大扫描股票数量（None 表示全部）
+        symbols: 自定义股票列表（None 表示从数据库获取全部）
 
     Returns:
         DataFrame 包含所有满足条件的股票及其指标
@@ -434,8 +435,9 @@ def scan_stocks_for_signals(select_date: str, cfg: StrategyConfig, max_stocks: O
     end_date = (target_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
     # 获取股票池
-    print("正在从数据库获取股票池...")
-    symbols = get_stock_pool_from_db()
+    if symbols is None:
+        print("正在从数据库获取股票池...")
+        symbols = get_stock_pool_from_db()
     if max_stocks is not None and max_stocks > 0:
         symbols = symbols[:max_stocks]
     print(f"股票池共 {len(symbols)} 只股票")
@@ -451,8 +453,10 @@ def scan_stocks_for_signals(select_date: str, cfg: StrategyConfig, max_stocks: O
             if raw is None or raw.empty or len(raw) < 100:
                 continue
 
-            # 检查目标日期是否在数据范围内
-            if target_date not in raw.index:
+            # 检查目标日期是否在数据范围内（使用normalize匹配日期）
+            raw_dates = raw.index.normalize()
+            target_date_normalized = target_date.normalize() if hasattr(target_date, 'normalize') else pd.Timestamp(target_date).normalize()
+            if target_date_normalized not in raw_dates:
                 continue
 
             raw["symbol"] = symbol
@@ -701,20 +705,36 @@ def main() -> None:
 
     engine = FactorEngine()
 
-    raw = engine.fetch_daily(args.symbol, args.bars)
-    raw["symbol"] = args.symbol
+    # 从数据库加载数据（与选股模式一致）
+    # 计算数据范围：从当前日期往前推 args.bars 个交易日
+    end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
+    start_date = (pd.Timestamp.now() - pd.Timedelta(days=args.bars * 2)).strftime("%Y-%m-%d")
+
+    # 将 symbol 转换为 ts_code 格式（如 600547 -> 600547.SH）
+    ts_code = args.symbol if "." in args.symbol else (f"{args.symbol}.SH" if args.symbol.startswith("6") else f"{args.symbol}.SZ")
+
+    raw = load_daily_from_db(ts_code, start_date, end_date)
+    if raw.empty:
+        print(f"错误: 无法从数据库获取 {ts_code} 的数据")
+        return
+
+    # 限制数据条数
+    if len(raw) > args.bars:
+        raw = raw.iloc[-args.bars:]
+
+    raw["symbol"] = ts_code
     daily = engine.compute_daily_factors(raw)
     weekly = engine.compute_weekly_strict_dsa(raw, cfg.weekly_resample_rule)
     df = pd.concat([daily, weekly], axis=1)
 
     trades = generate_trades(df, cfg)
-    summary = summarize_trades(trades, args.symbol, cfg)
+    summary = summarize_trades(trades, ts_code, cfg)
 
     trades.to_csv(args.out_trades, index=False)
     summary.to_csv(args.out_summary, index=False)
 
     if args.out_html:
-        build_html(df, trades, args.out_html, args.symbol)
+        build_html(df, trades, args.out_html, ts_code)
 
     print(f"交易明细已保存: {args.out_trades}")
     print(f"策略汇总已保存: {args.out_summary}")
