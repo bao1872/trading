@@ -2344,24 +2344,39 @@ def render_first_day_launch_page(session):
         return df_events
 
     def load_c2_selections(session, select_date: str) -> pd.DataFrame:
-        """加载指定日期的 C2 策略选股结果"""
+        """加载指定日期的 C2 策略选股结果（关联股票名称、财务分数、概念）"""
         sql = """
         SELECT
-            symbol,
-            select_date,
-            signal_date,
-            close,
-            dsa_pivot_pos_01,
-            signed_vwap_dev_pct,
-            w_dsa_pivot_pos_01,
-            bars_since_dir_change,
-            rope_dir,
-            rope_slope_atr_5,
-            bb_pos_01,
-            bb_width_percentile
-        FROM c2_strategy_selections
-        WHERE select_date = :select_date
-        ORDER BY signed_vwap_dev_pct ASC
+            c2.symbol,
+            c2.select_date,
+            c2.signal_date,
+            c2.close,
+            c2.dsa_pivot_pos_01,
+            c2.signed_vwap_dev_pct,
+            c2.w_dsa_pivot_pos_01,
+            c2.bars_since_dir_change,
+            c2.rope_dir,
+            c2.rope_slope_atr_5,
+            c2.bb_pos_01,
+            c2.bb_width_percentile,
+            sp.name,
+            sp.concepts,
+            fs.total_score,
+            fs."规模与增长_score",
+            fs."盈利能力_score",
+            fs."利润质量_score",
+            fs."现金创造能力_score",
+            fs."资产效率与资金占用_score",
+            fs."边际变化与持续性_score"
+        FROM c2_strategy_selections c2
+        LEFT JOIN stock_pools sp ON c2.symbol = sp.ts_code
+        LEFT JOIN stock_financial_score_pool fs ON c2.symbol = fs.ts_code
+            AND fs.report_date = (
+                SELECT MAX(report_date) FROM stock_financial_score_pool
+                WHERE ts_code = c2.symbol AND report_date <= c2.select_date
+            )
+        WHERE c2.select_date = :select_date
+        ORDER BY c2.signed_vwap_dev_pct ASC
         """
         return query_sql(session, sql, {"select_date": select_date})
 
@@ -2462,19 +2477,31 @@ def render_first_day_launch_page(session):
                 "C2策略选股",
                 "C2策略选股",
                 df_c2,
-                # 显示列
-                ["symbol", "close", "dsa_pivot_pos_01", "signed_vwap_dev_pct",
+                # 显示列（参考回踩买点 Tab 的字段顺序）
+                ["symbol", "name", "close",
+                 "dsa_pivot_pos_01", "signed_vwap_dev_pct",
                  "w_dsa_pivot_pos_01", "bars_since_dir_change", "rope_dir",
-                 "rope_slope_atr_5", "bb_pos_01", "bb_width_percentile"],
+                 "rope_slope_atr_5", "bb_pos_01", "bb_width_percentile",
+                 "total_score",
+                 "规模与增长_score", "盈利能力_score", "利润质量_score",
+                 "现金创造能力_score", "资产效率与资金占用_score", "边际变化与持续性_score",
+                 "concepts"],
                 # 列名映射（中文）
-                {"symbol": "股票代码", "close": "收盘价",
+                {"symbol": "股票代码", "name": "股票名称", "close": "收盘价",
                  "dsa_pivot_pos_01": "日线DSA位置", "signed_vwap_dev_pct": "VWAP偏离度(%)",
                  "w_dsa_pivot_pos_01": "周线DSA位置", "bars_since_dir_change": "趋势转变Bar数",
                  "rope_dir": "Rope方向", "rope_slope_atr_5": "Rope斜率",
-                 "bb_pos_01": "布林带位置", "bb_width_percentile": "布林带宽度分位"},
+                 "bb_pos_01": "布林带位置", "bb_width_percentile": "布林带宽度分位",
+                 "total_score": "财务总分",
+                 "规模与增长_score": "规模与增长", "盈利能力_score": "盈利能力",
+                 "利润质量_score": "利润质量", "现金创造能力_score": "现金创造能力",
+                 "资产效率与资金占用_score": "资产效率", "边际变化与持续性_score": "边际变化",
+                 "concepts": "概念"},
                 # 数值列（用于颜色标记）
-                ["dsa_pivot_pos_01", "signed_vwap_dev_pct", "w_dsa_pivot_pos_01",
-                 "bb_pos_01", "bb_width_percentile"]
+                ["close", "dsa_pivot_pos_01", "signed_vwap_dev_pct", "w_dsa_pivot_pos_01",
+                 "bb_pos_01", "bb_width_percentile", "total_score",
+                 "规模与增长_score", "盈利能力_score", "利润质量_score",
+                 "现金创造能力_score", "资产效率与资金占用_score", "边际变化与持续性_score"]
             )
 
 
