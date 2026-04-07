@@ -598,7 +598,7 @@ def get_trade_dates(start_date: str, end_date: str) -> List[str]:
 
 def backfill_selections(start_date: str, end_date: Optional[str], cfg: StrategyConfig, max_stocks: Optional[int] = None):
     """
-    回补计算指定日期范围内的选股结果
+    回补计算指定日期范围内的选股结果（优化版：一次性加载数据，避免重复查询）
 
     Args:
         start_date: 开始日期，格式 "YYYY-MM-DD"
@@ -626,14 +626,62 @@ def backfill_selections(start_date: str, end_date: Optional[str], cfg: StrategyC
     trade_dates = get_trade_dates(start_date, end_date)
     print(f"共 {len(trade_dates)} 个交易日需要处理\n")
 
+    # 计算统一的数据范围（覆盖整个回补期间）
+    # 往前推 300 个交易日（约 1.5 年，足够计算周线 DSA）
+    data_start = (pd.Timestamp(start_date) - pd.Timedelta(days=450)).strftime("%Y-%m-%d")
+    data_end = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # 获取股票池
+    print("正在从数据库获取股票池...")
+    symbols = get_stock_pool_from_db()
+    if max_stocks is not None and max_stocks > 0:
+        symbols = symbols[:max_stocks]
+    print(f"股票池共 {len(symbols)} 只股票")
+    print(f"统一数据范围: {data_start} ~ {data_end}\n")
+
+    # 一次性加载所有股票的因子数据
+    engine = FactorEngine()
+    stock_data = {}
+
+    for symbol in tqdm(symbols, desc="加载数据", ncols=80):
+        try:
+            raw = load_daily_from_db(symbol, data_start, data_end)
+            if raw is None or raw.empty or len(raw) < 100:
+                continue
+
+            raw["symbol"] = symbol
+            daily = engine.compute_daily_factors(raw)
+            weekly = engine.compute_weekly_strict_dsa(raw, cfg.weekly_resample_rule)
+            df = pd.concat([daily, weekly], axis=1)
+
+            stock_data[symbol] = df
+        except Exception:
+            continue
+
+    print(f"\n成功加载 {len(stock_data)} 只股票数据\n")
+
+    # 逐个日期检查信号
     total_selected = 0
     dates_with_signals = 0
 
     for date in tqdm(trade_dates, desc="回补进度", ncols=80, position=0, leave=True):
         try:
-            selection = scan_stocks_for_signals(date, cfg, max_stocks)
+            target_date = pd.Timestamp(date)
 
-            if not selection.empty:
+            results = []
+            for symbol, df in stock_data.items():
+                signal_data = check_signal_on_date(df, cfg, target_date)
+                if signal_data:
+                    signal_data["symbol"] = symbol
+                    results.append(signal_data)
+
+            if results:
+                selection = pd.DataFrame(results)
+                cols = ["symbol", "signal_date", "close", "dsa_pivot_pos_01", "signed_vwap_dev_pct",
+                        "w_dsa_pivot_pos_01", "bars_since_dir_change", "rope_dir", "rope_slope_atr_5",
+                        "bb_pos_01", "bb_width_percentile"]
+                selection = selection[cols]
+
                 saved_count = save_selection_to_db(selection, date, cfg)
                 total_selected += saved_count
                 dates_with_signals += 1
