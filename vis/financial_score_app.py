@@ -2343,11 +2343,33 @@ def render_first_day_launch_page(session):
 
         return df_events
 
+    def load_c2_selections(session, select_date: str) -> pd.DataFrame:
+        """加载指定日期的 C2 策略选股结果"""
+        sql = """
+        SELECT
+            symbol,
+            select_date,
+            signal_date,
+            close,
+            dsa_pivot_pos_01,
+            signed_vwap_dev_pct,
+            w_dsa_pivot_pos_01,
+            bars_since_dir_change,
+            rope_dir,
+            rope_slope_atr_5,
+            bb_pos_01,
+            bb_width_percentile
+        FROM c2_strategy_selections
+        WHERE select_date = :select_date
+        ORDER BY signed_vwap_dev_pct ASC
+        """
+        return query_sql(session, sql, {"select_date": select_date})
+
     with st.sidebar:
         available_dates = get_trading_days(90)
         selected_date = st.selectbox("日期", available_dates)
 
-    tabs = st.tabs(["翻多事件", "回踩买点"])
+    tabs = st.tabs(["翻多事件", "回踩买点", "C2策略选股"])
 
     with tabs[0]:
         st.markdown("### 翻多事件")
@@ -2425,6 +2447,34 @@ def render_first_day_launch_page(session):
                  "breakout_to_buy_bars", "score_trend_total", "score_candle_total", "score_volume_total", "score_freshness_total",
                  "lower", "rope", "close",
                  "盈利能力_score", "利润质量_score", "现金创造能力_score", "资产效率与资金占用_score"]
+            )
+
+    with tabs[2]:
+        st.markdown("### C2 策略选股结果")
+
+        df_c2 = load_c2_selections(session, selected_date)
+
+        if df_c2 is None or df_c2.empty:
+            st.warning("该日期暂无 C2 策略选股数据")
+        else:
+            _render_breakout_tab_df(
+                session,
+                "C2策略选股",
+                "C2策略选股",
+                df_c2,
+                # 显示列
+                ["symbol", "close", "dsa_pivot_pos_01", "signed_vwap_dev_pct",
+                 "w_dsa_pivot_pos_01", "bars_since_dir_change", "rope_dir",
+                 "rope_slope_atr_5", "bb_pos_01", "bb_width_percentile"],
+                # 列名映射（中文）
+                {"symbol": "股票代码", "close": "收盘价",
+                 "dsa_pivot_pos_01": "日线DSA位置", "signed_vwap_dev_pct": "VWAP偏离度(%)",
+                 "w_dsa_pivot_pos_01": "周线DSA位置", "bars_since_dir_change": "趋势转变Bar数",
+                 "rope_dir": "Rope方向", "rope_slope_atr_5": "Rope斜率",
+                 "bb_pos_01": "布林带位置", "bb_width_percentile": "布林带宽度分位"},
+                # 数值列（用于颜色标记）
+                ["dsa_pivot_pos_01", "signed_vwap_dev_pct", "w_dsa_pivot_pos_01",
+                 "bb_pos_01", "bb_width_percentile"]
             )
 
 
