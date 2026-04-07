@@ -515,6 +515,28 @@ TAB_FIELD_CONFIGS = {
                          "利润质量": "利润质量", "现金创造能力": "现金创造能力",
                          "资产效率": "资产效率", "边际变化": "边际变化"}
     },
+    "C2策略选股": {
+        "fields": ["symbol", "name", "concepts", "close", "dsa_pivot_pos_01", "signed_vwap_dev_pct",
+                   "w_dsa_pivot_pos_01", "bars_since_dir_change", "rope_dir", "rope_slope_atr_5",
+                   "bb_pos_01", "bb_width_percentile", "total_score",
+                   "规模与增长_score", "盈利能力_score", "利润质量_score",
+                   "现金创造能力_score", "资产效率与资金占用_score", "边际变化与持续性_score"],
+        "types": {"symbol": "string", "name": "string", "concepts": "string", "close": "numeric",
+                  "dsa_pivot_pos_01": "numeric", "signed_vwap_dev_pct": "numeric",
+                  "w_dsa_pivot_pos_01": "numeric", "bars_since_dir_change": "numeric",
+                  "rope_dir": "numeric", "rope_slope_atr_5": "numeric",
+                  "bb_pos_01": "numeric", "bb_width_percentile": "numeric", "total_score": "numeric",
+                  "规模与增长_score": "numeric", "盈利能力_score": "numeric", "利润质量_score": "numeric",
+                  "现金创造能力_score": "numeric", "资产效率与资金占用_score": "numeric", "边际变化与持续性_score": "numeric"},
+        "string_fields": ["symbol", "name", "concepts"],
+        "display_names": {"symbol": "股票代码", "name": "股票名称", "concepts": "概念", "close": "收盘价",
+                         "dsa_pivot_pos_01": "日线DSA位置", "signed_vwap_dev_pct": "VWAP偏离度(%)",
+                         "w_dsa_pivot_pos_01": "周线DSA位置", "bars_since_dir_change": "趋势转变Bar数",
+                         "rope_dir": "Rope方向", "rope_slope_atr_5": "Rope斜率",
+                         "bb_pos_01": "布林带位置", "bb_width_percentile": "布林带宽度分位", "total_score": "财务总分",
+                         "规模与增长_score": "规模与增长", "盈利能力_score": "盈利能力", "利润质量_score": "利润质量",
+                         "现金创造能力_score": "现金创造能力", "资产效率与资金占用_score": "资产效率", "边际变化与持续性_score": "边际变化"}
+    },
     "股东画像": {
         "fields": ["holder_name_std", "holder_type", "final_holder_quality", "sample_total",
                    "win_rate_60_entry", "win_rate_60_add", "avg_excess_ret_60_entry", "avg_excess_ret_60_add"],
