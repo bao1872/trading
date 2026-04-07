@@ -271,9 +271,9 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
         ).fetchone()
         db_latest_time = result[0] if result and result[0] else None
         if db_latest_time:
-            db_latest_time = pd.to_datetime(db_latest_time).normalize()
+            db_latest_time = pd.to_datetime(db_latest_time).tz_localize(None).normalize()
 
-    today = pd.Timestamp.today().normalize()
+    today = pd.Timestamp.today().tz_localize(None).normalize()
     need_full_update = (db_latest_time is None) or (db_latest_time < today)
 
     print(f"数据库最新日期: {db_latest_time.strftime('%Y-%m-%d') if db_latest_time else '无数据'}")
