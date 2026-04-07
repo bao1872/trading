@@ -86,6 +86,7 @@ class StrategyConfig:
     vwap_thr: float = -1.0
     bars_thr: int = 3
     weekly_pos_thr: float = 0.70
+    require_break_up: bool = True
     hold_bars: int = 40
     cooldown_bars: int = 20
     weekly_resample_rule: str = "W-FRI"
@@ -151,6 +152,8 @@ class FactorEngine:
 
 def build_signals(df: pd.DataFrame, cfg: StrategyConfig) -> pd.Series:
     required = ["w_dsa_pivot_pos_01", "dsa_pivot_pos_01", "signed_vwap_dev_pct", "bars_since_dir_change", "rope_dir"]
+    if cfg.require_break_up:
+        required.append("range_break_up")
     for col in required:
         if col not in df.columns:
             raise KeyError(f"缺少必要字段: {col}")
@@ -161,6 +164,8 @@ def build_signals(df: pd.DataFrame, cfg: StrategyConfig) -> pd.Series:
         & (df["rope_dir"] == 1)
         & (df["bars_since_dir_change"] <= cfg.bars_thr)
     )
+    if cfg.require_break_up:
+        sig &= (df["range_break_up"] == 1)
     return sig.fillna(False)
 
 
@@ -253,6 +258,8 @@ def generate_trades(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
                 "bars_since_dir_change": work["bars_since_dir_change"].iloc[idx],
                 "rope_dir": work["rope_dir"].iloc[idx] if "rope_dir" in work.columns else np.nan,
                 "rope_slope_atr_5": work["rope_slope_atr_5"].iloc[idx] if "rope_slope_atr_5" in work.columns else np.nan,
+                "range_break_up": work["range_break_up"].iloc[idx] if "range_break_up" in work.columns else np.nan,
+                "range_break_up_strength": work["range_break_up_strength"].iloc[idx] if "range_break_up_strength" in work.columns else np.nan,
                 "bb_pos_01": work["bb_pos_01"].iloc[idx] if "bb_pos_01" in work.columns else np.nan,
                 "bb_width_percentile": work["bb_width_percentile"].iloc[idx] if "bb_width_percentile" in work.columns else np.nan,
             }
@@ -268,6 +275,7 @@ def summarize_trades(trades: pd.DataFrame, symbol: str, cfg: StrategyConfig) -> 
             "mae_mean": np.nan, "wr": np.nan, "rr_mean": np.nan,
             "strategy_dsa_thr": cfg.dsa_thr, "strategy_vwap_thr": cfg.vwap_thr,
             "strategy_bars_thr": cfg.bars_thr, "strategy_weekly_pos_thr": cfg.weekly_pos_thr,
+            "strategy_break_up_required": int(cfg.require_break_up),
             "strategy_hold_bars": cfg.hold_bars, "strategy_cooldown_bars": cfg.cooldown_bars,
             "commission_rate": cfg.commission_rate, "stamp_tax_rate": cfg.stamp_tax_rate,
             "slippage_side": cfg.slippage_side,
@@ -285,6 +293,7 @@ def summarize_trades(trades: pd.DataFrame, symbol: str, cfg: StrategyConfig) -> 
         "strategy_vwap_thr": cfg.vwap_thr,
         "strategy_bars_thr": cfg.bars_thr,
         "strategy_weekly_pos_thr": cfg.weekly_pos_thr,
+        "strategy_break_up_required": int(cfg.require_break_up),
         "strategy_hold_bars": cfg.hold_bars,
         "strategy_cooldown_bars": cfg.cooldown_bars,
         "commission_rate": cfg.commission_rate,
@@ -322,6 +331,16 @@ def build_html(df: pd.DataFrame, trades: pd.DataFrame, out_html: str, symbol: st
         fig.add_trace(go.Scatter(x=x, y=df["signed_vwap_dev_pct"], mode="lines", name="signed_vwap_dev_pct"), row=2, col=1)
     if "bars_since_dir_change" in df.columns:
         fig.add_trace(go.Scatter(x=x, y=df["bars_since_dir_change"], mode="lines", name="bars_since_dir_change"), row=2, col=1)
+    if "range_break_up" in df.columns:
+        up_mask = df["range_break_up"] == 1
+        fig.add_trace(go.Scatter(
+            x=x[up_mask.to_numpy()],
+            y=df.loc[up_mask, "close"],
+            mode="markers",
+            marker=dict(size=8, symbol="circle-open", color="blue"),
+            name="break_up",
+            showlegend=False,
+        ), row=1, col=1)
     if "w_dsa_pivot_pos_01" in df.columns:
         fig.add_trace(go.Scatter(x=x, y=df["w_dsa_pivot_pos_01"], mode="lines", name="w_dsa_pivot_pos_01"), row=3, col=1)
     if "dsa_pivot_pos_01" in df.columns:
@@ -382,6 +401,8 @@ def check_signal_on_date(df: pd.DataFrame, cfg: StrategyConfig, target_date: pd.
     # 检查必要字段是否存在
     required = ["w_dsa_pivot_pos_01", "dsa_pivot_pos_01", "signed_vwap_dev_pct",
                 "bars_since_dir_change", "rope_dir", "close"]
+    if cfg.require_break_up:
+        required.append("range_break_up")
     for col in required:
         if col not in row.index or pd.isna(row[col]):
             return None
@@ -397,6 +418,8 @@ def check_signal_on_date(df: pd.DataFrame, cfg: StrategyConfig, target_date: pd.
         return None
     if not (row["bars_since_dir_change"] <= cfg.bars_thr):
         return None
+    if cfg.require_break_up and not (row["range_break_up"] == 1):
+        return None
 
     # 满足信号，返回指标
     result = {
@@ -408,6 +431,8 @@ def check_signal_on_date(df: pd.DataFrame, cfg: StrategyConfig, target_date: pd.
         "bars_since_dir_change": int(row["bars_since_dir_change"]),
         "rope_dir": int(row["rope_dir"]),
         "rope_slope_atr_5": float(row["rope_slope_atr_5"]) if "rope_slope_atr_5" in row.index and pd.notna(row["rope_slope_atr_5"]) else np.nan,
+        "range_break_up": int(row["range_break_up"]) if "range_break_up" in row.index and pd.notna(row["range_break_up"]) else 0,
+        "range_break_up_strength": float(row["range_break_up_strength"]) if "range_break_up_strength" in row.index and pd.notna(row["range_break_up_strength"]) else np.nan,
         "bb_pos_01": float(row["bb_pos_01"]) if "bb_pos_01" in row.index and pd.notna(row["bb_pos_01"]) else np.nan,
         "bb_width_percentile": float(row["bb_width_percentile"]) if "bb_width_percentile" in row.index and pd.notna(row["bb_width_percentile"]) else np.nan,
     }
@@ -485,7 +510,7 @@ def scan_stocks_for_signals(select_date: str, cfg: StrategyConfig, max_stocks: O
     # 调整列顺序
     cols = ["symbol", "signal_date", "close", "dsa_pivot_pos_01", "signed_vwap_dev_pct",
             "w_dsa_pivot_pos_01", "bars_since_dir_change", "rope_dir", "rope_slope_atr_5",
-            "bb_pos_01", "bb_width_percentile"]
+            "range_break_up", "range_break_up_strength", "bb_pos_01", "bb_width_percentile"]
     df_result = df_result[cols]
 
     return df_result
@@ -514,6 +539,7 @@ def save_selection_to_db(df: pd.DataFrame, select_date: str, cfg: StrategyConfig
     df_db['vwap_thr'] = cfg.vwap_thr
     df_db['bars_thr'] = cfg.bars_thr
     df_db['weekly_pos_thr'] = cfg.weekly_pos_thr
+    df_db['require_break_up'] = int(cfg.require_break_up)
 
     # 确保表存在
     create_table_sql = """
@@ -529,17 +555,23 @@ def save_selection_to_db(df: pd.DataFrame, select_date: str, cfg: StrategyConfig
         bars_since_dir_change INTEGER,
         rope_dir INTEGER,
         rope_slope_atr_5 NUMERIC(10,6),
+        range_break_up INTEGER,
+        range_break_up_strength NUMERIC(10,6),
         bb_pos_01 NUMERIC(10,6),
         bb_width_percentile NUMERIC(10,6),
         dsa_thr NUMERIC(10,4),
         vwap_thr NUMERIC(10,4),
         bars_thr INTEGER,
         weekly_pos_thr NUMERIC(10,4),
+        require_break_up INTEGER DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(symbol, select_date)
     );
     CREATE INDEX IF NOT EXISTS idx_c2_selection_date ON c2_strategy_selections(select_date);
     CREATE INDEX IF NOT EXISTS idx_c2_selection_symbol ON c2_strategy_selections(symbol);
+    ALTER TABLE c2_strategy_selections ADD COLUMN IF NOT EXISTS range_break_up INTEGER;
+    ALTER TABLE c2_strategy_selections ADD COLUMN IF NOT EXISTS range_break_up_strength NUMERIC(10,6);
+    ALTER TABLE c2_strategy_selections ADD COLUMN IF NOT EXISTS require_break_up INTEGER DEFAULT 1;
     """
 
     with engine.connect() as conn:
@@ -558,8 +590,8 @@ def save_selection_to_db(df: pd.DataFrame, select_date: str, cfg: StrategyConfig
     df_db = df_db.rename(columns={'signal_date': 'signal_date'})
     columns = ['symbol', 'select_date', 'signal_date', 'close', 'dsa_pivot_pos_01',
                'signed_vwap_dev_pct', 'w_dsa_pivot_pos_01', 'bars_since_dir_change',
-               'rope_dir', 'rope_slope_atr_5', 'bb_pos_01', 'bb_width_percentile',
-               'dsa_thr', 'vwap_thr', 'bars_thr', 'weekly_pos_thr', 'created_at']
+               'rope_dir', 'rope_slope_atr_5', 'range_break_up', 'range_break_up_strength', 'bb_pos_01', 'bb_width_percentile',
+               'dsa_thr', 'vwap_thr', 'bars_thr', 'weekly_pos_thr', 'require_break_up', 'created_at']
     df_db = df_db[columns]
 
     df_db.to_sql('c2_strategy_selections', engine, if_exists='append', index=False)
@@ -679,7 +711,7 @@ def backfill_selections(start_date: str, end_date: Optional[str], cfg: StrategyC
                 selection = pd.DataFrame(results)
                 cols = ["symbol", "signal_date", "close", "dsa_pivot_pos_01", "signed_vwap_dev_pct",
                         "w_dsa_pivot_pos_01", "bars_since_dir_change", "rope_dir", "rope_slope_atr_5",
-                        "bb_pos_01", "bb_width_percentile"]
+                        "range_break_up", "range_break_up_strength", "bb_pos_01", "bb_width_percentile"]
                 selection = selection[cols]
 
                 saved_count = save_selection_to_db(selection, date, cfg)
@@ -733,6 +765,7 @@ def main() -> None:
         print(f"  - VWAP 偏离度 <= {cfg.vwap_thr}%")
         print(f"  - Rope 方向 = 1（上升）")
         print(f"  - 趋势转变后 bars <= {cfg.bars_thr}")
+        print(f"  - range_break_up = 1（向上突破）")
         print(f"{'='*60}\n")
 
         selection = scan_stocks_for_signals(args.select_date, cfg, args.max_stocks)
