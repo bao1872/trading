@@ -39,7 +39,7 @@ from features.merged_dsa_atr_rope_bb_factors import (
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-OUT_DIR = "buy_point_explorer"
+OUT_DIR = "backtrader/buy_point_explorer"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 RET_WINDOWS = [5, 10, 20, 40, 60]
@@ -489,9 +489,6 @@ def analyze_06_c2_param_scan(df: pd.DataFrame) -> pd.DataFrame:
                 row = {"dsa_thr": dsa_thr, "bars_thr": bars_thr, "vwap_thr": "none" if vwap_thr is None else vwap_thr, "event_n": len(events)}
                 row.update(summarize_events(events, [20, 40, 60]))
                 rows.append(row)
-    if not rows:
-        print("[WARN] 层次⑥ 无足够数据，跳过")
-        return pd.DataFrame()
     rdf = pd.DataFrame(rows).sort_values("rr_20", ascending=False)
     if not rdf.empty:
         print(rdf.head(10)[["dsa_thr", "bars_thr", "vwap_thr", "event_n", "ret_20", "mae_20", "wr_20", "rr_20"]].to_string(index=False))
@@ -915,245 +912,177 @@ def analyze_17_c2_local_state_compare(events: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================
-# Rope coil -> explosion analyses 18
+# Rope coil explosion analyses 18
 # =========================
-def _calc_true_streak(mask: pd.Series) -> pd.Series:
-    s = mask.fillna(False).astype(bool)
-    grp = (~s).cumsum()
-    return s.groupby(grp).cumsum().astype(int)
-
-
-def _append_big_move_metrics(row: Dict[str, float], events: pd.DataFrame) -> Dict[str, float]:
-    specs = [
-        (20, 0.10, 'hit20_10'),
-        (20, 0.15, 'hit20_15'),
-        (40, 0.20, 'hit40_20'),
-    ]
-    for w, thr, name in specs:
-        col = f"ret_{w}"
-        if col in events.columns and len(events) > 0:
-            row[name] = round(float((events[col] >= thr).mean()), 4)
-        else:
-            row[name] = np.nan
-    return row
+def _true_streak(mask: pd.Series) -> pd.Series:
+    m = mask.fillna(False).astype(bool)
+    grp = (~m).cumsum()
+    return m.groupby(grp).cumsum().astype(float)
 
 
 def add_rope_coil_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    dist = out.get('dist_to_rope_atr', pd.Series(np.nan, index=out.index)).astype(float)
-    out['near_rope_loose'] = dist.abs() <= 0.5
-    out['near_rope_strict'] = dist.abs() <= 0.4
-    out['near_rope_streak_loose'] = _calc_true_streak(out['near_rope_loose'])
-    out['near_rope_streak_strict'] = _calc_true_streak(out['near_rope_strict'])
-    out['near_rope_ratio_5_loose'] = out['near_rope_loose'].fillna(False).astype(float).rolling(5, min_periods=5).mean()
-    out['near_rope_ratio_5_strict'] = out['near_rope_strict'].fillna(False).astype(float).rolling(5, min_periods=5).mean()
-    bb_width_pct = out.get('bb_width_percentile', pd.Series(np.nan, index=out.index)).astype(float)
-    is_cons = out.get('is_consolidating', pd.Series(False, index=out.index)).fillna(False).astype(bool)
-    bb_contracting = out.get('bb_contracting', pd.Series(False, index=out.index)).fillna(False).astype(bool)
-    bb_contract_streak = out.get('bb_contract_streak', pd.Series(0, index=out.index)).fillna(0).astype(float)
-    out['coil_loose'] = is_cons | (bb_width_pct <= 0.35) | bb_contracting
-    out['coil_strict'] = is_cons | (bb_width_pct <= 0.35) | (bb_contract_streak >= 2)
-    out['coil_super_strict'] = is_cons & (bb_width_pct <= 0.20)
-    slope = out.get('rope_slope_atr_5', pd.Series(np.nan, index=out.index)).astype(float)
-    out['trigger_rope_slope_up'] = slope > 0
-    out['trigger_rope_slope_cross_up'] = (slope > 0) & (slope.shift(1) <= 0)
-    out['trigger_break_up'] = out.get('range_break_up', pd.Series(0, index=out.index)).fillna(0).astype(int) == 1
-    out['trigger_above_rope'] = dist > 0.1
-    out['trigger_depart_from_rope'] = dist > 0.3
-    out['trigger_reclaim_rope'] = (dist > 0.1) & (dist.shift(1) <= 0.1)
-    out['not_too_high'] = (
-        out.get('bb_pos_01', pd.Series(np.nan, index=out.index)).astype(float).fillna(0.5) <= 0.85
-    ) & (
-        out.get('dsa_pivot_pos_01', pd.Series(np.nan, index=out.index)).astype(float).fillna(0.5) <= 0.85
-    )
+    dist = out.get("dist_to_rope_atr", pd.Series(np.nan, index=out.index)).astype(float)
+    out["near_rope_loose"] = (dist.abs() <= 0.5).astype(int)
+    out["near_rope_mid"] = (dist.abs() <= 0.4).astype(int)
+    out["near_rope_strict"] = (dist.abs() <= 0.3).astype(int)
+    if "symbol" in out.columns:
+        out["near_rope_streak_loose"] = out.groupby("symbol", sort=False)["near_rope_loose"].transform(lambda s: _true_streak(s.astype(bool)))
+        out["near_rope_streak_mid"] = out.groupby("symbol", sort=False)["near_rope_mid"].transform(lambda s: _true_streak(s.astype(bool)))
+        out["near_rope_streak_strict"] = out.groupby("symbol", sort=False)["near_rope_strict"].transform(lambda s: _true_streak(s.astype(bool)))
+        out["near_rope_ratio_5_loose"] = out.groupby("symbol", sort=False)["near_rope_loose"].transform(lambda s: s.rolling(5, min_periods=5).mean())
+        out["near_rope_ratio_5_mid"] = out.groupby("symbol", sort=False)["near_rope_mid"].transform(lambda s: s.rolling(5, min_periods=5).mean())
+        out["near_rope_ratio_5_strict"] = out.groupby("symbol", sort=False)["near_rope_strict"].transform(lambda s: s.rolling(5, min_periods=5).mean())
+    else:
+        out["near_rope_streak_loose"] = _true_streak(out["near_rope_loose"].astype(bool))
+        out["near_rope_streak_mid"] = _true_streak(out["near_rope_mid"].astype(bool))
+        out["near_rope_streak_strict"] = _true_streak(out["near_rope_strict"].astype(bool))
+        out["near_rope_ratio_5_loose"] = out["near_rope_loose"].rolling(5, min_periods=5).mean()
+        out["near_rope_ratio_5_mid"] = out["near_rope_mid"].rolling(5, min_periods=5).mean()
+        out["near_rope_ratio_5_strict"] = out["near_rope_strict"].rolling(5, min_periods=5).mean()
+
+    bbwp = out.get("bb_width_percentile", pd.Series(np.nan, index=out.index)).astype(float)
+    out["coil_loose"] = (((out.get("is_consolidating", 0) == 1) | (bbwp <= 0.40) | (out.get("bb_contracting", 0) == 1))).astype(int)
+    out["coil_mid"] = (((out.get("is_consolidating", 0) == 1) & (bbwp <= 0.35)) | (bbwp <= 0.25)).astype(int)
+    out["coil_strict"] = (((out.get("is_consolidating", 0) == 1) & (bbwp <= 0.25)) | ((out.get("bb_contract_streak", 0).fillna(0) >= 2) & (bbwp <= 0.30))).astype(int)
+
+    out["trigger_slope_up"] = (out.get("rope_slope_atr_5", 0).astype(float) > 0).astype(int)
+    out["trigger_above_rope"] = (dist > 0).astype(int)
+    out["trigger_depart_from_rope"] = (dist > 0.5).astype(int)
+    out["trigger_break_up"] = (out.get("range_break_up", 0) == 1).astype(int)
+    rbs = out.get("range_break_up_strength", pd.Series(np.nan, index=out.index)).astype(float)
+    out["trigger_break_up_strong"] = ((out["trigger_break_up"] == 1) & (rbs >= rbs.median(skipna=True))).astype(int)
+    out["trigger_dual_confirm"] = ((out["trigger_break_up"] == 1) & (out["trigger_above_rope"] == 1) & (out["trigger_depart_from_rope"] == 1)).astype(int)
+
+    out["not_too_high"] = (((out.get("bb_pos_01", pd.Series(0.5, index=out.index)).astype(float) <= 0.90) &
+                             (out.get("dsa_pivot_pos_01", pd.Series(0.5, index=out.index)).astype(float) <= 0.90))).astype(int)
+    for tag, thr in [("10", 0.10), ("15", 0.15)]:
+        out[f"hit20_{tag}"] = (out.get("ret_20", pd.Series(np.nan, index=out.index)).astype(float) >= thr).astype(float)
+    out["hit40_20"] = (out.get("ret_40", pd.Series(np.nan, index=out.index)).astype(float) >= 0.20).astype(float)
     return out
 
 
-def build_rope_coil_events(df: pd.DataFrame, variant: str = 'B', cooldown: int = EVENT_DEDUP_BARS) -> pd.DataFrame:
+def summarize_events_plus(events: pd.DataFrame, windows: Sequence[int] = (20, 40)) -> Dict[str, float]:
+    out = summarize_events(events, windows)
+    for c in ["hit20_10", "hit20_15", "hit40_20"]:
+        out[c] = round(float(events[c].mean()), 4) if c in events.columns and len(events) else np.nan
+    return out
+
+
+def build_rope_coil_events(df: pd.DataFrame, variant: str = "A", cooldown: int = EVENT_DEDUP_BARS) -> pd.DataFrame:
     work = add_rope_coil_features(df)
-    need_cols = [
-        'symbol', 'datetime', 'open', 'high', 'low', 'close',
-        'rope_dir', 'dist_to_rope_atr', 'rope_slope_atr_5', 'range_break_up', 'range_break_up_strength',
-        'is_consolidating', 'bb_width_percentile', 'bb_contracting', 'bb_contract_streak',
-        'bb_pos_01', 'dsa_pivot_pos_01',
-        'near_rope_loose', 'near_rope_strict', 'near_rope_streak_loose', 'near_rope_streak_strict',
-        'near_rope_ratio_5_loose', 'near_rope_ratio_5_strict',
-        'coil_loose', 'coil_strict', 'coil_super_strict',
-        'trigger_rope_slope_up', 'trigger_rope_slope_cross_up', 'trigger_break_up',
-        'trigger_above_rope', 'trigger_depart_from_rope', 'trigger_reclaim_rope', 'not_too_high',
-    ] + [f'ret_{w}' for w in [5, 10, 20, 40]] + [f'max_dd_{w}' for w in [5, 10, 20, 40]] + [f'win_{w}' for w in [5, 10, 20, 40]]
-    need_cols = [c for c in need_cols if c in work.columns]
-    sub = work[need_cols].dropna(subset=[c for c in ['symbol', 'datetime', 'ret_20', 'max_dd_20', 'dist_to_rope_atr', 'rope_dir'] if c in work.columns]).copy()
+    need = [
+        "symbol", "datetime", "open", "high", "low", "close", "rope_dir", "dist_to_rope_atr", "rope_slope_atr_5",
+        "range_break_up", "range_break_up_strength", "bb_pos_01", "dsa_pivot_pos_01", "bb_width_percentile",
+        "near_rope_ratio_5_loose", "near_rope_ratio_5_mid", "near_rope_streak_loose", "near_rope_streak_mid",
+        "coil_loose", "coil_mid", "coil_strict", "trigger_slope_up", "trigger_above_rope", "trigger_depart_from_rope",
+        "trigger_break_up", "trigger_break_up_strong", "trigger_dual_confirm", "not_too_high", "hit20_10", "hit20_15", "hit40_20",
+    ] + [f"ret_{w}" for w in [5,10,20,40,60]] + [f"max_dd_{w}" for w in [5,10,20,40,60]] + [f"win_{w}" for w in [5,10,20,40,60]]
+    need = [c for c in need if c in work.columns]
+    sub = work[need].dropna(subset=[c for c in ["ret_20", "ret_40", "rope_dir", "dist_to_rope_atr"] if c in need]).copy()
 
-    setup_a = (
-        (sub['rope_dir'] != -1)
-        & sub['near_rope_loose'].fillna(False)
-        & (sub.get('near_rope_ratio_5_loose', pd.Series(np.nan, index=sub.index)) >= 0.8)
-        & sub.get('coil_loose', pd.Series(False, index=sub.index)).fillna(False)
-        & sub.get('not_too_high', pd.Series(True, index=sub.index)).fillna(True)
-    )
-    event_a = setup_a & (
-        sub.get('trigger_rope_slope_up', pd.Series(False, index=sub.index)).fillna(False)
-        | sub.get('trigger_above_rope', pd.Series(False, index=sub.index)).fillna(False)
-        | sub.get('trigger_break_up', pd.Series(False, index=sub.index)).fillna(False)
-    )
-
-    setup_b = (
-        (sub['rope_dir'] == 1)
-        & sub['near_rope_strict'].fillna(False)
-        & (
-            (sub.get('near_rope_streak_strict', pd.Series(0, index=sub.index)) >= 2)
-            | (sub.get('near_rope_ratio_5_strict', pd.Series(np.nan, index=sub.index)) >= 0.6)
-        )
-        & sub.get('coil_strict', pd.Series(False, index=sub.index)).fillna(False)
-        & sub.get('not_too_high', pd.Series(True, index=sub.index)).fillna(True)
-    )
-    event_b = setup_b & (
-        sub.get('trigger_rope_slope_up', pd.Series(False, index=sub.index)).fillna(False)
-        & (
-            sub.get('trigger_reclaim_rope', pd.Series(False, index=sub.index)).fillna(False)
-            | sub.get('trigger_above_rope', pd.Series(False, index=sub.index)).fillna(False)
-            | sub.get('trigger_break_up', pd.Series(False, index=sub.index)).fillna(False)
-        )
-    )
-
-    prev_setup_b = setup_b.shift(1).fillna(False)
-    event_c = prev_setup_b & (
-        sub.get('trigger_rope_slope_cross_up', pd.Series(False, index=sub.index)).fillna(False)
-        | sub.get('trigger_reclaim_rope', pd.Series(False, index=sub.index)).fillna(False)
-        | (
-            sub.get('trigger_break_up', pd.Series(False, index=sub.index)).fillna(False)
-            & sub.get('trigger_rope_slope_up', pd.Series(False, index=sub.index)).fillna(False)
-        )
-    )
-
-    event_map = {
-        'A': (setup_a, event_a, 'A_loose_background'),
-        'B': (setup_b, event_b, 'B_relaxed_main'),
-        'C': (setup_b, event_c, 'C_first_release'),
-    }
-    setup_mask, event_mask, variant_name = event_map[variant]
-    events = sub[event_mask.fillna(False)].copy()
-    if events.empty:
-        return events
-    events['variant'] = variant_name
-    events['setup_active'] = setup_mask.loc[events.index].astype(int)
-    events = dedup_events(events, cooldown)
-    for w in [5, 10, 20, 40]:
-        if f'ret_{w}' in events.columns and f'max_dd_{w}' in events.columns:
-            events[f'rr_{w}'] = events.apply(lambda r: rr_from_ret_dd(r[f'ret_{w}'], r[f'max_dd_{w}']), axis=1)
-    return events.reset_index(drop=True)
-
-
-def analyze_18_rope_coil_explosion(df: pd.DataFrame) -> pd.DataFrame:
-    print('\n' + '=' * 70)
-    print('# 层次⑱: Rope贴线蓄势后爆发研究')
-    print('=' * 70)
-    work = add_rope_coil_features(df)
-    rows = []
-    all_events = []
-    for variant in ['A', 'B', 'C']:
-        events = build_rope_coil_events(work, variant)
-        if len(events) == 0:
-            continue
-        row = {'variant': events['variant'].iloc[0], 'event_n': len(events)}
-        row.update(summarize_events(events, [5, 10, 20, 40]))
-        row = _append_big_move_metrics(row, events)
-        rows.append(row)
-        all_events.append(events)
-    summary = pd.DataFrame(rows).sort_values('rr_20', ascending=False) if rows else pd.DataFrame()
-    if not summary.empty:
-        print(summary[['variant', 'event_n', 'ret_5', 'ret_10', 'ret_20', 'mae_20', 'wr_20', 'rr_20', 'hit20_10', 'hit20_15', 'hit40_20']].to_string(index=False))
-        summary.to_csv(f"{OUT_DIR}/18_rope_coil_summary.csv", index=False)
-    if all_events:
-        events_df = pd.concat(all_events, ignore_index=True)
-        events_df.to_csv(f"{OUT_DIR}/18_rope_coil_events.csv", index=False)
+    base = (sub["rope_dir"] == 1) & (sub["not_too_high"] == 1)
+    if variant == "A":
+        mask = base & ((sub["near_rope_ratio_5_loose"] >= 0.6) | (sub["near_rope_streak_loose"] >= 3))
+    elif variant == "B":
+        mask = base & ((sub["near_rope_ratio_5_mid"] >= 0.6) | (sub["near_rope_streak_mid"] >= 3)) & (sub["coil_loose"] == 1)
+    elif variant == "C":
+        mask = base & ((sub["near_rope_ratio_5_mid"] >= 0.6) | (sub["near_rope_streak_mid"] >= 3)) & (sub["coil_loose"] == 1) & (sub["trigger_break_up"] == 1) & (sub["trigger_above_rope"] == 1)
+    elif variant == "D":
+        rbs = sub["range_break_up_strength"].astype(float)
+        thr = rbs.quantile(0.6) if rbs.notna().any() else np.nan
+        mask = base & ((sub["near_rope_ratio_5_mid"] >= 0.6) | (sub["near_rope_streak_mid"] >= 3)) & (sub["trigger_break_up"] == 1) & (sub["trigger_above_rope"] == 1) & (sub["trigger_depart_from_rope"] == 1)
+        if pd.notna(thr):
+            mask &= (sub["range_break_up_strength"] >= thr)
     else:
-        events_df = pd.DataFrame()
+        raise ValueError(f"未知 variant: {variant}")
+    events = dedup_events(sub[mask].copy(), cooldown).reset_index(drop=True)
+    events["variant"] = variant
+    return events
 
-    stage_rows = []
-    stage_defs = {
-        'S1_near_rope_only': (
-            (work.get('rope_dir', pd.Series(-1, index=work.index)) == 1)
-            & work.get('near_rope_strict', pd.Series(False, index=work.index)).fillna(False)
-            & (
-                (work.get('near_rope_streak_strict', pd.Series(0, index=work.index)) >= 2)
-                | (work.get('near_rope_ratio_5_strict', pd.Series(np.nan, index=work.index)) >= 0.6)
-            )
-            & work.get('not_too_high', pd.Series(True, index=work.index)).fillna(True)
-        ),
-        'S2_near_rope_plus_coil': (
-            (work.get('rope_dir', pd.Series(-1, index=work.index)) == 1)
-            & work.get('near_rope_strict', pd.Series(False, index=work.index)).fillna(False)
-            & (
-                (work.get('near_rope_streak_strict', pd.Series(0, index=work.index)) >= 2)
-                | (work.get('near_rope_ratio_5_strict', pd.Series(np.nan, index=work.index)) >= 0.6)
-            )
-            & work.get('coil_strict', pd.Series(False, index=work.index)).fillna(False)
-            & work.get('not_too_high', pd.Series(True, index=work.index)).fillna(True)
-        ),
-        'S3_near_rope_coil_release': (
-            (work.get('rope_dir', pd.Series(-1, index=work.index)) == 1)
-            & work.get('near_rope_strict', pd.Series(False, index=work.index)).fillna(False)
-            & (
-                (work.get('near_rope_streak_strict', pd.Series(0, index=work.index)) >= 2)
-                | (work.get('near_rope_ratio_5_strict', pd.Series(np.nan, index=work.index)) >= 0.6)
-            )
-            & work.get('coil_strict', pd.Series(False, index=work.index)).fillna(False)
-            & work.get('trigger_rope_slope_up', pd.Series(False, index=work.index)).fillna(False)
-            & (
-                work.get('trigger_above_rope', pd.Series(False, index=work.index)).fillna(False)
-                | work.get('trigger_break_up', pd.Series(False, index=work.index)).fillna(False)
-            )
-            & work.get('not_too_high', pd.Series(True, index=work.index)).fillna(True)
-        ),
+
+def analyze_18_rope_coil_explosion(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    print("\n" + "=" * 70)
+    print("# 层次⑱: Rope贴线蓄势后爆发研究（breakout重构版）")
+    print("=" * 70)
+    work = add_rope_coil_features(df)
+
+    variant_defs = {
+        "A_loose_background": "A",
+        "B_relaxed_main": "B",
+        "C_first_release": "C",
+        "D_breakout_strength_release": "D",
     }
-    for name, mask in stage_defs.items():
-        g = dedup_events(work[mask.fillna(False)].copy(), EVENT_DEDUP_BARS)
-        if len(g) < 10:
+    all_events = []
+    rows = []
+    for name, code in variant_defs.items():
+        g = build_rope_coil_events(df, code)
+        if len(g) == 0:
             continue
-        row = {'stage': name, 'event_n': len(g)}
-        row.update(summarize_events(g, [5, 10, 20, 40]))
-        row = _append_big_move_metrics(row, g)
-        stage_rows.append(row)
-    stage_df = pd.DataFrame(stage_rows).sort_values('rr_20', ascending=False) if stage_rows else pd.DataFrame()
+        g = g.copy()
+        g["variant_name"] = name
+        all_events.append(g)
+        row = {"variant": name, "event_n": len(g)}
+        row.update({k if k != "n" else "event_n": v for k, v in summarize_events_plus(g, [20, 40]).items() if k != "n"})
+        rows.append(row)
+    summary = pd.DataFrame(rows)
+    if not summary.empty:
+        summary = summary.sort_values(["hit40_20", "rr_20"], ascending=False)
+        print(summary.to_string(index=False))
+        summary.to_csv(f"{OUT_DIR}/18_rope_coil_summary.csv", index=False)
+    events_df = pd.concat(all_events, ignore_index=True) if all_events else pd.DataFrame()
+    if not events_df.empty:
+        events_df.to_csv(f"{OUT_DIR}/18_rope_coil_events.csv", index=False)
+
+    base_stage = build_rope_coil_events(df, "A")
+    stage_rows = []
+    if len(base_stage):
+        stage_variants = {
+            "S1_near_rope_only": pd.Series(True, index=base_stage.index),
+            "S2_near_rope_plus_coil": (base_stage["coil_loose"] == 1),
+            "S3_near_rope_coil_release": (base_stage["coil_loose"] == 1) & (base_stage["trigger_break_up"] == 1) & (base_stage["trigger_above_rope"] == 1),
+            "S4_near_rope_strong_release": (base_stage["coil_loose"] == 1) & (base_stage["trigger_break_up_strong"] == 1) & (base_stage["trigger_depart_from_rope"] == 1),
+        }
+        for name, mask in stage_variants.items():
+            g = base_stage[mask.fillna(False)]
+            if len(g) < 20:
+                continue
+            row = {"stage": name, "event_n": len(g)}
+            row.update({k if k != "n" else "event_n": v for k, v in summarize_events_plus(g, [20, 40]).items() if k != "n"})
+            stage_rows.append(row)
+    stage_df = pd.DataFrame(stage_rows)
     if not stage_df.empty:
-        print('\n[阶段对比]')
-        print(stage_df[['stage', 'event_n', 'ret_20', 'mae_20', 'wr_20', 'rr_20', 'hit20_10', 'hit20_15', 'hit40_20']].to_string(index=False))
+        stage_df = stage_df.sort_values(["hit40_20", "rr_20"], ascending=False)
+        print("\n[stage compare]")
+        print(stage_df.to_string(index=False))
         stage_df.to_csv(f"{OUT_DIR}/18_rope_coil_stage_compare.csv", index=False)
 
-    strict_setup = (
-        (work.get('rope_dir', pd.Series(-1, index=work.index)) == 1)
-        & work.get('near_rope_strict', pd.Series(False, index=work.index)).fillna(False)
-        & (
-            (work.get('near_rope_streak_strict', pd.Series(0, index=work.index)) >= 2)
-            | (work.get('near_rope_ratio_5_strict', pd.Series(np.nan, index=work.index)) >= 0.6)
-        )
-        & work.get('coil_strict', pd.Series(False, index=work.index)).fillna(False)
-        & work.get('not_too_high', pd.Series(True, index=work.index)).fillna(True)
-    )
-    trigger_rows = []
-    trigger_defs = {
-        'T0_no_trigger': strict_setup & ~work.get('trigger_rope_slope_up', pd.Series(False, index=work.index)).fillna(False) & ~work.get('trigger_above_rope', pd.Series(False, index=work.index)).fillna(False) & ~work.get('trigger_break_up', pd.Series(False, index=work.index)).fillna(False),
-        'T1_slope_up': strict_setup & work.get('trigger_rope_slope_up', pd.Series(False, index=work.index)).fillna(False),
-        'T2_slope_plus_above_rope': strict_setup & work.get('trigger_rope_slope_up', pd.Series(False, index=work.index)).fillna(False) & work.get('trigger_above_rope', pd.Series(False, index=work.index)).fillna(False),
-        'T3_break_up': strict_setup & work.get('trigger_break_up', pd.Series(False, index=work.index)).fillna(False),
-        'T4_dual_confirm': strict_setup & work.get('trigger_rope_slope_up', pd.Series(False, index=work.index)).fillna(False) & work.get('trigger_break_up', pd.Series(False, index=work.index)).fillna(False),
-    }
-    for name, mask in trigger_defs.items():
-        g = dedup_events(work[mask.fillna(False)].copy(), EVENT_DEDUP_BARS)
-        if len(g) < 10:
-            continue
-        row = {'trigger_group': name, 'event_n': len(g)}
-        row.update(summarize_events(g, [5, 10, 20, 40]))
-        row = _append_big_move_metrics(row, g)
-        trigger_rows.append(row)
-    trigger_df = pd.DataFrame(trigger_rows).sort_values('rr_20', ascending=False) if trigger_rows else pd.DataFrame()
+    trig_rows = []
+    if len(base_stage):
+        trigger_variants = {
+            "T0_no_trigger": (base_stage["trigger_slope_up"] == 0) & (base_stage["trigger_break_up"] == 0),
+            "T1_slope_up": (base_stage["trigger_slope_up"] == 1),
+            "T2_above_rope": (base_stage["trigger_above_rope"] == 1),
+            "T3_break_up": (base_stage["trigger_break_up"] == 1),
+            "T4_break_up_strong": (base_stage["trigger_break_up_strong"] == 1),
+            "T5_break_up_depart": (base_stage["trigger_break_up"] == 1) & (base_stage["trigger_depart_from_rope"] == 1),
+            "T6_dual_confirm": (base_stage["trigger_dual_confirm"] == 1),
+        }
+        for name, mask in trigger_variants.items():
+            g = base_stage[mask.fillna(False)]
+            if len(g) < 20:
+                continue
+            row = {"trigger": name, "event_n": len(g)}
+            row.update({k if k != "n" else "event_n": v for k, v in summarize_events_plus(g, [20, 40]).items() if k != "n"})
+            trig_rows.append(row)
+    trigger_df = pd.DataFrame(trig_rows)
     if not trigger_df.empty:
-        print('\n[触发对比]')
-        print(trigger_df[['trigger_group', 'event_n', 'ret_20', 'mae_20', 'wr_20', 'rr_20', 'hit20_10', 'hit20_15', 'hit40_20']].to_string(index=False))
+        trigger_df = trigger_df.sort_values(["hit40_20", "rr_20"], ascending=False)
+        print("\n[trigger compare]")
+        print(trigger_df.to_string(index=False))
         trigger_df.to_csv(f"{OUT_DIR}/18_rope_coil_trigger_compare.csv", index=False)
-    return summary
+
+    return {"summary": summary, "events": events_df, "stage": stage_df, "trigger": trigger_df}
 
 
 # =========================
