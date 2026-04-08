@@ -200,19 +200,52 @@ def cache_exists(cache_path: str) -> bool:
 
 
 def save_cache(data: Dict, cache_path: str) -> None:
-    """保存数据到缓存文件"""
+    """保存数据到缓存文件（使用parquet格式，更稳定）"""
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    with open(cache_path, 'wb') as f:
-        import pickle
-        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # 将DataFrame列表转换为可序列化格式
+    all_dfs = data.get("all_dfs", [])
+    metadata = data.get("metadata", {})
+
+    # 保存为parquet格式
+    parquet_path = cache_path.replace('.pkl', '.parquet')
+    if all_dfs:
+        combined_df = pd.concat(all_dfs, ignore_index=True)
+        combined_df.to_parquet(parquet_path, index=False, compression='zstd')
+
+    # 保存元数据为json
+    meta_path = cache_path.replace('.pkl', '_meta.json')
+    with open(meta_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
 
 
 def load_cache(cache_path: str) -> Optional[Dict]:
-    """从缓存文件加载数据"""
+    """从缓存文件加载数据（使用parquet格式）"""
     try:
-        with open(cache_path, 'rb') as f:
-            import pickle
-            return pickle.load(f)
+        parquet_path = cache_path.replace('.pkl', '.parquet')
+        meta_path = cache_path.replace('.pkl', '_meta.json')
+
+        if not os.path.exists(parquet_path):
+            return None
+
+        # 加载parquet数据
+        combined_df = pd.read_parquet(parquet_path)
+
+        # 按symbol分组，恢复为DataFrame列表
+        all_dfs = []
+        for symbol in combined_df['symbol'].unique():
+            df = combined_df[combined_df['symbol'] == symbol].copy()
+            df['datetime'] = pd.to_datetime(df['datetime'])
+            df = df.set_index('datetime')
+            all_dfs.append(df)
+
+        # 加载元数据
+        metadata = {}
+        if os.path.exists(meta_path):
+            with open(meta_path, 'r') as f:
+                metadata = json.load(f)
+
+        return {"all_dfs": all_dfs, "metadata": metadata}
     except Exception as exc:
         print(f"  [WARN] 缓存加载失败: {exc}")
         return None
