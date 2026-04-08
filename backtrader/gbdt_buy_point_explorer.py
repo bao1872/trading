@@ -441,19 +441,29 @@ def build_neighbor_events(df: pd.DataFrame, spec: NeighborSpec, cooldown: int = 
     return events
 
 
-def prepare_feature_matrix(events: pd.DataFrame, features: Sequence[str], fill_source: Optional[pd.DataFrame] = None) -> Tuple[pd.DataFrame, List[str]]:
-    cols = [c for c in features if c in events.columns]
-    if not cols:
+def prepare_feature_matrix(events: pd.DataFrame, features: Sequence[str], fill_source: Optional[pd.DataFrame] = None, keep_feature_set: bool = False) -> Tuple[pd.DataFrame, List[str]]:
+    requested = list(dict.fromkeys(features))
+    if not requested:
         return pd.DataFrame(index=events.index), []
-    x = events[cols].copy()
-    for col in cols:
+
+    # 关键修复：测试集必须严格对齐训练集列集合，缺失列也要补出来，不能因为当前子集里没有该列就直接丢掉。
+    x = events.reindex(columns=requested).copy()
+    for col in requested:
         x[col] = safe_numeric(x[col])
-        med = fill_source[col].median() if fill_source is not None and col in fill_source.columns else x[col].median()
+        if fill_source is not None:
+            base = fill_source[col] if col in fill_source.columns else pd.Series(dtype=float)
+            med = safe_numeric(base).median() if len(base) > 0 else np.nan
+        else:
+            med = x[col].median()
         if pd.isna(med):
             med = 0.0
         x[col] = x[col].fillna(med)
+
+    if keep_feature_set:
+        return x[requested], requested
+
     nunique = x.nunique(dropna=False)
-    cols = [c for c in cols if nunique.get(c, 0) > 1]
+    cols = [c for c in requested if nunique.get(c, 0) > 1]
     return x[cols], cols
 
 
@@ -527,8 +537,8 @@ def run_single_model(events: pd.DataFrame, features: Sequence[str], target_col: 
     for fold_name, train_idx, test_idx in folds:
         train_df = events.loc[train_idx].copy()
         test_df = events.loc[test_idx].copy()
-        x_train, used_features = prepare_feature_matrix(train_df, features, fill_source=train_df)
-        x_test, _ = prepare_feature_matrix(test_df, used_features, fill_source=train_df)
+        x_train, used_features = prepare_feature_matrix(train_df, features, fill_source=train_df, keep_feature_set=False)
+        x_test, _ = prepare_feature_matrix(test_df, used_features, fill_source=train_df, keep_feature_set=True)
         if len(used_features) < 3:
             continue
         y_train = train_df[target_col]
