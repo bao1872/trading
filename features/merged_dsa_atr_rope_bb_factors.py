@@ -386,12 +386,122 @@ def compute_dsa(df: pd.DataFrame, cfg: DSAConfig) -> Tuple[pd.DataFrame, List[Di
     if len(cur_points_x) >= 2:
         segments.append({"dir": int(last_dir if last_dir is not None else -1), "x": np.array(cur_points_x), "y": np.array(cur_points_y, dtype=float)})
 
+    # 回看确认标签：
+    # 1) 先完整计算出全样本 DSA_DIR；
+    # 2) 再按连续方向段回看确认该段的最终极值；
+    # 3) 将结果回填到原来的 pivot_labels / last_pivot_type，
+    #    保持 HTML 输出层完全不改。
+    hindsight_labels: List[Dict] = []
+    hindsight_last_pivot_type = np.array([""] * n, dtype=object)
+    runs: List[Tuple[int, int, int]] = []
+    if n > 0:
+        run_start = 0
+        for i in range(1, n):
+            curr_dir = int(dir_out[i]) if np.isfinite(dir_out[i]) else 0
+            prev_dir2 = int(dir_out[i - 1]) if np.isfinite(dir_out[i - 1]) else 0
+            if curr_dir != prev_dir2:
+                if prev_dir2 != 0:
+                    runs.append((run_start, i - 1, prev_dir2))
+                run_start = i
+        tail_dir = int(dir_out[n - 1]) if np.isfinite(dir_out[n - 1]) else 0
+        if tail_dir != 0:
+            runs.append((run_start, n - 1, tail_dir))
+
+    prev_hindsight_high = np.nan
+    prev_hindsight_low = np.nan
+    latest_hindsight_type = ""
+    for st_run, ed_run, run_dir in runs:
+        if st_run > ed_run:
+            continue
+
+        if run_dir > 0:
+            seg = high[st_run:ed_run + 1]
+            if len(seg) == 0 or np.all(~np.isfinite(seg)):
+                continue
+            rel_idx = int(np.nanargmax(seg))
+            pivot_idx = st_run + rel_idx
+            pivot_price = float(high[pivot_idx])
+            txt = ""
+            if np.isfinite(prev_hindsight_high):
+                txt = "HH" if pivot_price > prev_hindsight_high else "LH"
+            prev_hindsight_high = pivot_price
+        else:
+            seg = low[st_run:ed_run + 1]
+            if len(seg) == 0 or np.all(~np.isfinite(seg)):
+                continue
+            rel_idx = int(np.nanargmin(seg))
+            pivot_idx = st_run + rel_idx
+            pivot_price = float(low[pivot_idx])
+            txt = ""
+            if np.isfinite(prev_hindsight_low):
+                txt = "HL" if pivot_price > prev_hindsight_low else "LL"
+            prev_hindsight_low = pivot_price
+
+        if txt:
+            hindsight_labels.append({
+                "t": int(pivot_idx),
+                "x": d.index[pivot_idx],
+                "y": pivot_price,
+                "text": txt,
+                "dir": int(run_dir),
+            })
+            latest_hindsight_type = txt
+
+        if latest_hindsight_type:
+            hindsight_last_pivot_type[st_run:ed_run + 1] = latest_hindsight_type
+
+    # 关键：回填到原来的变量名，保持 build_figure() 完全不需要改。
+    pivot_labels = hindsight_labels
+    last_pivot_type = hindsight_last_pivot_type
+
+    # 使用回看确认的枢轴点重新计算 dsa_pivot_high/low 和 dsa_pivot_pos_01
+    # 删除 50 日窗口限制，使用已确认的 HH/HL/LH/LL
+    hindsight_high_arr = np.full(n, np.nan)
+    hindsight_low_arr = np.full(n, np.nan)
+    hindsight_pos_arr = np.full(n, np.nan)
+
+    # 从 hindsight_labels 中提取已确认的高点和低点
+    confirmed_highs: List[Tuple[int, float]] = []  # (index, price)
+    confirmed_lows: List[Tuple[int, float]] = []   # (index, price)
+
+    for label in hindsight_labels:
+        if label["text"] in {"HH", "LH"}:
+            confirmed_highs.append((label["t"], label["y"]))
+        elif label["text"] in {"HL", "LL"}:
+            confirmed_lows.append((label["t"], label["y"]))
+
+    # 对每个时间点，找到最近的已确认高点和低点
+    for t in range(n):
+        # 找到最近的已确认高点（在当前或之前）
+        recent_high = np.nan
+        for idx, price in reversed(confirmed_highs):
+            if idx <= t:
+                recent_high = price
+                break
+
+        # 找到最近的已确认低点（在当前或之前）
+        recent_low = np.nan
+        for idx, price in reversed(confirmed_lows):
+            if idx <= t:
+                recent_low = price
+                break
+
+        hindsight_high_arr[t] = recent_high
+        hindsight_low_arr[t] = recent_low
+
+        # 重新计算位置因子
+        if np.isfinite(recent_high) and np.isfinite(recent_low):
+            lo = min(recent_low, recent_high)
+            hi = max(recent_low, recent_high)
+            if hi > lo:
+                hindsight_pos_arr[t] = np.clip((close[t] - lo) / (hi - lo), 0.0, 1.0)
+
     out = pd.DataFrame(index=df.index)
     out["DSA_VWAP"] = vwap_out
     out["DSA_DIR"] = dir_out
-    out["dsa_pivot_high"] = dsa_pivot_high
-    out["dsa_pivot_low"] = dsa_pivot_low
-    out["dsa_pivot_pos_01"] = dsa_pivot_pos
+    out["dsa_pivot_high"] = hindsight_high_arr  # 使用回看确认的高点
+    out["dsa_pivot_low"] = hindsight_low_arr    # 使用回看确认的低点
+    out["dsa_pivot_pos_01"] = hindsight_pos_arr  # 使用回看确认的位置因子
     out["signed_vwap_dev_pct"] = signed_vwap_dev_pct
     out["bull_vwap_dev_pct"] = bull_vwap_dev_pct
     out["bear_vwap_dev_pct"] = bear_vwap_dev_pct
