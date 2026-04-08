@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-基于 GBDT 结果反推规则的买点实验脚本（在 gbdt_buy_point_explorer.py 基础上扩展）
+基于 GBDT 结果反推“压缩低位启动”规则的实验脚本（在 gbdt_buy_point_explorer.py 基础上扩展）
 
 Purpose
 - 保留原有框架：数据加载 → 因子计算 → forward returns → 候选事件池 → 报表输出
 - 新增复合特征：结构位置 / 方向一致性 / 趋势分 / 量能分 / 宽度分
-- 新增规则反推实验：围绕“低位 + 一致性 + 宽度/趋势/量能过滤”做参数扫描
+- 新增规则反推实验：围绕“压缩中的低位启动 + 周线不过弱”做参数扫描与切片验证
 - 让更多可能影响因素先进入实验，再根据结果删除
 
 How to Run
-    python gbdt_rule_reverse_explorer.py --n-stocks 200 --bars 1000 --freq d
+    python compression_launch_rule_explorer.py --n-stocks 200 --bars 1000 --freq d
 
 Outputs
 - 00_dataset_summary.csv
@@ -66,7 +66,7 @@ except Exception:
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-OUT_DIR = "gbdt_rule_reverse_explorer_output"
+OUT_DIR = "compression_launch_rule_explorer_output"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 RET_WINDOWS = [5, 10, 20, 40, 60]
@@ -640,125 +640,265 @@ def build_parameter_hints(events: pd.DataFrame, trade_imp: pd.DataFrame, researc
     return rdf
 
 
-def build_rule_reverse_scan(events: pd.DataFrame, top_k_export: int = 200) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def build_compression_launch_scan(events: pd.DataFrame, top_k_export: int = 200) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    围绕本轮 GBDT 提示的主线做规则扫描：
+    - 低位，但不是绝对底部
+    - BB 压缩
+    - Rope/结构位置仍处在早中段
+    - 周线不能太弱
+    - 可选用 breakout / expand / range 宽度做二级过滤
+    """
     if events.empty:
         return pd.DataFrame(), pd.DataFrame()
+
     rows: List[Dict[str, object]] = []
     top_event_rows: List[pd.DataFrame] = []
-    pos_grid = [0.25, 0.30, 0.35, 0.40, 0.45]
-    dir_grid = [2.0, 3.0, 4.0]
-    width_grid = [None, 0.45, 0.55, 0.65]
-    trend_grid = [None, 0.45, 0.55, 0.65]
-    vol_grid = [None, 0.45, 0.55, 0.65]
-    range_atr_grid = [None, 1.5, 2.0, 2.5, 3.0]
-    breakout_modes = ["none", "breakout_or_expand", "breakout_only"]
-    rope_modes = ["none", "near_or_up", "strict_near_up"]
-    weekly_modes = ["none", "weekly_not_bad"]
 
-    for pos_max, dir_min, width_min, trend_min, vol_min, range_atr_max, breakout_mode, rope_mode, weekly_mode in product(
-        pos_grid, dir_grid, width_grid, trend_grid, vol_grid, range_atr_grid, breakout_modes, rope_modes, weekly_modes
+    # 主轴参数：优先围绕 GBDT 的 parameter hints 附近做扫描
+    dsa_grid = [0.30, 0.35, 0.40, 0.45]
+    bb_width_norm_grid = [0.10, 0.12, 0.14, 0.16, 0.18]
+    bb_pos_low_grid = [0.45, 0.50, 0.55, 0.58]
+    bb_pos_high_grid = [0.72, 0.78, 0.84, 0.90]
+    rope_pivot_grid = [0.60, 0.70, 0.80, 0.90]
+    weekly_dev_min_grid = [-1.0, -0.75, -0.50, -0.25]
+    range_width_min_grid = [None, 1.5, 2.0, 2.5]
+    breakout_modes = ["none", "expand_or_break", "break_only"]
+    weekly_modes = ["soft", "strict"]
+    ranking_modes = ["plain", "with_quality"]
+
+    for dsa_max, bbw_max, bb_low, bb_high, rope_pivot_max, weekly_dev_min, range_width_min, breakout_mode, weekly_mode, ranking_mode in product(
+        dsa_grid, bb_width_norm_grid, bb_pos_low_grid, bb_pos_high_grid, rope_pivot_grid, weekly_dev_min_grid, range_width_min_grid, breakout_modes, weekly_modes, ranking_modes
     ):
-        sub = events.copy()
-        sub = sub[safe_numeric(sub.get("position_in_structure", pd.Series(index=sub.index))) <= pos_max]
-        sub = sub[safe_numeric(sub.get("dir_consistent", pd.Series(index=sub.index))).fillna(-1) >= dir_min]
-        if width_min is not None and "score_width_total" in sub.columns:
-            sub = sub[safe_numeric(sub["score_width_total"]) >= width_min]
-        if trend_min is not None and "score_trend_total" in sub.columns:
-            sub = sub[safe_numeric(sub["score_trend_total"]) >= trend_min]
-        if vol_min is not None and "score_volume_total" in sub.columns:
-            sub = sub[safe_numeric(sub["score_volume_total"]) >= vol_min]
-        if range_atr_max is not None and "range_width_atr" in sub.columns:
-            sub = sub[safe_numeric(sub["range_width_atr"]) <= range_atr_max]
-        if breakout_mode == "breakout_or_expand":
-            sub = sub[(safe_numeric(sub.get("range_break_up", pd.Series(index=sub.index))).fillna(0) > 0) |
-                      (safe_numeric(sub.get("bb_expanding", pd.Series(index=sub.index))).fillna(0) > 0) |
-                      (safe_numeric(sub.get("dsa_trade_breakout_20", pd.Series(index=sub.index))).fillna(0) > 0)]
-        elif breakout_mode == "breakout_only":
-            sub = sub[(safe_numeric(sub.get("range_break_up", pd.Series(index=sub.index))).fillna(0) > 0) |
-                      (safe_numeric(sub.get("dsa_trade_breakout_20", pd.Series(index=sub.index))).fillna(0) > 0)]
-        if rope_mode == "near_or_up":
-            sub = sub[(safe_numeric(sub.get("rope_dir", pd.Series(index=sub.index))).fillna(0) == 1) |
-                      (safe_numeric(sub.get("dist_to_rope_atr", pd.Series(index=sub.index))).abs() <= 0.5)]
-        elif rope_mode == "strict_near_up":
-            sub = sub[(safe_numeric(sub.get("rope_dir", pd.Series(index=sub.index))).fillna(0) == 1) &
-                      (safe_numeric(sub.get("dist_to_rope_atr", pd.Series(index=sub.index))).between(-1.0, 0.2, inclusive="both")) &
-                      (safe_numeric(sub.get("rope_slope_atr_5", pd.Series(index=sub.index))).fillna(-99) > 0)]
-        if weekly_mode == "weekly_not_bad":
-            sub = sub[(safe_numeric(sub.get("w_DSA_DIR", pd.Series(index=sub.index))).fillna(0) >= 0) |
-                      (safe_numeric(sub.get("w_dsa_trade_pos_01", pd.Series(index=sub.index))).fillna(1) <= 0.55)]
-        if len(sub) < 25:
+        if bb_high <= bb_low:
             continue
-        metrics = summarize_events(sub, [10, 20, 40, 60])
-        rows.append({
-            "position_in_structure_max": pos_max,
-            "dir_consistent_min": dir_min,
-            "score_width_total_min": width_min,
-            "score_trend_total_min": trend_min,
-            "score_volume_total_min": vol_min,
-            "range_width_atr_max": range_atr_max,
-            "breakout_mode": breakout_mode,
-            "rope_mode": rope_mode,
-            "weekly_mode": weekly_mode,
-            **metrics,
-        })
-    scan_df = pd.DataFrame(rows)
-    if scan_df.empty:
-        return scan_df, pd.DataFrame()
-    scan_df["rank_score"] = (
-        scan_df["rr_20"].fillna(-999) * 0.45 +
-        scan_df["ret_20"].fillna(-999) * 8.0 +
-        scan_df["wr_20"].fillna(-999) * 0.25 +
-        scan_df["rr_40"].fillna(-999) * 0.20 +
-        np.log1p(scan_df["n"].clip(lower=1)) * 0.08
-    )
-    scan_df = scan_df.sort_values(["rank_score", "n"], ascending=[False, False]).reset_index(drop=True)
-    scan_df.to_csv(f"{OUT_DIR}/09_rule_reverse_scan.csv", index=False)
-
-    for rank, row in scan_df.head(min(20, len(scan_df))).iterrows():
         sub = events.copy()
-        sub = sub[safe_numeric(sub.get("position_in_structure", pd.Series(index=sub.index))) <= row["position_in_structure_max"]]
-        sub = sub[safe_numeric(sub.get("dir_consistent", pd.Series(index=sub.index))).fillna(-1) >= row["dir_consistent_min"]]
-        if pd.notna(row["score_width_total_min"]):
-            sub = sub[safe_numeric(sub.get("score_width_total", pd.Series(index=sub.index))) >= row["score_width_total_min"]]
-        if pd.notna(row["score_trend_total_min"]):
-            sub = sub[safe_numeric(sub.get("score_trend_total", pd.Series(index=sub.index))) >= row["score_trend_total_min"]]
-        if pd.notna(row["score_volume_total_min"]):
-            sub = sub[safe_numeric(sub.get("score_volume_total", pd.Series(index=sub.index))) >= row["score_volume_total_min"]]
-        if pd.notna(row["range_width_atr_max"]):
-            sub = sub[safe_numeric(sub.get("range_width_atr", pd.Series(index=sub.index))) <= row["range_width_atr_max"]]
-        if row["breakout_mode"] == "breakout_or_expand":
-            sub = sub[(safe_numeric(sub.get("range_break_up", pd.Series(index=sub.index))).fillna(0) > 0) |
-                      (safe_numeric(sub.get("bb_expanding", pd.Series(index=sub.index))).fillna(0) > 0) |
-                      (safe_numeric(sub.get("dsa_trade_breakout_20", pd.Series(index=sub.index))).fillna(0) > 0)]
-        elif row["breakout_mode"] == "breakout_only":
-            sub = sub[(safe_numeric(sub.get("range_break_up", pd.Series(index=sub.index))).fillna(0) > 0) |
-                      (safe_numeric(sub.get("dsa_trade_breakout_20", pd.Series(index=sub.index))).fillna(0) > 0)]
-        if row["rope_mode"] == "near_or_up":
-            sub = sub[(safe_numeric(sub.get("rope_dir", pd.Series(index=sub.index))).fillna(0) == 1) |
-                      (safe_numeric(sub.get("dist_to_rope_atr", pd.Series(index=sub.index))).abs() <= 0.5)]
-        elif row["rope_mode"] == "strict_near_up":
-            sub = sub[(safe_numeric(sub.get("rope_dir", pd.Series(index=sub.index))).fillna(0) == 1) &
-                      (safe_numeric(sub.get("dist_to_rope_atr", pd.Series(index=sub.index))).between(-1.0, 0.2, inclusive="both")) &
-                      (safe_numeric(sub.get("rope_slope_atr_5", pd.Series(index=sub.index))).fillna(-99) > 0)]
-        if row["weekly_mode"] == "weekly_not_bad":
-            sub = sub[(safe_numeric(sub.get("w_DSA_DIR", pd.Series(index=sub.index))).fillna(0) >= 0) |
-                      (safe_numeric(sub.get("w_dsa_trade_pos_01", pd.Series(index=sub.index))).fillna(1) <= 0.55)]
+        # 低位结构（trade-safe）
+        if "dsa_trade_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]) <= dsa_max]
+        # BB 局部压缩
+        if "bb_width_norm" in sub.columns:
+            sub = sub[safe_numeric(sub["bb_width_norm"]) <= bbw_max]
+        # BB 中段启动，而不是绝对底/顶
+        if "bb_pos_01" in sub.columns:
+            bbpos = safe_numeric(sub["bb_pos_01"])
+            sub = sub[bbpos.between(bb_low, bb_high, inclusive="both")]
+        # Rope 结构位置仍早中段
+        if "rope_pivot_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["rope_pivot_pos_01"]) <= rope_pivot_max]
+
+        # 周线过滤：软版允许 trade-safe 代理，严版要求 confirmed 周偏离不过弱
+        if weekly_mode == "soft":
+            cond = pd.Series(True, index=sub.index)
+            if "w_dsa_signed_vwap_dev_pct" in sub.columns:
+                cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= weekly_dev_min
+            if "w_factor_available" in sub.columns:
+                cond &= safe_numeric(sub["w_factor_available"]).fillna(0) > 0
+            sub = sub[cond]
+        else:
+            cond = pd.Series(True, index=sub.index)
+            if "w_dsa_signed_vwap_dev_pct" in sub.columns:
+                cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= weekly_dev_min
+            if "w_dsa_trade_pos_01" in sub.columns:
+                cond &= safe_numeric(sub["w_dsa_trade_pos_01"]).fillna(1) <= 0.70
+            if "w_DSA_DIR" in sub.columns:
+                cond &= safe_numeric(sub["w_DSA_DIR"]).fillna(-1) >= 0
+            sub = sub[cond]
+
+        # 整体结构仍有展开空间，不要太死窄
+        if range_width_min is not None and "range_width_atr" in sub.columns:
+            sub = sub[safe_numeric(sub["range_width_atr"]) >= range_width_min]
+
+        # 启动确认
+        if breakout_mode == "expand_or_break":
+            cond = pd.Series(False, index=sub.index)
+            for col in ["bb_expanding", "range_break_up", "dsa_trade_breakout_20"]:
+                if col in sub.columns:
+                    cond |= safe_numeric(sub[col]).fillna(0) > 0
+            sub = sub[cond]
+        elif breakout_mode == "break_only":
+            cond = pd.Series(False, index=sub.index)
+            for col in ["range_break_up", "dsa_trade_breakout_20"]:
+                if col in sub.columns:
+                    cond |= safe_numeric(sub[col]).fillna(0) > 0
+            sub = sub[cond]
+
+        # 仍保留“不要太晚”约束，但不再把 rope 当主角
+        if "bars_since_dir_change" in sub.columns:
+            sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= 12]
+
+        sub = dedup_events(sub)
+        if len(sub) < 20:
+            continue
+
+        stat = summarize_events(sub, [20, 60])
+        quality = 0.0
+        if ranking_mode == "with_quality":
+            pieces = []
+            for c, reverse in [("score_width_total", False), ("score_trend_total", False), ("score_volume_total", False), ("score_setup_total", False)]:
+                if c in sub.columns:
+                    pieces.append(float(safe_numeric(sub[c]).mean()))
+            quality = float(np.nanmean(pieces)) if pieces else 0.0
+        rank_score = (
+            100 * (stat.get("rr_20") or 0)
+            + 12 * (stat.get("ret_20") or 0)
+            + 4 * (stat.get("wr_20") or 0)
+            + 10 * (stat.get("rr_60") or 0)
+            + 3 * quality
+            + min(len(sub), 120) / 12
+        )
+        rows.append({
+            "dsa_trade_pos_max": dsa_max,
+            "bb_width_norm_max": bbw_max,
+            "bb_pos_low": bb_low,
+            "bb_pos_high": bb_high,
+            "rope_pivot_pos_max": rope_pivot_max,
+            "w_dsa_signed_vwap_dev_min": weekly_dev_min,
+            "range_width_atr_min": range_width_min,
+            "breakout_mode": breakout_mode,
+            "weekly_mode": weekly_mode,
+            "ranking_mode": ranking_mode,
+            **stat,
+            "quality_score": round(float(quality), 4),
+            "rank_score": round(float(rank_score), 3),
+        })
+
+    scan_df = pd.DataFrame(rows).sort_values(["rank_score", "rr_20", "ret_20", "n"], ascending=[False, False, False, False]).reset_index(drop=True) if rows else pd.DataFrame()
+    if not scan_df.empty:
+        scan_df.to_csv(f"{OUT_DIR}/09_compression_launch_scan.csv", index=False)
+
+    for rank, row in scan_df.head(20).iterrows() if not scan_df.empty else []:
+        sub = events.copy()
+        if "dsa_trade_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]) <= row["dsa_trade_pos_max"]]
+        if "bb_width_norm" in sub.columns:
+            sub = sub[safe_numeric(sub["bb_width_norm"]) <= row["bb_width_norm_max"]]
+        if "bb_pos_01" in sub.columns:
+            bbpos = safe_numeric(sub["bb_pos_01"])
+            sub = sub[bbpos.between(row["bb_pos_low"], row["bb_pos_high"], inclusive="both")]
+        if "rope_pivot_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["rope_pivot_pos_01"]) <= row["rope_pivot_pos_max"]]
+        if row["weekly_mode"] == "soft":
+            cond = pd.Series(True, index=sub.index)
+            if "w_dsa_signed_vwap_dev_pct" in sub.columns:
+                cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= row["w_dsa_signed_vwap_dev_min"]
+            if "w_factor_available" in sub.columns:
+                cond &= safe_numeric(sub["w_factor_available"]).fillna(0) > 0
+            sub = sub[cond]
+        else:
+            cond = pd.Series(True, index=sub.index)
+            if "w_dsa_signed_vwap_dev_pct" in sub.columns:
+                cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= row["w_dsa_signed_vwap_dev_min"]
+            if "w_dsa_trade_pos_01" in sub.columns:
+                cond &= safe_numeric(sub["w_dsa_trade_pos_01"]).fillna(1) <= 0.70
+            if "w_DSA_DIR" in sub.columns:
+                cond &= safe_numeric(sub["w_DSA_DIR"]).fillna(-1) >= 0
+            sub = sub[cond]
+        if pd.notna(row["range_width_atr_min"]) and "range_width_atr" in sub.columns:
+            sub = sub[safe_numeric(sub["range_width_atr"]) >= row["range_width_atr_min"]]
+        if row["breakout_mode"] == "expand_or_break":
+            cond = pd.Series(False, index=sub.index)
+            for col in ["bb_expanding", "range_break_up", "dsa_trade_breakout_20"]:
+                if col in sub.columns:
+                    cond |= safe_numeric(sub[col]).fillna(0) > 0
+            sub = sub[cond]
+        elif row["breakout_mode"] == "break_only":
+            cond = pd.Series(False, index=sub.index)
+            for col in ["range_break_up", "dsa_trade_breakout_20"]:
+                if col in sub.columns:
+                    cond |= safe_numeric(sub[col]).fillna(0) > 0
+            sub = sub[cond]
+        if "bars_since_dir_change" in sub.columns:
+            sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= 12]
+        sub = dedup_events(sub)
         if sub.empty:
             continue
         keep_cols = [c for c in [
-            "symbol", "datetime", "close", "ret_20", "max_dd_20", "rr_20",
-            "position_in_structure", "dir_consistent", "score_width_total", "score_trend_total", "score_volume_total",
-            "range_width_atr", "dist_to_rope_atr", "rope_dir", "rope_slope_atr_5", "bb_width_percentile",
-            "bars_since_dir_change", "prev_confirmed_down_bars", "current_run_bars"
+            "symbol", "datetime", "close", "ret_20", "max_dd_20", "rr_20", "ret_60", "max_dd_60", "rr_60",
+            "dsa_trade_pos_01", "bb_width_norm", "bb_pos_01", "rope_pivot_pos_01", "w_dsa_signed_vwap_dev_pct",
+            "range_width_atr", "bb_expanding", "range_break_up", "dsa_trade_breakout_20",
+            "score_width_total", "score_trend_total", "score_volume_total", "score_setup_total",
         ] if c in sub.columns]
         tmp = sub[keep_cols].copy()
         tmp["rule_rank"] = rank + 1
         top_event_rows.append(tmp)
+
     top_df = pd.concat(top_event_rows, ignore_index=True).head(top_k_export) if top_event_rows else pd.DataFrame()
     if not top_df.empty:
-        top_df.to_csv(f"{OUT_DIR}/09b_rule_reverse_top_events.csv", index=False)
+        top_df.to_csv(f"{OUT_DIR}/09b_compression_launch_top_events.csv", index=False)
     return scan_df, top_df
 
+
+def build_stability_slices(events: pd.DataFrame, scan_df: pd.DataFrame) -> pd.DataFrame:
+    if events.empty or scan_df.empty:
+        return pd.DataFrame()
+    top = scan_df.head(6)
+    rows: List[Dict[str, object]] = []
+    work = events.copy()
+    # 粗略市值代理：用 close*vol 做成交额分层，环境代理：按全样本 ret_20 中位数分组
+    work["turnover_proxy"] = safe_numeric(work.get("close", pd.Series(index=work.index))) * safe_numeric(work.get("vol", pd.Series(index=work.index)))
+    if "datetime" in work.columns:
+        work["year"] = pd.to_datetime(work["datetime"]).dt.year
+    else:
+        work["year"] = np.nan
+    if work["turnover_proxy"].notna().sum() >= 30:
+        try:
+            work["liquidity_bucket"] = pd.qcut(work["turnover_proxy"], q=3, labels=["small", "mid", "large"], duplicates="drop")
+        except Exception:
+            work["liquidity_bucket"] = "all"
+    else:
+        work["liquidity_bucket"] = "all"
+    if "ret_20" in work.columns and work["ret_20"].notna().sum() >= 30:
+        med = float(work["ret_20"].median())
+        work["env_bucket"] = np.where(work["ret_20"] >= med, "better", "worse")
+    else:
+        work["env_bucket"] = "all"
+
+    for rank, row in top.iterrows():
+        sub = work.copy()
+        if "dsa_trade_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]) <= row["dsa_trade_pos_max"]]
+        if "bb_width_norm" in sub.columns:
+            sub = sub[safe_numeric(sub["bb_width_norm"]) <= row["bb_width_norm_max"]]
+        if "bb_pos_01" in sub.columns:
+            bbpos = safe_numeric(sub["bb_pos_01"])
+            sub = sub[bbpos.between(row["bb_pos_low"], row["bb_pos_high"], inclusive="both")]
+        if "rope_pivot_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["rope_pivot_pos_01"]) <= row["rope_pivot_pos_max"]]
+        if "w_dsa_signed_vwap_dev_pct" in sub.columns:
+            sub = sub[safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= row["w_dsa_signed_vwap_dev_min"]]
+        if pd.notna(row["range_width_atr_min"]) and "range_width_atr" in sub.columns:
+            sub = sub[safe_numeric(sub["range_width_atr"]) >= row["range_width_atr_min"]]
+        if row["breakout_mode"] == "expand_or_break":
+            cond = pd.Series(False, index=sub.index)
+            for col in ["bb_expanding", "range_break_up", "dsa_trade_breakout_20"]:
+                if col in sub.columns:
+                    cond |= safe_numeric(sub[col]).fillna(0) > 0
+            sub = sub[cond]
+        elif row["breakout_mode"] == "break_only":
+            cond = pd.Series(False, index=sub.index)
+            for col in ["range_break_up", "dsa_trade_breakout_20"]:
+                if col in sub.columns:
+                    cond |= safe_numeric(sub[col]).fillna(0) > 0
+            sub = sub[cond]
+        sub = dedup_events(sub)
+        if len(sub) < 12:
+            continue
+        for dim in ["year", "liquidity_bucket", "env_bucket"]:
+            for key, g in sub.groupby(dim, dropna=False):
+                if len(g) < 8:
+                    continue
+                stat = summarize_events(g, [20, 60])
+                rows.append({
+                    "rule_rank": rank + 1,
+                    "slice_dim": dim,
+                    "slice_key": str(key),
+                    **stat,
+                })
+    rdf = pd.DataFrame(rows)
+    if not rdf.empty:
+        rdf.to_csv(f"{OUT_DIR}/10_rule_stability_slices.csv", index=False)
+    return rdf
 
 def analyze_00_dataset_summary(df: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     rows = [{"section": "global", "sample_n": int(len(df)), "stock_n": int(df["symbol"].nunique()), "ret20_mean": round(float(df["ret_20"].mean()), 5), "dd20_mean": round(float(df["max_dd_20"].mean()), 5), "wr20_mean": round(float(df["win_20"].mean()), 4), "rr20_mean": round(rr_from_ret_dd(df["ret_20"].mean(), df["max_dd_20"].mean()), 3)}]
@@ -879,12 +1019,13 @@ def main() -> None:
             print("\n[trade-safe 回归重要性 Top10]")
             print(trade_reg_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
 
-    scan_df, _ = build_rule_reverse_scan(events)
+    scan_df, _ = build_compression_launch_scan(events)
+    build_stability_slices(events, scan_df)
     if not scan_df.empty:
-        print("\n[规则反推 Top10]")
+        print("\n[压缩低位启动规则 Top10]")
         print(scan_df[[
-            "position_in_structure_max", "dir_consistent_min", "score_width_total_min", "score_trend_total_min", "score_volume_total_min",
-            "range_width_atr_max", "breakout_mode", "rope_mode", "weekly_mode", "n", "ret_20", "wr_20", "rr_20", "rank_score"
+            "dsa_trade_pos_max", "bb_width_norm_max", "bb_pos_low", "bb_pos_high", "rope_pivot_pos_max",
+            "w_dsa_signed_vwap_dev_min", "range_width_atr_min", "breakout_mode", "weekly_mode", "n", "ret_20", "wr_20", "rr_20", "rank_score"
         ]].head(10).to_string(index=False))
 
     print(f"\n{'=' * 70}")
