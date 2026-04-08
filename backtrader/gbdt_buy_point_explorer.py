@@ -1,48 +1,31 @@
 # -*- coding: utf-8 -*-
 """
-基于 GBDT 的买点归因研究脚本（沿用 buy_point_explorer.py 框架）
+基于 GBDT 结果反推规则的买点实验脚本（在 gbdt_buy_point_explorer.py 基础上扩展）
 
 Purpose
-- 沿用 buy_point_explorer.py 的数据加载、因子计算、forward return 标签计算框架
-- 聚焦 C_long_down_repair 邻域样本，做 GBDT 归因与参数区间建议
-- 分离 trade-safe 与 research 两套特征，避免 hindsight 因子污染交易结论
-- 输出时间滚动验证结果、特征重要性、分桶画像、参数提示表
-
-Research Scope
-- 主样本池：C_long_down_repair 的“宽口径邻域样本”
-- 模型：
-    * GradientBoostingRegressor 预测 ret_20
-    * GradientBoostingClassifier 预测 good20
-- 结果用途：
-    * 归因（哪些因子真正有边际解释力）
-    * 提示参数区间（不是直接生成最终交易规则）
+- 保留原有框架：数据加载 → 因子计算 → forward returns → 候选事件池 → 报表输出
+- 新增复合特征：结构位置 / 方向一致性 / 趋势分 / 量能分 / 宽度分
+- 新增规则反推实验：围绕“低位 + 一致性 + 宽度/趋势/量能过滤”做参数扫描
+- 让更多可能影响因素先进入实验，再根据结果删除
 
 How to Run
-    python gbdt_buy_point_explorer.py --n-stocks 100 --bars 800 --freq d
-
-    python gbdt_buy_point_explorer.py --n-stocks 500 --bars 1000 --freq d \
-        --sample-mode c_neighbor --neighbor-dsa-max 0.45 --neighbor-prev-down-min 8
-
-Examples
-    python gbdt_buy_point_explorer.py --analysis-mode full
-    python gbdt_buy_point_explorer.py --analysis-mode model_only --n-stocks 300 --bars 1000
+    python gbdt_rule_reverse_explorer.py --n-stocks 200 --bars 1000 --freq d
 
 Outputs
-- 00_dataset_summary.csv           数据集摘要
-- 01_feature_inventory.csv         因子覆盖率与特征分层
-- 02_candidate_events.csv          C 邻域事件样本表
-- 03_trade_reg_importance.csv      trade-safe 回归重要性
-- 03b_trade_clf_importance.csv     trade-safe 分类重要性
-- 04_research_reg_importance.csv   research 回归重要性
-- 04b_research_clf_importance.csv  research 分类重要性
-- 05_fold_metrics.csv              时间滚动验证结果
-- 06_trade_bucket_profiles.csv     trade-safe 关键变量分桶画像
-- 06b_research_bucket_profiles.csv research 关键变量分桶画像
-- 07_parameter_hints.csv           参数提示表（候选阈值区间）
-
-Side Effects
-- 读取数据库 stock_k_data / stock_pools
-- 在 gbdt_buy_point_explorer_output/ 目录写入 CSV 文件
+- 00_dataset_summary.csv
+- 01_feature_inventory.csv
+- 02_candidate_events.csv
+- 03_trade_reg_importance.csv
+- 03b_trade_clf_importance.csv
+- 04_research_reg_importance.csv
+- 04b_research_clf_importance.csv
+- 05_fold_metrics.csv
+- 06_trade_bucket_profiles.csv
+- 06b_research_bucket_profiles.csv
+- 07_parameter_hints.csv
+- 08_composite_feature_profiles.csv
+- 09_rule_reverse_scan.csv
+- 09b_rule_reverse_top_events.csv
 """
 from __future__ import annotations
 
@@ -51,6 +34,7 @@ import os
 import sys
 import warnings
 from dataclasses import dataclass
+from itertools import product
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -72,7 +56,7 @@ try:
         compute_dsa,
     )
 except Exception:
-    from merged_dsa_atr_rope_bb_factors_with_confirmed_run_bars import (
+    from merged_dsa_atr_rope_bb_factors import (
         DSAConfig,
         RopeConfig,
         compute_atr_rope,
@@ -82,7 +66,7 @@ except Exception:
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-OUT_DIR = "gbdt_buy_point_explorer_output"
+OUT_DIR = "gbdt_rule_reverse_explorer_output"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 RET_WINDOWS = [5, 10, 20, 40, 60]
@@ -90,9 +74,6 @@ EVENT_DEDUP_BARS = 20
 RANDOM_STATE = 42
 
 
-# =========================
-# Common helpers
-# =========================
 def rr_from_ret_dd(ret: float, dd: float) -> float:
     if pd.isna(ret) or pd.isna(dd) or dd == 0:
         return np.nan
@@ -101,6 +82,20 @@ def rr_from_ret_dd(ret: float, dd: float) -> float:
 
 def safe_numeric(s: pd.Series) -> pd.Series:
     return pd.to_numeric(s, errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+
+def normalize_01(s: pd.Series, reverse: bool = False, q: Tuple[float, float] = (0.05, 0.95)) -> pd.Series:
+    x = safe_numeric(s).copy()
+    lo = x.quantile(q[0])
+    hi = x.quantile(q[1])
+    if pd.isna(lo) or pd.isna(hi) or hi <= lo:
+        out = pd.Series(0.5, index=x.index, dtype=float)
+    else:
+        x = x.clip(lower=lo, upper=hi)
+        out = (x - lo) / (hi - lo)
+    if reverse:
+        out = 1.0 - out
+    return out.clip(0.0, 1.0)
 
 
 def summarize_events(events: pd.DataFrame, windows: Sequence[int]) -> Dict[str, float]:
@@ -248,10 +243,87 @@ def map_weekly_dsa_trade_to_daily(daily: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def add_micro_features(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.copy()
+    vol = d["vol"].astype(float)
+    close = d["close"].astype(float)
+    d["ret_1"] = close.pct_change(1)
+    d["ret_3"] = close.pct_change(3)
+    d["ret_5"] = close.pct_change(5)
+    d["vol_ma_20"] = vol.rolling(20, min_periods=5).mean()
+    d["vol_ratio_20"] = vol / d["vol_ma_20"].replace(0, np.nan)
+    vol_std = vol.rolling(20, min_periods=10).std().replace(0, np.nan)
+    d["vol_z_20"] = (vol - d["vol_ma_20"]) / vol_std
+    d["close_ma_10"] = close.rolling(10, min_periods=5).mean()
+    d["close_ma_20"] = close.rolling(20, min_periods=10).mean()
+    d["trend_gap_10_20"] = (d["close_ma_10"] - d["close_ma_20"]) / close.replace(0, np.nan)
+    return d
+
+
+def add_composite_features(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    low_pos_parts = [c for c in [
+        "dsa_trade_pos_01", "bb_pos_01", "channel_pos_01", "range_pos_01", "rope_pivot_pos_01", "w_dsa_trade_pos_01"
+    ] if c in out.columns]
+    if low_pos_parts:
+        out["position_in_structure"] = pd.concat([safe_numeric(out[c]) for c in low_pos_parts], axis=1).mean(axis=1)
+    else:
+        out["position_in_structure"] = np.nan
+
+    dir_flags = pd.DataFrame(index=out.index)
+    dir_flags["rope_up"] = (safe_numeric(out.get("rope_dir", pd.Series(index=out.index))) == 1).astype(float)
+    dir_flags["rope_slope_pos"] = (safe_numeric(out.get("rope_slope_atr_5", pd.Series(index=out.index))) > 0).astype(float)
+    dir_flags["recent_turn"] = (safe_numeric(out.get("bars_since_dir_change", pd.Series(index=out.index))).fillna(99) <= 8).astype(float)
+    dir_flags["breakout_or_expand"] = ((safe_numeric(out.get("range_break_up", pd.Series(index=out.index))).fillna(0) > 0) |
+                                        (safe_numeric(out.get("bb_expanding", pd.Series(index=out.index))).fillna(0) > 0) |
+                                        (safe_numeric(out.get("dsa_trade_breakout_20", pd.Series(index=out.index))).fillna(0) > 0)).astype(float)
+    dir_flags["weekly_support"] = ((safe_numeric(out.get("w_DSA_DIR", pd.Series(index=out.index))).fillna(0) >= 0) |
+                                    (safe_numeric(out.get("w_dsa_trade_pos_01", pd.Series(index=out.index))).fillna(1) <= 0.5)).astype(float)
+    out["dir_consistent"] = dir_flags.sum(axis=1)
+
+    trend_parts = pd.DataFrame(index=out.index)
+    trend_parts["rope_slope"] = normalize_01(safe_numeric(out.get("rope_slope_atr_5", pd.Series(index=out.index))), reverse=False)
+    trend_parts["trend_gap"] = normalize_01(safe_numeric(out.get("trend_gap_10_20", pd.Series(index=out.index))), reverse=False)
+    trend_parts["signed_dev"] = normalize_01(safe_numeric(out.get("dsa_signed_vwap_dev_pct", pd.Series(index=out.index))), reverse=False)
+    trend_parts["current_run_early"] = normalize_01(safe_numeric(out.get("current_run_bars", pd.Series(index=out.index))), reverse=True)
+    trend_parts["bars_since_early"] = normalize_01(safe_numeric(out.get("bars_since_dir_change", pd.Series(index=out.index))), reverse=True)
+    out["score_trend_total"] = trend_parts.mean(axis=1)
+
+    volume_parts = pd.DataFrame(index=out.index)
+    volume_parts["vol_ratio"] = normalize_01(safe_numeric(out.get("vol_ratio_20", pd.Series(index=out.index))), reverse=False)
+    volume_parts["vol_z"] = normalize_01(safe_numeric(out.get("vol_z_20", pd.Series(index=out.index))), reverse=False)
+    volume_parts["break_strength"] = normalize_01(safe_numeric(out.get("range_break_up_strength", pd.Series(index=out.index))), reverse=False)
+    out["score_volume_total"] = volume_parts.mean(axis=1)
+
+    width_parts = pd.DataFrame(index=out.index)
+    width_parts["bbw_pct_low"] = normalize_01(safe_numeric(out.get("bb_width_percentile", pd.Series(index=out.index))), reverse=True)
+    width_parts["range_atr_low"] = normalize_01(safe_numeric(out.get("range_width_atr", pd.Series(index=out.index))), reverse=True)
+    width_parts["dsa_width_low"] = normalize_01(safe_numeric(out.get("dsa_trade_range_width_pct", pd.Series(index=out.index))), reverse=True)
+    width_parts["contract"] = normalize_01(safe_numeric(out.get("bb_contract_streak", pd.Series(index=out.index))), reverse=False)
+    out["score_width_total"] = width_parts.mean(axis=1)
+
+    rope_parts = pd.DataFrame(index=out.index)
+    rope_parts["near_rope"] = normalize_01(safe_numeric(out.get("dist_to_rope_atr", pd.Series(index=out.index))).abs(), reverse=True)
+    rope_parts["rope_up"] = dir_flags["rope_up"]
+    rope_parts["rope_slope"] = normalize_01(safe_numeric(out.get("rope_slope_atr_5", pd.Series(index=out.index))), reverse=False)
+    out["score_rope_total"] = rope_parts.mean(axis=1)
+
+    out["score_setup_total"] = pd.concat([
+        safe_numeric(out["position_in_structure"]).pipe(lambda s: 1 - s.clip(0, 1)),
+        normalize_01(out["dir_consistent"], reverse=False),
+        safe_numeric(out["score_trend_total"]),
+        safe_numeric(out["score_volume_total"]),
+        safe_numeric(out["score_width_total"]),
+        safe_numeric(out["score_rope_total"]),
+    ], axis=1).mean(axis=1)
+    return out
+
+
 def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
     if "vol" in d.columns and "volume" not in d.columns:
         d["volume"] = d["vol"]
+    d = add_micro_features(d)
     dsa_df, _, _ = compute_dsa(d, DSAConfig(prd=50, base_apt=20.0))
     dsa_confirmed = dsa_df.rename(columns={
         "dsa_pivot_high": "dsa_confirmed_pivot_high",
@@ -272,6 +344,7 @@ def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
         [d, dsa_confirmed, dsa_trade, rope_df.drop(columns=d.columns, errors="ignore"), bb_df.drop(columns=d.columns, errors="ignore"), weekly_confirmed, weekly_trade],
         axis=1,
     )
+    merged = add_composite_features(merged)
     return merged
 
 
@@ -304,6 +377,8 @@ TRADE_FEATURES = [
     "dsa_trade_breakout_20", "dsa_trade_breakdown_20",
     "w_dsa_trade_pos_01", "w_dsa_trade_dist_to_low_01", "w_dsa_trade_dist_to_high_01", "w_dsa_trade_range_width_pct",
     "w_factor_available", "w_sample_count",
+    "ret_1", "ret_3", "ret_5", "vol_ratio_20", "vol_z_20", "trend_gap_10_20",
+    "position_in_structure", "dir_consistent", "score_trend_total", "score_volume_total", "score_width_total", "score_rope_total", "score_setup_total",
 ]
 
 RESEARCH_FEATURES = [
@@ -314,14 +389,17 @@ RESEARCH_FEATURES = [
 ]
 
 PRIMARY_HINT_FEATURES = [
-    "dsa_trade_pos_01", "dist_to_rope_atr", "bb_width_percentile", "bars_since_dir_change",
-    "prev_confirmed_down_bars", "current_run_bars", "bb_pos_01", "rope_slope_atr_5",
+    "position_in_structure", "dir_consistent", "range_width_atr", "score_trend_total", "score_volume_total",
+    "score_width_total", "score_rope_total", "score_setup_total", "dsa_trade_pos_01", "bb_width_percentile",
+    "bars_since_dir_change", "prev_confirmed_down_bars", "current_run_bars", "dist_to_rope_atr",
+]
+
+COMPOSITE_FEATURES = [
+    "position_in_structure", "dir_consistent", "score_trend_total", "score_volume_total",
+    "score_width_total", "score_rope_total", "score_setup_total",
 ]
 
 
-# =========================
-# Candidate pool / labels
-# =========================
 @dataclass
 class NeighborSpec:
     dsa_max: float = 0.45
@@ -363,9 +441,6 @@ def build_neighbor_events(df: pd.DataFrame, spec: NeighborSpec, cooldown: int = 
     return events
 
 
-# =========================
-# Model helpers
-# =========================
 def prepare_feature_matrix(events: pd.DataFrame, features: Sequence[str], fill_source: Optional[pd.DataFrame] = None) -> Tuple[pd.DataFrame, List[str]]:
     cols = [c for c in features if c in events.columns]
     if not cols:
@@ -421,15 +496,7 @@ def classification_score(y_true: pd.Series, y_prob: np.ndarray) -> Dict[str, flo
     return out
 
 
-def collect_importance_rows(
-    model_name: str,
-    mode: str,
-    fold_name: str,
-    features: List[str],
-    model,
-    x_test: pd.DataFrame,
-    y_test: pd.Series,
-) -> List[Dict[str, object]]:
+def collect_importance_rows(model_name: str, mode: str, fold_name: str, features: List[str], model, x_test: pd.DataFrame, y_test: pd.Series) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     base_importance = getattr(model, "feature_importances_", None)
     if base_importance is None:
@@ -453,13 +520,7 @@ def collect_importance_rows(
     return rows
 
 
-def run_single_model(
-    events: pd.DataFrame,
-    features: Sequence[str],
-    target_col: str,
-    model_type: str,
-    feature_mode: str,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def run_single_model(events: pd.DataFrame, features: Sequence[str], target_col: str, model_type: str, feature_mode: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     folds = make_time_folds(events)
     metrics_rows: List[Dict[str, object]] = []
     importance_rows: List[Dict[str, object]] = []
@@ -473,51 +534,19 @@ def run_single_model(
         y_train = train_df[target_col]
         y_test = test_df[target_col]
         if model_type == "reg":
-            model = GradientBoostingRegressor(
-                random_state=RANDOM_STATE,
-                learning_rate=0.05,
-                n_estimators=250,
-                max_depth=3,
-                subsample=0.8,
-                min_samples_leaf=20,
-            )
+            model = GradientBoostingRegressor(random_state=RANDOM_STATE, learning_rate=0.05, n_estimators=250, max_depth=3, subsample=0.8, min_samples_leaf=20)
             model.fit(x_train, safe_numeric(y_train))
             y_pred = model.predict(x_test)
             score = regression_score(y_test, y_pred)
         else:
             if pd.Series(y_train).nunique() < 2 or pd.Series(y_test).nunique() < 1:
                 continue
-            model = GradientBoostingClassifier(
-                random_state=RANDOM_STATE,
-                learning_rate=0.05,
-                n_estimators=250,
-                max_depth=3,
-                subsample=0.8,
-                min_samples_leaf=20,
-            )
+            model = GradientBoostingClassifier(random_state=RANDOM_STATE, learning_rate=0.05, n_estimators=250, max_depth=3, subsample=0.8, min_samples_leaf=20)
             model.fit(x_train, pd.Series(y_train).astype(int))
             y_pred = model.predict_proba(x_test)[:, 1]
             score = classification_score(y_test, y_pred)
-        metrics_rows.append({
-            "feature_mode": feature_mode,
-            "target": target_col,
-            "model_type": model_type,
-            "fold": fold_name,
-            "train_n": len(train_df),
-            "test_n": len(test_df),
-            **score,
-        })
-        importance_rows.extend(
-            collect_importance_rows(
-                model_name=f"{feature_mode}_{target_col}_{model_type}",
-                mode=feature_mode,
-                fold_name=fold_name,
-                features=used_features,
-                model=model,
-                x_test=x_test,
-                y_test=pd.Series(y_test).astype(int) if model_type == "clf" else safe_numeric(y_test),
-            )
-        )
+        metrics_rows.append({"feature_mode": feature_mode, "target": target_col, "model_type": model_type, "fold": fold_name, "train_n": len(train_df), "test_n": len(test_df), **score})
+        importance_rows.extend(collect_importance_rows(f"{feature_mode}_{target_col}_{model_type}", feature_mode, fold_name, used_features, model, x_test, pd.Series(y_test).astype(int) if model_type == "clf" else safe_numeric(y_test)))
     return pd.DataFrame(metrics_rows), pd.DataFrame(importance_rows)
 
 
@@ -533,9 +562,6 @@ def aggregate_importance(imp_df: pd.DataFrame) -> pd.DataFrame:
     return grp.sort_values(["model_name", "rank_score"], ascending=[True, False]).reset_index(drop=True)
 
 
-# =========================
-# Profiles / hints
-# =========================
 def build_bucket_profiles(events: pd.DataFrame, features: Sequence[str], out_path: str) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     for feat in features:
@@ -550,14 +576,7 @@ def build_bucket_profiles(events: pd.DataFrame, features: Sequence[str], out_pat
             sub["bucket"] = pd.qcut(sub[feat], q=5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"], duplicates="drop")
         except Exception:
             continue
-        grp = sub.groupby("bucket", observed=True).agg(
-            n=(feat, "count"),
-            mean_value=(feat, "mean"),
-            ret20=("ret_20", "mean"),
-            dd20=("max_dd_20", "mean"),
-            wr20=("win_20", "mean"),
-            rr20=("rr_20", "mean"),
-        ).reset_index()
+        grp = sub.groupby("bucket", observed=True).agg(n=(feat, "count"), mean_value=(feat, "mean"), ret20=("ret_20", "mean"), dd20=("max_dd_20", "mean"), wr20=("win_20", "mean"), rr20=("rr_20", "mean")).reset_index()
         best_row = grp.sort_values(["rr20", "ret20"], ascending=[False, False]).iloc[0]
         for _, row in grp.iterrows():
             rows.append({
@@ -577,12 +596,7 @@ def build_bucket_profiles(events: pd.DataFrame, features: Sequence[str], out_pat
     return rdf
 
 
-def build_parameter_hints(
-    events: pd.DataFrame,
-    trade_imp: pd.DataFrame,
-    research_imp: pd.DataFrame,
-    top_n: int = 8,
-) -> pd.DataFrame:
+def build_parameter_hints(events: pd.DataFrame, trade_imp: pd.DataFrame, research_imp: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     if events.empty:
         return pd.DataFrame()
@@ -593,23 +607,14 @@ def build_parameter_hints(
     if merged_top.empty:
         feature_list = [c for c in PRIMARY_HINT_FEATURES if c in events.columns]
     else:
-        feature_list = (
-            merged_top.groupby("feature", as_index=False)["rank_score"].mean()
-            .sort_values("rank_score", ascending=False)["feature"]
-            .tolist()
-        )
+        feature_list = (merged_top.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False)["feature"].tolist())
         feature_list = [f for f in feature_list if f in events.columns]
     feature_list = list(dict.fromkeys(feature_list + [f for f in PRIMARY_HINT_FEATURES if f in events.columns]))[:max(top_n, len(PRIMARY_HINT_FEATURES))]
-
     for feat in feature_list:
         s = safe_numeric(events[feat]).dropna()
         if len(s) < 40 or s.nunique() < 4:
             continue
-        q20 = float(s.quantile(0.2))
-        q35 = float(s.quantile(0.35))
-        q50 = float(s.quantile(0.5))
-        q65 = float(s.quantile(0.65))
-        q80 = float(s.quantile(0.8))
+        q20 = float(s.quantile(0.2)); q35 = float(s.quantile(0.35)); q50 = float(s.quantile(0.5)); q65 = float(s.quantile(0.65)); q80 = float(s.quantile(0.8))
         try:
             tmp = events[[feat, "ret_20", "max_dd_20", "win_20", "rr_20"]].copy()
             tmp[feat] = safe_numeric(tmp[feat])
@@ -628,48 +633,137 @@ def build_parameter_hints(
         else:
             hint_rule = f"{q35:.4f} <= {feat} <= {q65:.4f}"
             direction = "middle_better"
-        rows.append({
-            "feature": feat,
-            "best_bucket": best_bucket,
-            "direction": direction,
-            "q20": round(q20, 6),
-            "q35": round(q35, 6),
-            "q50": round(q50, 6),
-            "q65": round(q65, 6),
-            "q80": round(q80, 6),
-            "hint_rule": hint_rule,
-            "sample_n": int(len(s)),
-        })
+        rows.append({"feature": feat, "best_bucket": best_bucket, "direction": direction, "q20": round(q20, 6), "q35": round(q35, 6), "q50": round(q50, 6), "q65": round(q65, 6), "q80": round(q80, 6), "hint_rule": hint_rule, "sample_n": int(len(s))})
     rdf = pd.DataFrame(rows)
     if not rdf.empty:
         rdf.to_csv(f"{OUT_DIR}/07_parameter_hints.csv", index=False)
     return rdf
 
 
-# =========================
-# Reports
-# =========================
-def analyze_00_dataset_summary(df: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    rows.append({
-        "section": "global",
-        "sample_n": int(len(df)),
-        "stock_n": int(df["symbol"].nunique()),
-        "ret20_mean": round(float(df["ret_20"].mean()), 5),
-        "dd20_mean": round(float(df["max_dd_20"].mean()), 5),
-        "wr20_mean": round(float(df["win_20"].mean()), 4),
-        "rr20_mean": round(rr_from_ret_dd(df["ret_20"].mean(), df["max_dd_20"].mean()), 3),
-    })
-    if not events.empty:
+def build_rule_reverse_scan(events: pd.DataFrame, top_k_export: int = 200) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if events.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    rows: List[Dict[str, object]] = []
+    top_event_rows: List[pd.DataFrame] = []
+    pos_grid = [0.25, 0.30, 0.35, 0.40, 0.45]
+    dir_grid = [2.0, 3.0, 4.0]
+    width_grid = [None, 0.45, 0.55, 0.65]
+    trend_grid = [None, 0.45, 0.55, 0.65]
+    vol_grid = [None, 0.45, 0.55, 0.65]
+    range_atr_grid = [None, 1.5, 2.0, 2.5, 3.0]
+    breakout_modes = ["none", "breakout_or_expand", "breakout_only"]
+    rope_modes = ["none", "near_or_up", "strict_near_up"]
+    weekly_modes = ["none", "weekly_not_bad"]
+
+    for pos_max, dir_min, width_min, trend_min, vol_min, range_atr_max, breakout_mode, rope_mode, weekly_mode in product(
+        pos_grid, dir_grid, width_grid, trend_grid, vol_grid, range_atr_grid, breakout_modes, rope_modes, weekly_modes
+    ):
+        sub = events.copy()
+        sub = sub[safe_numeric(sub.get("position_in_structure", pd.Series(index=sub.index))) <= pos_max]
+        sub = sub[safe_numeric(sub.get("dir_consistent", pd.Series(index=sub.index))).fillna(-1) >= dir_min]
+        if width_min is not None and "score_width_total" in sub.columns:
+            sub = sub[safe_numeric(sub["score_width_total"]) >= width_min]
+        if trend_min is not None and "score_trend_total" in sub.columns:
+            sub = sub[safe_numeric(sub["score_trend_total"]) >= trend_min]
+        if vol_min is not None and "score_volume_total" in sub.columns:
+            sub = sub[safe_numeric(sub["score_volume_total"]) >= vol_min]
+        if range_atr_max is not None and "range_width_atr" in sub.columns:
+            sub = sub[safe_numeric(sub["range_width_atr"]) <= range_atr_max]
+        if breakout_mode == "breakout_or_expand":
+            sub = sub[(safe_numeric(sub.get("range_break_up", pd.Series(index=sub.index))).fillna(0) > 0) |
+                      (safe_numeric(sub.get("bb_expanding", pd.Series(index=sub.index))).fillna(0) > 0) |
+                      (safe_numeric(sub.get("dsa_trade_breakout_20", pd.Series(index=sub.index))).fillna(0) > 0)]
+        elif breakout_mode == "breakout_only":
+            sub = sub[(safe_numeric(sub.get("range_break_up", pd.Series(index=sub.index))).fillna(0) > 0) |
+                      (safe_numeric(sub.get("dsa_trade_breakout_20", pd.Series(index=sub.index))).fillna(0) > 0)]
+        if rope_mode == "near_or_up":
+            sub = sub[(safe_numeric(sub.get("rope_dir", pd.Series(index=sub.index))).fillna(0) == 1) |
+                      (safe_numeric(sub.get("dist_to_rope_atr", pd.Series(index=sub.index))).abs() <= 0.5)]
+        elif rope_mode == "strict_near_up":
+            sub = sub[(safe_numeric(sub.get("rope_dir", pd.Series(index=sub.index))).fillna(0) == 1) &
+                      (safe_numeric(sub.get("dist_to_rope_atr", pd.Series(index=sub.index))).between(-1.0, 0.2, inclusive="both")) &
+                      (safe_numeric(sub.get("rope_slope_atr_5", pd.Series(index=sub.index))).fillna(-99) > 0)]
+        if weekly_mode == "weekly_not_bad":
+            sub = sub[(safe_numeric(sub.get("w_DSA_DIR", pd.Series(index=sub.index))).fillna(0) >= 0) |
+                      (safe_numeric(sub.get("w_dsa_trade_pos_01", pd.Series(index=sub.index))).fillna(1) <= 0.55)]
+        if len(sub) < 25:
+            continue
+        metrics = summarize_events(sub, [10, 20, 40, 60])
         rows.append({
-            "section": "candidate_pool",
-            "sample_n": int(len(events)),
-            "stock_n": int(events["symbol"].nunique()),
-            "ret20_mean": round(float(events["ret_20"].mean()), 5),
-            "dd20_mean": round(float(events["max_dd_20"].mean()), 5),
-            "wr20_mean": round(float(events["win_20"].mean()), 4),
-            "rr20_mean": round(rr_from_ret_dd(events["ret_20"].mean(), events["max_dd_20"].mean()), 3),
+            "position_in_structure_max": pos_max,
+            "dir_consistent_min": dir_min,
+            "score_width_total_min": width_min,
+            "score_trend_total_min": trend_min,
+            "score_volume_total_min": vol_min,
+            "range_width_atr_max": range_atr_max,
+            "breakout_mode": breakout_mode,
+            "rope_mode": rope_mode,
+            "weekly_mode": weekly_mode,
+            **metrics,
         })
+    scan_df = pd.DataFrame(rows)
+    if scan_df.empty:
+        return scan_df, pd.DataFrame()
+    scan_df["rank_score"] = (
+        scan_df["rr_20"].fillna(-999) * 0.45 +
+        scan_df["ret_20"].fillna(-999) * 8.0 +
+        scan_df["wr_20"].fillna(-999) * 0.25 +
+        scan_df["rr_40"].fillna(-999) * 0.20 +
+        np.log1p(scan_df["n"].clip(lower=1)) * 0.08
+    )
+    scan_df = scan_df.sort_values(["rank_score", "n"], ascending=[False, False]).reset_index(drop=True)
+    scan_df.to_csv(f"{OUT_DIR}/09_rule_reverse_scan.csv", index=False)
+
+    for rank, row in scan_df.head(min(20, len(scan_df))).iterrows():
+        sub = events.copy()
+        sub = sub[safe_numeric(sub.get("position_in_structure", pd.Series(index=sub.index))) <= row["position_in_structure_max"]]
+        sub = sub[safe_numeric(sub.get("dir_consistent", pd.Series(index=sub.index))).fillna(-1) >= row["dir_consistent_min"]]
+        if pd.notna(row["score_width_total_min"]):
+            sub = sub[safe_numeric(sub.get("score_width_total", pd.Series(index=sub.index))) >= row["score_width_total_min"]]
+        if pd.notna(row["score_trend_total_min"]):
+            sub = sub[safe_numeric(sub.get("score_trend_total", pd.Series(index=sub.index))) >= row["score_trend_total_min"]]
+        if pd.notna(row["score_volume_total_min"]):
+            sub = sub[safe_numeric(sub.get("score_volume_total", pd.Series(index=sub.index))) >= row["score_volume_total_min"]]
+        if pd.notna(row["range_width_atr_max"]):
+            sub = sub[safe_numeric(sub.get("range_width_atr", pd.Series(index=sub.index))) <= row["range_width_atr_max"]]
+        if row["breakout_mode"] == "breakout_or_expand":
+            sub = sub[(safe_numeric(sub.get("range_break_up", pd.Series(index=sub.index))).fillna(0) > 0) |
+                      (safe_numeric(sub.get("bb_expanding", pd.Series(index=sub.index))).fillna(0) > 0) |
+                      (safe_numeric(sub.get("dsa_trade_breakout_20", pd.Series(index=sub.index))).fillna(0) > 0)]
+        elif row["breakout_mode"] == "breakout_only":
+            sub = sub[(safe_numeric(sub.get("range_break_up", pd.Series(index=sub.index))).fillna(0) > 0) |
+                      (safe_numeric(sub.get("dsa_trade_breakout_20", pd.Series(index=sub.index))).fillna(0) > 0)]
+        if row["rope_mode"] == "near_or_up":
+            sub = sub[(safe_numeric(sub.get("rope_dir", pd.Series(index=sub.index))).fillna(0) == 1) |
+                      (safe_numeric(sub.get("dist_to_rope_atr", pd.Series(index=sub.index))).abs() <= 0.5)]
+        elif row["rope_mode"] == "strict_near_up":
+            sub = sub[(safe_numeric(sub.get("rope_dir", pd.Series(index=sub.index))).fillna(0) == 1) &
+                      (safe_numeric(sub.get("dist_to_rope_atr", pd.Series(index=sub.index))).between(-1.0, 0.2, inclusive="both")) &
+                      (safe_numeric(sub.get("rope_slope_atr_5", pd.Series(index=sub.index))).fillna(-99) > 0)]
+        if row["weekly_mode"] == "weekly_not_bad":
+            sub = sub[(safe_numeric(sub.get("w_DSA_DIR", pd.Series(index=sub.index))).fillna(0) >= 0) |
+                      (safe_numeric(sub.get("w_dsa_trade_pos_01", pd.Series(index=sub.index))).fillna(1) <= 0.55)]
+        if sub.empty:
+            continue
+        keep_cols = [c for c in [
+            "symbol", "datetime", "close", "ret_20", "max_dd_20", "rr_20",
+            "position_in_structure", "dir_consistent", "score_width_total", "score_trend_total", "score_volume_total",
+            "range_width_atr", "dist_to_rope_atr", "rope_dir", "rope_slope_atr_5", "bb_width_percentile",
+            "bars_since_dir_change", "prev_confirmed_down_bars", "current_run_bars"
+        ] if c in sub.columns]
+        tmp = sub[keep_cols].copy()
+        tmp["rule_rank"] = rank + 1
+        top_event_rows.append(tmp)
+    top_df = pd.concat(top_event_rows, ignore_index=True).head(top_k_export) if top_event_rows else pd.DataFrame()
+    if not top_df.empty:
+        top_df.to_csv(f"{OUT_DIR}/09b_rule_reverse_top_events.csv", index=False)
+    return scan_df, top_df
+
+
+def analyze_00_dataset_summary(df: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+    rows = [{"section": "global", "sample_n": int(len(df)), "stock_n": int(df["symbol"].nunique()), "ret20_mean": round(float(df["ret_20"].mean()), 5), "dd20_mean": round(float(df["max_dd_20"].mean()), 5), "wr20_mean": round(float(df["win_20"].mean()), 4), "rr20_mean": round(rr_from_ret_dd(df["ret_20"].mean(), df["max_dd_20"].mean()), 3)}]
+    if not events.empty:
+        rows.append({"section": "candidate_pool", "sample_n": int(len(events)), "stock_n": int(events["symbol"].nunique()), "ret20_mean": round(float(events["ret_20"].mean()), 5), "dd20_mean": round(float(events["max_dd_20"].mean()), 5), "wr20_mean": round(float(events["win_20"].mean()), 4), "rr20_mean": round(rr_from_ret_dd(events["ret_20"].mean(), events["max_dd_20"].mean()), 3)})
     rdf = pd.DataFrame(rows)
     rdf.to_csv(f"{OUT_DIR}/00_dataset_summary.csv", index=False)
     return rdf
@@ -677,43 +771,33 @@ def analyze_00_dataset_summary(df: pd.DataFrame, events: pd.DataFrame) -> pd.Dat
 
 def analyze_01_feature_inventory(events: pd.DataFrame) -> pd.DataFrame:
     rows = []
-    for feat in list(dict.fromkeys(TRADE_FEATURES + RESEARCH_FEATURES)):
+    all_features = list(dict.fromkeys(TRADE_FEATURES + RESEARCH_FEATURES + COMPOSITE_FEATURES))
+    for feat in all_features:
         present = feat in events.columns
         s = events[feat] if present else pd.Series(dtype=float)
-        rows.append({
-            "feature": feat,
-            "feature_mode": "trade" if feat in TRADE_FEATURES else "research",
-            "present": int(present),
-            "coverage": round(float(s.notna().mean()), 4) if present else 0.0,
-            "nunique": int(s.nunique(dropna=True)) if present else 0,
-            "mean": round(float(safe_numeric(s).mean()), 6) if present else np.nan,
-            "std": round(float(safe_numeric(s).std()), 6) if present else np.nan,
-        })
+        mode = "trade" if feat in TRADE_FEATURES else ("research" if feat in RESEARCH_FEATURES else "composite")
+        rows.append({"feature": feat, "feature_mode": mode, "present": int(present), "coverage": round(float(s.notna().mean()), 4) if present else 0.0, "nunique": int(s.nunique(dropna=True)) if present else 0, "mean": round(float(safe_numeric(s).mean()), 6) if present else np.nan, "std": round(float(safe_numeric(s).std()), 6) if present else np.nan})
     rdf = pd.DataFrame(rows).sort_values(["feature_mode", "coverage", "feature"], ascending=[True, False, True])
     rdf.to_csv(f"{OUT_DIR}/01_feature_inventory.csv", index=False)
     return rdf
 
 
-# =========================
-# Main
-# =========================
 def main() -> None:
-    parser = argparse.ArgumentParser(description="基于 GBDT 的买点归因研究脚本")
-    parser.add_argument("--n-stocks", type=int, default=100, help="随机抽取股票数")
-    parser.add_argument("--bars", type=int, default=800, help="每只股票K线数")
-    parser.add_argument("--freq", default="d", help="频率 d/w/mo/60m等")
-    parser.add_argument("--seed", type=int, default=42, help="随机种子")
-    parser.add_argument("--analysis-mode", type=str, default="full", choices=["full", "prepare_only", "model_only"], help="full=准备+建模；prepare_only=只准备数据；model_only=准备后直接建模")
-    parser.add_argument("--sample-mode", type=str, default="c_neighbor", choices=["c_neighbor"], help="当前仅支持 C_long_down_repair 邻域样本")
-    parser.add_argument("--neighbor-dsa-max", type=float, default=0.45, help="C 邻域样本 dsa_trade_pos_01 上限")
-    parser.add_argument("--neighbor-prev-down-min", type=float, default=8.0, help="C 邻域样本 prev_confirmed_down_bars 下限")
-    parser.add_argument("--neighbor-current-run-max", type=float, default=20.0, help="C 邻域样本 current_run_bars 上限")
-    parser.add_argument("--neighbor-bars-since-max", type=float, default=12.0, help="C 邻域样本 bars_since_dir_change 上限")
+    parser = argparse.ArgumentParser(description="基于 GBDT 结果反推规则的买点实验脚本")
+    parser.add_argument("--n-stocks", type=int, default=100)
+    parser.add_argument("--bars", type=int, default=800)
+    parser.add_argument("--freq", default="d")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--analysis-mode", type=str, default="full", choices=["full", "prepare_only", "model_only", "rule_only"])
+    parser.add_argument("--neighbor-dsa-max", type=float, default=0.45)
+    parser.add_argument("--neighbor-prev-down-min", type=float, default=8.0)
+    parser.add_argument("--neighbor-current-run-max", type=float, default=20.0)
+    parser.add_argument("--neighbor-bars-since-max", type=float, default=12.0)
     args = parser.parse_args()
 
     stocks = get_stock_pool(args.n_stocks, args.seed)
     print(f"股票池抽取: {len(stocks)}只 (seed={args.seed})")
-    print("研究目标: 用 GBDT 做归因与参数提示，不直接替代最终规则裁决")
+    print("研究目标: 保留 GBDT 归因，同时新增规则反推实验")
 
     all_dfs: List[pd.DataFrame] = []
     for idx, code in enumerate(stocks):
@@ -737,12 +821,7 @@ def main() -> None:
         return
 
     df = pd.concat(all_dfs, ignore_index=True)
-    neighbor_spec = NeighborSpec(
-        dsa_max=args.neighbor_dsa_max,
-        prev_down_min=args.neighbor_prev_down_min,
-        current_run_max=args.neighbor_current_run_max,
-        bars_since_max=args.neighbor_bars_since_max,
-    )
+    neighbor_spec = NeighborSpec(dsa_max=args.neighbor_dsa_max, prev_down_min=args.neighbor_prev_down_min, current_run_max=args.neighbor_current_run_max, bars_since_max=args.neighbor_bars_since_max)
     events = build_neighbor_events(df, neighbor_spec)
 
     analyze_00_dataset_summary(df, events)
@@ -760,55 +839,53 @@ def main() -> None:
         print(f"\n全部完成，结果保存在 {OUT_DIR}/")
         return
 
-    fold_frames: List[pd.DataFrame] = []
+    if args.analysis_mode != "rule_only":
+        fold_frames: List[pd.DataFrame] = []
+        trade_reg_metrics, trade_reg_imp = run_single_model(events, TRADE_FEATURES, "ret_20", "reg", "trade")
+        trade_clf_metrics, trade_clf_imp = run_single_model(events, TRADE_FEATURES, "good20", "clf", "trade")
+        research_reg_metrics, research_reg_imp = run_single_model(events, RESEARCH_FEATURES, "ret_20", "reg", "research")
+        research_clf_metrics, research_clf_imp = run_single_model(events, RESEARCH_FEATURES, "good20", "clf", "research")
+        for frame in [trade_reg_metrics, trade_clf_metrics, research_reg_metrics, research_clf_metrics]:
+            if not frame.empty:
+                fold_frames.append(frame)
+        if fold_frames:
+            pd.concat(fold_frames, ignore_index=True).to_csv(f"{OUT_DIR}/05_fold_metrics.csv", index=False)
 
-    trade_reg_metrics, trade_reg_imp = run_single_model(events, TRADE_FEATURES, "ret_20", "reg", "trade")
-    trade_clf_metrics, trade_clf_imp = run_single_model(events, TRADE_FEATURES, "good20", "clf", "trade")
-    research_reg_metrics, research_reg_imp = run_single_model(events, RESEARCH_FEATURES, "ret_20", "reg", "research")
-    research_clf_metrics, research_clf_imp = run_single_model(events, RESEARCH_FEATURES, "good20", "clf", "research")
+        trade_reg_imp_agg = aggregate_importance(trade_reg_imp)
+        trade_clf_imp_agg = aggregate_importance(trade_clf_imp)
+        research_reg_imp_agg = aggregate_importance(research_reg_imp)
+        research_clf_imp_agg = aggregate_importance(research_clf_imp)
 
-    for frame in [trade_reg_metrics, trade_clf_metrics, research_reg_metrics, research_clf_metrics]:
-        if not frame.empty:
-            fold_frames.append(frame)
-    if fold_frames:
-        pd.concat(fold_frames, ignore_index=True).to_csv(f"{OUT_DIR}/05_fold_metrics.csv", index=False)
+        if not trade_reg_imp_agg.empty:
+            trade_reg_imp_agg.to_csv(f"{OUT_DIR}/03_trade_reg_importance.csv", index=False)
+        if not trade_clf_imp_agg.empty:
+            trade_clf_imp_agg.to_csv(f"{OUT_DIR}/03b_trade_clf_importance.csv", index=False)
+        if not research_reg_imp_agg.empty:
+            research_reg_imp_agg.to_csv(f"{OUT_DIR}/04_research_reg_importance.csv", index=False)
+        if not research_clf_imp_agg.empty:
+            research_clf_imp_agg.to_csv(f"{OUT_DIR}/04b_research_clf_importance.csv", index=False)
 
-    trade_reg_imp_agg = aggregate_importance(trade_reg_imp)
-    trade_clf_imp_agg = aggregate_importance(trade_clf_imp)
-    research_reg_imp_agg = aggregate_importance(research_reg_imp)
-    research_clf_imp_agg = aggregate_importance(research_clf_imp)
+        trade_top = trade_reg_imp_agg.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False) if not trade_reg_imp_agg.empty else pd.DataFrame()
+        research_top = research_reg_imp_agg.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False) if not research_reg_imp_agg.empty else pd.DataFrame()
+        trade_feats_for_bucket = trade_top["feature"].head(8).tolist() if not trade_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in TRADE_FEATURES]
+        research_feats_for_bucket = research_top["feature"].head(8).tolist() if not research_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in RESEARCH_FEATURES]
+        build_bucket_profiles(events, trade_feats_for_bucket, f"{OUT_DIR}/06_trade_bucket_profiles.csv")
+        build_bucket_profiles(events, research_feats_for_bucket, f"{OUT_DIR}/06b_research_bucket_profiles.csv")
+        build_bucket_profiles(events, COMPOSITE_FEATURES, f"{OUT_DIR}/08_composite_feature_profiles.csv")
+        build_parameter_hints(events, pd.concat([trade_reg_imp_agg, trade_clf_imp_agg], ignore_index=True), pd.concat([research_reg_imp_agg, research_clf_imp_agg], ignore_index=True))
 
-    if not trade_reg_imp_agg.empty:
-        trade_reg_imp_agg.to_csv(f"{OUT_DIR}/03_trade_reg_importance.csv", index=False)
-    if not trade_clf_imp_agg.empty:
-        trade_clf_imp_agg.to_csv(f"{OUT_DIR}/03b_trade_clf_importance.csv", index=False)
-    if not research_reg_imp_agg.empty:
-        research_reg_imp_agg.to_csv(f"{OUT_DIR}/04_research_reg_importance.csv", index=False)
-    if not research_clf_imp_agg.empty:
-        research_clf_imp_agg.to_csv(f"{OUT_DIR}/04b_research_clf_importance.csv", index=False)
+        print("\n=== 关键结果预览 ===")
+        if not trade_reg_imp_agg.empty:
+            print("\n[trade-safe 回归重要性 Top10]")
+            print(trade_reg_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
 
-    # bucket profiles use the strongest features from each side
-    trade_top = trade_reg_imp_agg.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False) if not trade_reg_imp_agg.empty else pd.DataFrame()
-    research_top = research_reg_imp_agg.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False) if not research_reg_imp_agg.empty else pd.DataFrame()
-    trade_feats_for_bucket = trade_top["feature"].head(8).tolist() if not trade_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in TRADE_FEATURES]
-    research_feats_for_bucket = research_top["feature"].head(8).tolist() if not research_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in RESEARCH_FEATURES]
-    build_bucket_profiles(events, trade_feats_for_bucket, f"{OUT_DIR}/06_trade_bucket_profiles.csv")
-    build_bucket_profiles(events, research_feats_for_bucket, f"{OUT_DIR}/06b_research_bucket_profiles.csv")
-
-    trade_hint_source = pd.concat([trade_reg_imp_agg, trade_clf_imp_agg], ignore_index=True)
-    research_hint_source = pd.concat([research_reg_imp_agg, research_clf_imp_agg], ignore_index=True)
-    build_parameter_hints(events, trade_hint_source, research_hint_source)
-
-    print("\n=== 关键结果预览 ===")
-    if not trade_reg_imp_agg.empty:
-        print("\n[trade-safe 回归重要性 Top10]")
-        print(trade_reg_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
-    if not trade_clf_imp_agg.empty:
-        print("\n[trade-safe 分类重要性 Top10]")
-        print(trade_clf_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
-    if not research_reg_imp_agg.empty:
-        print("\n[research 回归重要性 Top10]")
-        print(research_reg_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
+    scan_df, _ = build_rule_reverse_scan(events)
+    if not scan_df.empty:
+        print("\n[规则反推 Top10]")
+        print(scan_df[[
+            "position_in_structure_max", "dir_consistent_min", "score_width_total_min", "score_trend_total_min", "score_volume_total_min",
+            "range_width_atr_max", "breakout_mode", "rope_mode", "weekly_mode", "n", "ret_20", "wr_20", "rr_20", "rank_score"
+        ]].head(10).to_string(index=False))
 
     print(f"\n{'=' * 70}")
     print(f"# 全部完成! 结果保存在 {OUT_DIR}/")
