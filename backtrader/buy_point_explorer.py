@@ -510,25 +510,15 @@ def analyze_03_interaction(df: pd.DataFrame) -> None:
         print(g.to_string())
 
 
-def analyze_03b_factor_pairs(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
+def analyze_03b_factor_pairs(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
     print("\n" + "=" * 70)
-    print("# 层次③B: 全因子双因子组合扫描")
+    print("# 层次③B: 第二轮 trade-only 双因子组合扫描")
     print("=" * 70)
-    candidate_cols = [c for c in CONTINUOUS_COLS if c in df.columns and df[c].notna().sum() >= 300]
-    quick_rows = []
-    for col in candidate_cols:
-        sub = df[[col, "ret_20", "max_dd_20"]].dropna()
-        if len(sub) < 300:
-            continue
-        quick_rows.append({"factor": col, "rank_ic": sub[col].rank().corr(sub["ret_20"].rank())})
-    quick = pd.DataFrame(quick_rows)
-    if quick.empty:
-        return pd.DataFrame()
-    strong = quick.sort_values("rank_ic", key=lambda s: s.abs(), ascending=False).head(top_n)["factor"].tolist()
+    candidate_cols = [c for c in ROUND2_TRADE_CANDIDATES if c in df.columns and c not in DISCRETE_COLS and df[c].notna().sum() >= 300]
     rows = []
-    for i in range(len(strong)):
-        for j in range(i + 1, len(strong)):
-            a, b = strong[i], strong[j]
+    for i in range(len(candidate_cols)):
+        for j in range(i + 1, len(candidate_cols)):
+            a, b = candidate_cols[i], candidate_cols[j]
             sub = df[[a, b, "ret_20", "max_dd_20", "win_20"]].dropna()
             if len(sub) < 200:
                 continue
@@ -607,6 +597,129 @@ def analyze_04_rule_search(df: pd.DataFrame) -> pd.DataFrame:
     return rdf
 
 
+
+
+# =========================
+# Round2 strategy specs
+# =========================
+ROUND2_TRADE_CANDIDATES = [
+    "dsa_trade_pos_01", "dsa_trade_dist_to_low_01", "dist_to_rope_atr", "bb_pos_01",
+    "rope_dir", "bars_since_dir_change", "rope_slope_atr_5", "range_break_up",
+    "prev_confirmed_down_bars", "current_run_bars",
+]
+
+ROUND2_STRATEGY_SPECS: Dict[str, Dict[str, object]] = {
+    "A_low_repair": {
+        "desc": "低位修复主线",
+        "dsa_thr": 0.35,
+        "dist_thr": -0.8,
+        "bars_thr": 8,
+        "prev_down_min": 10,
+        "need_rope_up": True,
+    },
+    "B_low_repair_strong_trigger": {
+        "desc": "低位+更强触发",
+        "dsa_thr": 0.35,
+        "dist_thr": -0.5,
+        "bars_thr": 5,
+        "prev_down_min": None,
+        "need_rope_up": True,
+        "slope_min": 0.0,
+    },
+    "C_long_down_repair": {
+        "desc": "长下跌段后的修复",
+        "dsa_thr": 0.40,
+        "dist_thr": None,
+        "bars_thr": 8,
+        "prev_down_min": 20,
+        "need_rope_up": True,
+        "current_run_max": 15,
+    },
+    "D_low_breakout": {
+        "desc": "低位+breakout",
+        "dsa_thr": 0.40,
+        "dist_thr": None,
+        "bars_thr": None,
+        "prev_down_min": 10,
+        "need_rope_up": False,
+        "bb_pos_max": 0.35,
+        "range_break_up": 1,
+    },
+    "E_rope_coil_launch": {
+        "desc": "Rope贴线蓄势后启动",
+        "dsa_thr": None,
+        "dist_min": -1.0,
+        "dist_max": 0.2,
+        "bars_thr": 8,
+        "prev_down_min": None,
+        "need_rope_up": True,
+        "slope_min": 0.0,
+        "bb_pos_max": 0.5,
+        "range_break_up_or_bb_expand": True,
+    },
+}
+
+
+def build_round2_events(df: pd.DataFrame, strategy_name: str, cooldown: int = EVENT_DEDUP_BARS, override: Optional[Dict[str, object]] = None) -> pd.DataFrame:
+    if strategy_name not in ROUND2_STRATEGY_SPECS:
+        raise ValueError(f"未知策略: {strategy_name}")
+    spec = dict(ROUND2_STRATEGY_SPECS[strategy_name])
+    if override:
+        spec.update(override)
+    need = [
+        "symbol", "datetime", "open", "high", "low", "close",
+        "dsa_trade_pos_01", "dsa_trade_dist_to_low_01", "dist_to_rope_atr", "bb_pos_01",
+        "rope_dir", "bars_since_dir_change", "rope_slope_atr_5", "range_break_up", "bb_expanding",
+        "prev_confirmed_down_bars", "current_run_bars",
+        "w_DSA_DIR", "w_dsa_confirmed_pivot_pos_01", "w_dsa_trade_pos_01", "w_dsa_signed_vwap_dev_pct", "w_factor_available", "w_sample_count",
+    ] + [f"ret_{w}" for w in [20, 40, 60]] + [f"max_dd_{w}" for w in [20, 40, 60]] + [f"win_{w}" for w in [20, 40, 60]]
+    need = [c for c in need if c in df.columns]
+    sub = df[need].dropna(subset=[c for c in ["ret_20", "max_dd_20", "rope_dir"] if c in need]).copy()
+    mask = pd.Series(True, index=sub.index)
+    dsa_thr = spec.get("dsa_thr")
+    if dsa_thr is not None and "dsa_trade_pos_01" in sub.columns:
+        mask &= sub["dsa_trade_pos_01"] <= float(dsa_thr)
+    dist_thr = spec.get("dist_thr")
+    if dist_thr is not None and "dist_to_rope_atr" in sub.columns:
+        mask &= sub["dist_to_rope_atr"] <= float(dist_thr)
+    dist_min = spec.get("dist_min")
+    if dist_min is not None and "dist_to_rope_atr" in sub.columns:
+        mask &= sub["dist_to_rope_atr"] >= float(dist_min)
+    dist_max = spec.get("dist_max")
+    if dist_max is not None and "dist_to_rope_atr" in sub.columns:
+        mask &= sub["dist_to_rope_atr"] <= float(dist_max)
+    if spec.get("need_rope_up") and "rope_dir" in sub.columns:
+        mask &= sub["rope_dir"] == 1
+    bars_thr = spec.get("bars_thr")
+    if bars_thr is not None and "bars_since_dir_change" in sub.columns:
+        mask &= sub["bars_since_dir_change"] <= int(bars_thr)
+    slope_min = spec.get("slope_min")
+    if slope_min is not None and "rope_slope_atr_5" in sub.columns:
+        mask &= sub["rope_slope_atr_5"] > float(slope_min)
+    prev_down_min = spec.get("prev_down_min")
+    if prev_down_min is not None and "prev_confirmed_down_bars" in sub.columns:
+        mask &= sub["prev_confirmed_down_bars"] >= float(prev_down_min)
+    current_run_max = spec.get("current_run_max")
+    if current_run_max is not None and "current_run_bars" in sub.columns:
+        mask &= sub["current_run_bars"] <= float(current_run_max)
+    bb_pos_max = spec.get("bb_pos_max")
+    if bb_pos_max is not None and "bb_pos_01" in sub.columns:
+        mask &= sub["bb_pos_01"] <= float(bb_pos_max)
+    if spec.get("range_break_up") is not None and "range_break_up" in sub.columns:
+        mask &= sub["range_break_up"] == float(spec["range_break_up"])
+    if spec.get("range_break_up_or_bb_expand"):
+        cond = pd.Series(False, index=sub.index)
+        if "range_break_up" in sub.columns:
+            cond |= sub["range_break_up"] == 1
+        if "bb_expanding" in sub.columns:
+            cond |= sub["bb_expanding"] == 1
+        mask &= cond
+    events = dedup_events(sub[mask].copy(), cooldown)
+    for w in [20, 40, 60]:
+        if f"ret_{w}" in events.columns:
+            events[f"rr_{w}"] = events.apply(lambda r: rr_from_ret_dd(r[f"ret_{w}"], r[f"max_dd_{w}"]), axis=1)
+    return events.reset_index(drop=True)
+
 # =========================
 # Strategy analyses
 # =========================
@@ -634,16 +747,11 @@ def build_c2_events(df: pd.DataFrame, dsa_thr: float = 0.30, bars_thr: int = 3, 
 
 def analyze_05_candidate_events(df: pd.DataFrame) -> pd.DataFrame:
     print("\n" + "=" * 70)
-    print("# 层次⑤: 候选策略事件表")
+    print("# 层次⑤: Round2 候选策略事件表")
     print("=" * 70)
-    variants = {
-        "C1_trade低位反转": dict(dsa_thr=0.30, bars_thr=999, vwap_thr=-1.0),
-        "C2_trade低位+转强确认": dict(dsa_thr=0.35, bars_thr=3, vwap_thr=-1.0),
-        "C3_trade低位+窄幅突破": dict(dsa_thr=0.40, bars_thr=3, vwap_thr=-2.0),
-    }
     rows, all_events = [], []
-    for name, cfg in variants.items():
-        events = build_c2_events(df, **cfg)
+    for name in ROUND2_STRATEGY_SPECS:
+        events = build_round2_events(df, name)
         if len(events) == 0:
             continue
         row = {"strategy": name}
@@ -651,55 +759,54 @@ def analyze_05_candidate_events(df: pd.DataFrame) -> pd.DataFrame:
         row = {("event_n" if k == "n" else k): v for k, v in row.items()}
         rows.append(row)
         tmp = events.copy(); tmp["strategy"] = name; all_events.append(tmp)
+    if not rows:
+        print("  无足够事件，跳过候选策略")
+        return pd.DataFrame()
     rdf = pd.DataFrame(rows).sort_values("rr_20", ascending=False)
-    if not rdf.empty:
-        print(rdf[["strategy", "event_n", "ret_20", "mae_20", "wr_20", "rr_20", "ret_60", "rr_60"]].to_string(index=False))
-        rdf.to_csv(f"{OUT_DIR}/05_candidate_summary.csv", index=False)
-        if all_events:
-            pd.concat(all_events, ignore_index=True).to_csv(f"{OUT_DIR}/05_candidate_events.csv", index=False)
+    print(rdf[["strategy", "event_n", "ret_20", "mae_20", "wr_20", "rr_20", "ret_60", "rr_60"]].to_string(index=False))
+    rdf.to_csv(f"{OUT_DIR}/05_candidate_summary.csv", index=False)
+    if all_events:
+        pd.concat(all_events, ignore_index=True).to_csv(f"{OUT_DIR}/05_candidate_events.csv", index=False)
     return rdf
 
 
 def analyze_06_c2_param_scan(df: pd.DataFrame) -> pd.DataFrame:
     print("\n" + "=" * 70)
-    print("# 层次⑥: C2 参数扫描")
+    print("# 层次⑥: Round2 基准策略邻域参数扫描")
     print("=" * 70)
     rows = []
-    for dsa_thr in [0.25, 0.30, 0.35, 0.40]:
-        for bars_thr in [3, 5, 8]:
-            for vwap_thr in [None, -1.0, -2.0, -3.0]:
-                events = build_c2_events(df, dsa_thr=dsa_thr, bars_thr=bars_thr, vwap_thr=vwap_thr)
-                if len(events) < 30:
-                    continue
-                row = {"dsa_thr": dsa_thr, "bars_thr": bars_thr, "vwap_thr": "none" if vwap_thr is None else vwap_thr, "event_n": len(events)}
-                row.update(summarize_events(events, [20, 40, 60]))
-                rows.append(row)
+    for dsa_thr in [0.30, 0.35, 0.40]:
+        for dist_thr in [-1.0, -0.8, -0.5]:
+            for bars_thr in [5, 8, 10]:
+                for prev_down_min in [10, 20, 30]:
+                    events = build_round2_events(df, "A_low_repair", override={"dsa_thr": dsa_thr, "dist_thr": dist_thr, "bars_thr": bars_thr, "prev_down_min": prev_down_min})
+                    if len(events) < 20:
+                        continue
+                    row = {"dsa_thr": dsa_thr, "dist_thr": dist_thr, "bars_thr": bars_thr, "prev_down_min": prev_down_min, "event_n": len(events)}
+                    row.update(summarize_events(events, [20, 40, 60]))
+                    rows.append(row)
     if not rows:
         print("  无足够事件，跳过参数扫描")
         return pd.DataFrame()
     rdf = pd.DataFrame(rows)
-    # 确保 rr_20 列存在，缺失值填充为 -inf 以便排序
-    if "rr_20" not in rdf.columns:
-        rdf["rr_20"] = -np.inf
-    rdf["rr_20"] = rdf["rr_20"].fillna(-np.inf)
+    rdf["rr_20"] = rdf.get("rr_20", pd.Series(dtype=float)).fillna(-np.inf)
     rdf = rdf.sort_values("rr_20", ascending=False)
-    if not rdf.empty:
-        print(rdf.head(12)[["dsa_thr", "bars_thr", "vwap_thr", "event_n", "ret_20", "mae_20", "wr_20", "rr_20"]].to_string(index=False))
-        rdf.to_csv(f"{OUT_DIR}/06_c2_param_scan.csv", index=False)
+    print(rdf.head(12)[["dsa_thr", "dist_thr", "bars_thr", "prev_down_min", "event_n", "ret_20", "mae_20", "wr_20", "rr_20"]].to_string(index=False))
+    rdf.to_csv(f"{OUT_DIR}/06_c2_param_scan.csv", index=False)
     return rdf
 
 
-def analyze_07_c2_time_slices(df: pd.DataFrame, dsa_thr: float, bars_thr: int, vwap_thr: Optional[float]) -> pd.DataFrame:
+def analyze_07_c2_time_slices(df: pd.DataFrame, strategy_name: str) -> pd.DataFrame:
     print("\n" + "=" * 70)
-    print("# 层次⑦: C2 时间切片验证")
+    print("# 层次⑦: Round2 时间切片验证")
     print("=" * 70)
-    events = slice_equal_time_buckets(build_c2_events(df, dsa_thr, bars_thr, vwap_thr), 3)
+    events = slice_equal_time_buckets(build_round2_events(df, strategy_name), 3)
     rows = []
     for name, g in events.groupby("time_slice", observed=True):
         row = {"time_slice": str(name), "start": g["datetime"].min().strftime("%Y-%m"), "end": g["datetime"].max().strftime("%Y-%m")}
         row.update(summarize_events(g, [20, 60]))
         rows.append(row)
-    rdf = pd.DataFrame(rows).sort_values("time_slice")
+    rdf = pd.DataFrame(rows).sort_values("time_slice") if rows else pd.DataFrame()
     if not rdf.empty:
         print(rdf[["time_slice", "start", "end", "n", "ret_20", "mae_20", "wr_20", "rr_20", "ret_60", "rr_60"]].to_string(index=False))
         rdf.to_csv(f"{OUT_DIR}/07_c2_time_slices.csv", index=False)
@@ -758,9 +865,7 @@ def main() -> None:
     parser.add_argument("--freq", default="d", help="频率 d/w/mo/60m等")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--analysis-mode", type=str, default="exploration_first", choices=["exploration_only", "exploration_first", "strategy_only"], help="exploration_only=只做全因子探索；exploration_first=先探索后策略；strategy_only=只做策略验证")
-    parser.add_argument("--c2-dsa-thr", type=float, default=0.35)
-    parser.add_argument("--c2-bars-thr", type=int, default=3)
-    parser.add_argument("--c2-vwap-thr", type=float, default=-1.0)
+    parser.add_argument("--base-strategy", type=str, default="A_low_repair", choices=list(ROUND2_STRATEGY_SPECS.keys()), help="时间切片与周线对比默认使用的基准策略")
     args = parser.parse_args()
 
     stocks = get_stock_pool(args.n_stocks, args.seed)
@@ -812,8 +917,8 @@ def main() -> None:
     if run_strategy:
         analyze_05_candidate_events(df)
         analyze_06_c2_param_scan(df)
-        base_events = build_c2_events(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr)
-        analyze_07_c2_time_slices(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr)
+        base_events = build_round2_events(df, args.base_strategy)
+        analyze_07_c2_time_slices(df, args.base_strategy)
         analyze_08_c2_weekly_compare(base_events)
 
     print(f"\n{'=' * 70}")
