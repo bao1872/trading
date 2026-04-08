@@ -199,6 +199,37 @@ def build_trade_safe_dsa_features(df: pd.DataFrame, lookback: int = 50, prefix: 
     return out
 
 
+def _rolling_true_streak(mask: pd.Series) -> pd.Series:
+    arr = mask.fillna(False).astype(bool).to_numpy()
+    out = np.zeros(len(arr), dtype=float)
+    streak = 0
+    for i, flag in enumerate(arr):
+        if flag:
+            streak += 1
+        else:
+            streak = 0
+        out[i] = streak
+    return pd.Series(out, index=mask.index)
+
+
+def add_rope_coil_features(df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame(index=df.index)
+    if "dist_to_rope_atr" not in df.columns:
+        return out
+    dist = df["dist_to_rope_atr"].astype(float)
+    abs_dist = dist.abs()
+    out["rope_near_core"] = (abs_dist <= 0.30).astype(float)
+    out["rope_near_soft"] = (abs_dist <= 0.50).astype(float)
+    out["rope_near_core_streak"] = _rolling_true_streak(abs_dist <= 0.30)
+    out["rope_near_soft_streak"] = _rolling_true_streak(abs_dist <= 0.50)
+    out["rope_near_soft_ratio_5"] = (abs_dist <= 0.50).rolling(5, min_periods=1).mean()
+    out["rope_near_soft_ratio_8"] = (abs_dist <= 0.50).rolling(8, min_periods=1).mean()
+    if "range_width_atr" in df.columns:
+        width = df["range_width_atr"].astype(float)
+        out["rope_coil_tight"] = (width <= width.rolling(120, min_periods=30).median()).astype(float)
+    return out
+
+
 def map_weekly_dsa_confirmed_to_daily(daily: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(index=daily.index)
     wk = aggregate_weekly_strict(daily)
@@ -250,10 +281,11 @@ def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
     dsa_trade = build_trade_safe_dsa_features(d, lookback=50)
     rope_df = compute_atr_rope(d, RopeConfig(length=14, multi=1.5))
     bb_df = compute_bollinger(d, length=20, mult=2.0, pct_lookback=120)
+    rope_coil_df = add_rope_coil_features(rope_df)
     weekly_confirmed = map_weekly_dsa_confirmed_to_daily(d)
     weekly_trade = map_weekly_dsa_trade_to_daily(d)
     merged = pd.concat(
-        [d, dsa_confirmed, dsa_trade, rope_df.drop(columns=d.columns, errors="ignore"), bb_df.drop(columns=d.columns, errors="ignore"), weekly_confirmed, weekly_trade],
+        [d, dsa_confirmed, dsa_trade, rope_df.drop(columns=d.columns, errors="ignore"), bb_df.drop(columns=d.columns, errors="ignore"), rope_coil_df, weekly_confirmed, weekly_trade],
         axis=1,
     )
     return merged
@@ -271,7 +303,8 @@ def add_forward_returns(df: pd.DataFrame, windows: Sequence[int] = RET_WINDOWS) 
             entry = close[i]
             fut[i] = (close[i + w] - entry) / entry
             future_low = np.nanmin(low[i + 1: i + w + 1])
-            mae[i] = (future_low - entry) / entry
+            mae_raw = (future_low - entry) / entry
+            mae[i] = min(0.0, mae_raw)
         out[f"ret_{w}"] = fut
         out[f"max_dd_{w}"] = mae
         out[f"win_{w}"] = (out[f"ret_{w}"] > 0).astype(float)
@@ -289,6 +322,7 @@ FACTOR_COLS = [
     # Rope
     "rope_dir", "dist_to_rope_atr", "rope_slope_atr_5", "is_consolidating", "bars_since_dir_change",
     "range_break_up", "range_break_up_strength", "range_width_atr", "channel_pos_01", "range_pos_01", "rope_pivot_pos_01",
+    "rope_near_core", "rope_near_soft", "rope_near_core_streak", "rope_near_soft_streak", "rope_near_soft_ratio_5", "rope_near_soft_ratio_8", "rope_coil_tight",
     # BB
     "bb_pos_01", "bb_width_norm", "bb_width_percentile", "bb_width_change_5", "bb_expanding", "bb_contracting",
     "bb_expand_streak", "bb_contract_streak",
@@ -312,6 +346,7 @@ FACTOR_GROUPS = {
     "ROPE": [
         "rope_dir", "dist_to_rope_atr", "rope_slope_atr_5", "is_consolidating", "bars_since_dir_change",
         "range_break_up", "range_break_up_strength", "range_width_atr", "channel_pos_01", "range_pos_01", "rope_pivot_pos_01",
+        "rope_near_core", "rope_near_soft", "rope_near_core_streak", "rope_near_soft_streak", "rope_near_soft_ratio_5", "rope_near_soft_ratio_8", "rope_coil_tight",
     ],
     "BB": [
         "bb_pos_01", "bb_width_norm", "bb_width_percentile", "bb_width_change_5", "bb_expanding", "bb_contracting", "bb_expand_streak", "bb_contract_streak",
@@ -326,7 +361,7 @@ for c in [
 ]:
     FACTOR_USAGE[c] = "research"
 DISCRETE_COLS = [
-    "rope_dir", "is_consolidating", "range_break_up", "bb_expanding", "bb_contracting",
+    "rope_dir", "is_consolidating", "range_break_up", "bb_expanding", "bb_contracting", "rope_near_core", "rope_near_soft", "rope_coil_tight",
     "w_DSA_DIR", "dsa_trade_breakout_20", "dsa_trade_breakdown_20", "w_factor_available",
 ]
 CONTINUOUS_COLS = [c for c in FACTOR_COLS if c not in DISCRETE_COLS]
@@ -606,6 +641,7 @@ ROUND2_TRADE_CANDIDATES = [
     "dsa_trade_pos_01", "dsa_trade_dist_to_low_01", "dist_to_rope_atr", "bb_pos_01",
     "rope_dir", "bars_since_dir_change", "rope_slope_atr_5", "range_break_up",
     "prev_confirmed_down_bars", "current_run_bars",
+    "rope_near_core_streak", "rope_near_soft_streak", "rope_near_soft_ratio_5", "rope_near_soft_ratio_8",
 ]
 
 ROUND2_STRATEGY_SPECS: Dict[str, Dict[str, object]] = {
@@ -646,16 +682,36 @@ ROUND2_STRATEGY_SPECS: Dict[str, Dict[str, object]] = {
         "range_break_up": 1,
     },
     "E_rope_coil_launch": {
-        "desc": "Rope贴线蓄势后启动",
+        "desc": "Rope贴线蓄势后启动（增强版）",
         "dsa_thr": None,
         "dist_min": -1.0,
         "dist_max": 0.2,
-        "bars_thr": 8,
+        "bars_thr": 5,
         "prev_down_min": None,
         "need_rope_up": True,
         "slope_min": 0.0,
         "bb_pos_max": 0.5,
         "range_break_up_or_bb_expand": True,
+        "rope_near_soft_streak_min": 3,
+        "rope_near_soft_ratio_5_min": 0.6,
+        "bb_width_percentile_max": 0.4,
+        "rope_coil_tight": 1,
+    },
+    "F_rope_coil_launch_strict": {
+        "desc": "更严格的贴Rope压缩后启动",
+        "dsa_thr": None,
+        "dist_min": -0.8,
+        "dist_max": 0.15,
+        "bars_thr": 3,
+        "prev_down_min": None,
+        "need_rope_up": True,
+        "slope_min": 0.0,
+        "bb_pos_max": 0.45,
+        "range_break_up_or_bb_expand": True,
+        "rope_near_core_streak_min": 2,
+        "rope_near_soft_ratio_8_min": 0.75,
+        "bb_width_percentile_max": 0.3,
+        "rope_coil_tight": 1,
     },
 }
 
@@ -671,6 +727,7 @@ def build_round2_events(df: pd.DataFrame, strategy_name: str, cooldown: int = EV
         "dsa_trade_pos_01", "dsa_trade_dist_to_low_01", "dist_to_rope_atr", "bb_pos_01",
         "rope_dir", "bars_since_dir_change", "rope_slope_atr_5", "range_break_up", "bb_expanding",
         "prev_confirmed_down_bars", "current_run_bars",
+        "rope_near_core", "rope_near_soft", "rope_near_core_streak", "rope_near_soft_streak", "rope_near_soft_ratio_5", "rope_near_soft_ratio_8", "rope_coil_tight", "bb_width_percentile",
         "w_DSA_DIR", "w_dsa_confirmed_pivot_pos_01", "w_dsa_trade_pos_01", "w_dsa_signed_vwap_dev_pct", "w_factor_available", "w_sample_count",
     ] + [f"ret_{w}" for w in [20, 40, 60]] + [f"max_dd_{w}" for w in [20, 40, 60]] + [f"win_{w}" for w in [20, 40, 60]]
     need = [c for c in need if c in df.columns]
@@ -714,6 +771,23 @@ def build_round2_events(df: pd.DataFrame, strategy_name: str, cooldown: int = EV
         if "bb_expanding" in sub.columns:
             cond |= sub["bb_expanding"] == 1
         mask &= cond
+    rope_near_core_streak_min = spec.get("rope_near_core_streak_min")
+    if rope_near_core_streak_min is not None and "rope_near_core_streak" in sub.columns:
+        mask &= sub["rope_near_core_streak"] >= float(rope_near_core_streak_min)
+    rope_near_soft_streak_min = spec.get("rope_near_soft_streak_min")
+    if rope_near_soft_streak_min is not None and "rope_near_soft_streak" in sub.columns:
+        mask &= sub["rope_near_soft_streak"] >= float(rope_near_soft_streak_min)
+    rope_near_soft_ratio_5_min = spec.get("rope_near_soft_ratio_5_min")
+    if rope_near_soft_ratio_5_min is not None and "rope_near_soft_ratio_5" in sub.columns:
+        mask &= sub["rope_near_soft_ratio_5"] >= float(rope_near_soft_ratio_5_min)
+    rope_near_soft_ratio_8_min = spec.get("rope_near_soft_ratio_8_min")
+    if rope_near_soft_ratio_8_min is not None and "rope_near_soft_ratio_8" in sub.columns:
+        mask &= sub["rope_near_soft_ratio_8"] >= float(rope_near_soft_ratio_8_min)
+    bb_width_percentile_max = spec.get("bb_width_percentile_max")
+    if bb_width_percentile_max is not None and "bb_width_percentile" in sub.columns:
+        mask &= sub["bb_width_percentile"] <= float(bb_width_percentile_max)
+    if spec.get("rope_coil_tight") is not None and "rope_coil_tight" in sub.columns:
+        mask &= sub["rope_coil_tight"] == float(spec["rope_coil_tight"])
     events = dedup_events(sub[mask].copy(), cooldown)
     for w in [20, 40, 60]:
         if f"ret_{w}" in events.columns:
@@ -770,29 +844,87 @@ def analyze_05_candidate_events(df: pd.DataFrame) -> pd.DataFrame:
     return rdf
 
 
-def analyze_06_c2_param_scan(df: pd.DataFrame) -> pd.DataFrame:
+def analyze_06_long_down_repair_scan(df: pd.DataFrame) -> pd.DataFrame:
     print("\n" + "=" * 70)
-    print("# 层次⑥: Round2 基准策略邻域参数扫描")
+    print("# 层次⑥: C_long_down_repair 主线参数扫描")
     print("=" * 70)
     rows = []
-    for dsa_thr in [0.30, 0.35, 0.40]:
-        for dist_thr in [-1.0, -0.8, -0.5]:
-            for bars_thr in [5, 8, 10]:
-                for prev_down_min in [10, 20, 30]:
-                    events = build_round2_events(df, "A_low_repair", override={"dsa_thr": dsa_thr, "dist_thr": dist_thr, "bars_thr": bars_thr, "prev_down_min": prev_down_min})
+    for dsa_thr in [0.25, 0.30, 0.35, 0.40]:
+        for prev_down_min in [10, 15, 20, 30]:
+            for current_run_max in [5, 8, 10, 15]:
+                for dist_mode in ["le_-1.0", "le_-0.5", "between_-1_0", "none"]:
+                    override = {
+                        "dsa_thr": dsa_thr,
+                        "prev_down_min": prev_down_min,
+                        "current_run_max": current_run_max,
+                        "bars_thr": 8,
+                        "need_rope_up": True,
+                    }
+                    if dist_mode == "le_-1.0":
+                        override.update({"dist_thr": -1.0, "dist_min": None, "dist_max": None})
+                    elif dist_mode == "le_-0.5":
+                        override.update({"dist_thr": -0.5, "dist_min": None, "dist_max": None})
+                    elif dist_mode == "between_-1_0":
+                        override.update({"dist_thr": None, "dist_min": -1.0, "dist_max": 0.0})
+                    else:
+                        override.update({"dist_thr": None, "dist_min": None, "dist_max": None})
+                    events = build_round2_events(df, "C_long_down_repair", override=override)
                     if len(events) < 20:
                         continue
-                    row = {"dsa_thr": dsa_thr, "dist_thr": dist_thr, "bars_thr": bars_thr, "prev_down_min": prev_down_min, "event_n": len(events)}
+                    row = {
+                        "dsa_thr": dsa_thr,
+                        "prev_down_min": prev_down_min,
+                        "current_run_max": current_run_max,
+                        "dist_mode": dist_mode,
+                        "event_n": len(events),
+                    }
                     row.update(summarize_events(events, [20, 40, 60]))
                     rows.append(row)
     if not rows:
-        print("  无足够事件，跳过参数扫描")
+        print("  无足够事件，跳过主线参数扫描")
         return pd.DataFrame()
     rdf = pd.DataFrame(rows)
     rdf["rr_20"] = rdf.get("rr_20", pd.Series(dtype=float)).fillna(-np.inf)
-    rdf = rdf.sort_values("rr_20", ascending=False)
-    print(rdf.head(12)[["dsa_thr", "dist_thr", "bars_thr", "prev_down_min", "event_n", "ret_20", "mae_20", "wr_20", "rr_20"]].to_string(index=False))
-    rdf.to_csv(f"{OUT_DIR}/06_c2_param_scan.csv", index=False)
+    rdf = rdf.sort_values(["rr_20", "event_n"], ascending=[False, False])
+    print(rdf.head(12)[["dsa_thr", "prev_down_min", "current_run_max", "dist_mode", "event_n", "ret_20", "mae_20", "wr_20", "rr_20"]].to_string(index=False))
+    rdf.to_csv(f"{OUT_DIR}/06_long_down_repair_scan.csv", index=False)
+    return rdf
+
+
+def analyze_06b_rope_coil_scan(df: pd.DataFrame) -> pd.DataFrame:
+    print("\n" + "=" * 70)
+    print("# 层次⑥B: E/F Rope贴线蓄势参数扫描")
+    print("=" * 70)
+    rows = []
+    for strategy_name in ["E_rope_coil_launch", "F_rope_coil_launch_strict"]:
+        for soft_streak in [2, 3, 4]:
+            for ratio5 in [0.6, 0.8]:
+                for bb_width_max in [0.3, 0.4, 0.5]:
+                    override = {
+                        "rope_near_soft_streak_min": soft_streak,
+                        "rope_near_soft_ratio_5_min": ratio5,
+                        "bb_width_percentile_max": bb_width_max,
+                    }
+                    events = build_round2_events(df, strategy_name, override=override)
+                    if len(events) < 20:
+                        continue
+                    row = {
+                        "strategy": strategy_name,
+                        "soft_streak_min": soft_streak,
+                        "soft_ratio5_min": ratio5,
+                        "bb_width_max": bb_width_max,
+                        "event_n": len(events),
+                    }
+                    row.update(summarize_events(events, [20, 40, 60]))
+                    rows.append(row)
+    if not rows:
+        print("  无足够事件，跳过Rope贴线扫描")
+        return pd.DataFrame()
+    rdf = pd.DataFrame(rows)
+    rdf["rr_20"] = rdf.get("rr_20", pd.Series(dtype=float)).fillna(-np.inf)
+    rdf = rdf.sort_values(["rr_20", "event_n"], ascending=[False, False])
+    print(rdf.head(12)[["strategy", "soft_streak_min", "soft_ratio5_min", "bb_width_max", "event_n", "ret_20", "mae_20", "wr_20", "rr_20"]].to_string(index=False))
+    rdf.to_csv(f"{OUT_DIR}/06b_rope_coil_scan.csv", index=False)
     return rdf
 
 
@@ -916,7 +1048,8 @@ def main() -> None:
 
     if run_strategy:
         analyze_05_candidate_events(df)
-        analyze_06_c2_param_scan(df)
+        analyze_06_long_down_repair_scan(df)
+        analyze_06b_rope_coil_scan(df)
         base_events = build_round2_events(df, args.base_strategy)
         analyze_07_c2_time_slices(df, args.base_strategy)
         analyze_08_c2_weekly_compare(base_events)
