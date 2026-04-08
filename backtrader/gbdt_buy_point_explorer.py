@@ -900,6 +900,270 @@ def build_stability_slices(events: pd.DataFrame, scan_df: pd.DataFrame) -> pd.Da
         rdf.to_csv(f"{OUT_DIR}/10_rule_stability_slices.csv", index=False)
     return rdf
 
+
+@dataclass
+class StageSpec:
+    name: str
+    ret5_min: Optional[float] = None
+    ret5_max: Optional[float] = None
+
+
+@dataclass
+class EnvGateSpec:
+    name: str
+    trend_min: Optional[float] = None
+    weekly_dev_min: Optional[float] = None
+    trend_gap_min: Optional[float] = None
+
+
+@dataclass
+class FixedRuleSpec:
+    name: str = "fixed_rule_v1"
+    dsa_trade_pos_max: float = 0.40
+    dsa_confirmed_pos_max: float = 0.34
+    prev_down_min: float = 46.0
+    prev_down_max: float = 76.0
+    rope_dir_required: int = 1
+    bars_since_max: float = 8.0
+    dsa_width_max: float = 0.28
+    weekly_dev_min: float = -2.3
+    trend_score_min: float = 0.68
+    top_n_per_month: int = 8
+
+
+def filter_stage_events(events: pd.DataFrame, spec: StageSpec) -> pd.DataFrame:
+    if events.empty:
+        return events.copy()
+    sub = events.copy()
+    if "ret_5" in sub.columns:
+        s = safe_numeric(sub["ret_5"])
+        if spec.ret5_min is not None:
+            sub = sub[s >= float(spec.ret5_min)]
+            s = safe_numeric(sub["ret_5"])
+        if spec.ret5_max is not None:
+            sub = sub[s < float(spec.ret5_max)]
+    return dedup_events(sub)
+
+
+def filter_env_gate(events: pd.DataFrame, spec: EnvGateSpec) -> pd.DataFrame:
+    if events.empty:
+        return events.copy()
+    sub = events.copy()
+    cond = pd.Series(True, index=sub.index)
+    if spec.trend_min is not None and "score_trend_total" in sub.columns:
+        cond &= safe_numeric(sub["score_trend_total"]).fillna(-99) >= float(spec.trend_min)
+    if spec.weekly_dev_min is not None and "w_dsa_signed_vwap_dev_pct" in sub.columns:
+        cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= float(spec.weekly_dev_min)
+    if spec.trend_gap_min is not None and "trend_gap_10_20" in sub.columns:
+        cond &= safe_numeric(sub["trend_gap_10_20"]).fillna(-99) >= float(spec.trend_gap_min)
+    return dedup_events(sub[cond].copy())
+
+
+def build_stage_split_summary(events: pd.DataFrame) -> pd.DataFrame:
+    rows: List[Dict[str, object]] = []
+    stage_specs = [
+        StageSpec(name="all_candidate", ret5_min=None, ret5_max=None),
+        StageSpec(name="pure_compression", ret5_min=None, ret5_max=0.02),
+        StageSpec(name="launch_confirmation", ret5_min=0.02, ret5_max=None),
+    ]
+    env_specs = [
+        EnvGateSpec(name="no_env_gate", trend_min=None, weekly_dev_min=None, trend_gap_min=None),
+        EnvGateSpec(name="with_env_gate", trend_min=0.68, weekly_dev_min=-2.3, trend_gap_min=0.0),
+    ]
+    for stage in stage_specs:
+        stage_df = filter_stage_events(events, stage)
+        for env in env_specs:
+            gated = filter_env_gate(stage_df, env)
+            stat = summarize_events(gated, [20, 40, 60])
+            rows.append({
+                "stage_name": stage.name,
+                "env_gate": env.name,
+                "stock_n": int(gated["symbol"].nunique()) if not gated.empty and "symbol" in gated.columns else 0,
+                **stat,
+            })
+    rdf = pd.DataFrame(rows)
+    if not rdf.empty:
+        rdf.to_csv(f"{OUT_DIR}/11_stage_split_summary.csv", index=False)
+    return rdf
+
+
+def build_env_gate_comparison(events: pd.DataFrame) -> pd.DataFrame:
+    rows: List[Dict[str, object]] = []
+    stage_specs = [
+        StageSpec(name="pure_compression", ret5_min=None, ret5_max=0.02),
+        StageSpec(name="launch_confirmation", ret5_min=0.02, ret5_max=None),
+    ]
+    env_specs = [
+        EnvGateSpec(name="base", trend_min=None, weekly_dev_min=None, trend_gap_min=None),
+        EnvGateSpec(name="trend_only", trend_min=0.68, weekly_dev_min=None, trend_gap_min=None),
+        EnvGateSpec(name="weekly_only", trend_min=None, weekly_dev_min=-2.3, trend_gap_min=None),
+        EnvGateSpec(name="trend_gap_only", trend_min=None, weekly_dev_min=None, trend_gap_min=0.0),
+        EnvGateSpec(name="full_gate", trend_min=0.68, weekly_dev_min=-2.3, trend_gap_min=0.0),
+    ]
+    for stage in stage_specs:
+        stage_df = filter_stage_events(events, stage)
+        for env in env_specs:
+            sub = filter_env_gate(stage_df, env)
+            stat = summarize_events(sub, [20, 40, 60])
+            rows.append({
+                "stage_name": stage.name,
+                "gate_name": env.name,
+                "stock_n": int(sub["symbol"].nunique()) if not sub.empty and "symbol" in sub.columns else 0,
+                **stat,
+            })
+    rdf = pd.DataFrame(rows)
+    if not rdf.empty:
+        rdf["coverage_vs_candidates"] = rdf["n"] / max(len(events), 1)
+        rdf.to_csv(f"{OUT_DIR}/12_env_gate_comparison.csv", index=False)
+    return rdf
+
+
+def apply_fixed_rule(events: pd.DataFrame, rule: FixedRuleSpec, stage_name: str) -> pd.DataFrame:
+    if events.empty:
+        return events.copy()
+    sub = events.copy()
+    if stage_name == "pure_compression" and "ret_5" in sub.columns:
+        sub = sub[safe_numeric(sub["ret_5"]) < 0.02]
+    elif stage_name == "launch_confirmation" and "ret_5" in sub.columns:
+        sub = sub[safe_numeric(sub["ret_5"]) >= 0.02]
+    if "dsa_trade_pos_01" in sub.columns:
+        sub = sub[safe_numeric(sub["dsa_trade_pos_01"]) <= rule.dsa_trade_pos_max]
+    if "dsa_confirmed_pivot_pos_01" in sub.columns:
+        sub = sub[safe_numeric(sub["dsa_confirmed_pivot_pos_01"]).fillna(1) <= rule.dsa_confirmed_pos_max]
+    if "prev_confirmed_down_bars" in sub.columns:
+        prev_down = safe_numeric(sub["prev_confirmed_down_bars"])
+        sub = sub[(prev_down >= rule.prev_down_min) & (prev_down <= rule.prev_down_max)]
+    if "rope_dir" in sub.columns:
+        sub = sub[safe_numeric(sub["rope_dir"]).fillna(0) == rule.rope_dir_required]
+    if "bars_since_dir_change" in sub.columns:
+        sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= rule.bars_since_max]
+    if "dsa_trade_range_width_pct" in sub.columns:
+        sub = sub[safe_numeric(sub["dsa_trade_range_width_pct"]).fillna(99) <= rule.dsa_width_max]
+    if "w_dsa_signed_vwap_dev_pct" in sub.columns:
+        sub = sub[safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= rule.weekly_dev_min]
+    if "score_trend_total" in sub.columns:
+        sub = sub[safe_numeric(sub["score_trend_total"]).fillna(-99) >= rule.trend_score_min]
+    if sub.empty:
+        return sub.copy()
+    sub = dedup_events(sub)
+    return sub
+
+
+def add_soft_ranking_score(sub: pd.DataFrame) -> pd.DataFrame:
+    out = sub.copy()
+    score_parts = pd.DataFrame(index=out.index)
+    score_parts["ret5"] = normalize_01(safe_numeric(out.get("ret_5", pd.Series(index=out.index))), reverse=False)
+    score_parts["confirmed_low"] = normalize_01(safe_numeric(out.get("dsa_confirmed_pivot_pos_01", pd.Series(index=out.index))), reverse=True)
+    score_parts["trend"] = normalize_01(safe_numeric(out.get("score_trend_total", pd.Series(index=out.index))), reverse=False)
+    prev_down = safe_numeric(out.get("prev_confirmed_down_bars", pd.Series(index=out.index)))
+    center_dist = (prev_down - 61.0).abs()
+    score_parts["prev_down_mid"] = normalize_01(center_dist, reverse=True)
+    score_parts["weekly_dev"] = normalize_01(safe_numeric(out.get("w_dsa_signed_vwap_dev_pct", pd.Series(index=out.index))), reverse=False)
+    out["soft_rank_score"] = pd.concat([
+        0.32 * score_parts["ret5"],
+        0.22 * score_parts["confirmed_low"],
+        0.22 * score_parts["trend"],
+        0.12 * score_parts["prev_down_mid"],
+        0.12 * score_parts["weekly_dev"],
+    ], axis=1).sum(axis=1)
+    return out
+
+
+def build_fixed_rule_ranked_results(events: pd.DataFrame, top_k_export: int = 300) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if events.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    rows: List[Dict[str, object]] = []
+    export_frames: List[pd.DataFrame] = []
+    rules = [
+        FixedRuleSpec(name="fixed_rule_v1", top_n_per_month=8),
+        FixedRuleSpec(name="fixed_rule_v1_top5", top_n_per_month=5),
+        FixedRuleSpec(name="fixed_rule_v1_top10", top_n_per_month=10),
+    ]
+    for stage_name in ["pure_compression", "launch_confirmation"]:
+        for rule in rules:
+            sub = apply_fixed_rule(events, rule, stage_name)
+            if sub.empty:
+                continue
+            sub = add_soft_ranking_score(sub)
+            if "year_month" in sub.columns:
+                ranked = sub.sort_values(["year_month", "soft_rank_score", "ret_5"], ascending=[True, False, False]).copy()
+                ranked["month_pick_rank"] = ranked.groupby("year_month")["soft_rank_score"].rank(method="first", ascending=False)
+                picked = ranked[ranked["month_pick_rank"] <= rule.top_n_per_month].copy()
+            else:
+                ranked = sub.sort_values(["soft_rank_score", "ret_5"], ascending=[False, False]).copy()
+                ranked["month_pick_rank"] = np.arange(len(ranked)) + 1
+                picked = ranked.head(rule.top_n_per_month).copy()
+            picked = dedup_events(picked)
+            if len(picked) < 12:
+                continue
+            stat = summarize_events(picked, [20, 40, 60])
+            rows.append({
+                "stage_name": stage_name,
+                "rule_name": rule.name,
+                "top_n_per_month": rule.top_n_per_month,
+                "stock_n": int(picked["symbol"].nunique()) if "symbol" in picked.columns else 0,
+                "avg_soft_rank_score": round(float(safe_numeric(picked["soft_rank_score"]).mean()), 6),
+                **stat,
+            })
+            keep_cols = [c for c in [
+                "symbol", "datetime", "year_month", "close", "ret_5", "ret_20", "ret_40", "ret_60", "max_dd_20", "max_dd_40", "max_dd_60",
+                "rr_20", "dsa_trade_pos_01", "dsa_confirmed_pivot_pos_01", "prev_confirmed_down_bars", "bars_since_dir_change",
+                "dsa_trade_range_width_pct", "w_dsa_signed_vwap_dev_pct", "score_trend_total", "trend_gap_10_20", "soft_rank_score", "month_pick_rank"
+            ] if c in picked.columns]
+            tmp = picked[keep_cols].copy()
+            tmp["stage_name"] = stage_name
+            tmp["rule_name"] = rule.name
+            export_frames.append(tmp)
+    scan_df = pd.DataFrame(rows).sort_values(["rr_20", "ret_20", "wr_20", "n"], ascending=[False, False, False, False]).reset_index(drop=True) if rows else pd.DataFrame()
+    top_df = pd.concat(export_frames, ignore_index=True).sort_values(["stage_name", "rule_name", "datetime", "month_pick_rank"]).head(top_k_export) if export_frames else pd.DataFrame()
+    if not scan_df.empty:
+        scan_df.to_csv(f"{OUT_DIR}/13_fixed_rule_ranked_scan.csv", index=False)
+    if not top_df.empty:
+        top_df.to_csv(f"{OUT_DIR}/13b_fixed_rule_top_events.csv", index=False)
+    return scan_df, top_df
+
+
+def build_fixed_rule_stability(events: pd.DataFrame, fixed_scan_df: pd.DataFrame) -> pd.DataFrame:
+    if events.empty or fixed_scan_df.empty:
+        return pd.DataFrame()
+    rows: List[Dict[str, object]] = []
+    work = events.copy()
+    work["turnover_proxy"] = safe_numeric(work.get("close", pd.Series(index=work.index))) * safe_numeric(work.get("vol", pd.Series(index=work.index)))
+    work["year"] = pd.to_datetime(work["datetime"]).dt.year if "datetime" in work.columns else np.nan
+    if work["turnover_proxy"].notna().sum() >= 30:
+        try:
+            work["liquidity_bucket"] = pd.qcut(work["turnover_proxy"], q=3, labels=["small", "mid", "large"], duplicates="drop")
+        except Exception:
+            work["liquidity_bucket"] = "all"
+    else:
+        work["liquidity_bucket"] = "all"
+    med = float(work["ret_20"].median()) if "ret_20" in work.columns and work["ret_20"].notna().sum() >= 30 else 0.0
+    work["env_bucket"] = np.where(safe_numeric(work.get("ret_20", pd.Series(index=work.index))).fillna(-99) >= med, "better", "worse")
+    for _, row in fixed_scan_df.head(4).iterrows():
+        stage_name = str(row["stage_name"])
+        rule = FixedRuleSpec(name=str(row["rule_name"]), top_n_per_month=int(row.get("top_n_per_month", 8)))
+        sub = apply_fixed_rule(work, rule, stage_name)
+        if sub.empty:
+            continue
+        sub = add_soft_ranking_score(sub)
+        if "year_month" in sub.columns:
+            sub = sub.sort_values(["year_month", "soft_rank_score"], ascending=[True, False]).copy()
+            sub["month_pick_rank"] = sub.groupby("year_month")["soft_rank_score"].rank(method="first", ascending=False)
+            sub = sub[sub["month_pick_rank"] <= rule.top_n_per_month].copy()
+        sub = dedup_events(sub)
+        if len(sub) < 12:
+            continue
+        for dim in ["year", "liquidity_bucket", "env_bucket"]:
+            for key, g in sub.groupby(dim, dropna=False):
+                if len(g) < 8:
+                    continue
+                stat = summarize_events(g, [20, 40, 60])
+                rows.append({"stage_name": stage_name, "rule_name": rule.name, "top_n_per_month": rule.top_n_per_month, "slice_dim": dim, "slice_key": str(key), **stat})
+    rdf = pd.DataFrame(rows)
+    if not rdf.empty:
+        rdf.to_csv(f"{OUT_DIR}/14_fixed_rule_stability_slices.csv", index=False)
+    return rdf
+
 def analyze_00_dataset_summary(df: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     rows = [{"section": "global", "sample_n": int(len(df)), "stock_n": int(df["symbol"].nunique()), "ret20_mean": round(float(df["ret_20"].mean()), 5), "dd20_mean": round(float(df["max_dd_20"].mean()), 5), "wr20_mean": round(float(df["win_20"].mean()), 4), "rr20_mean": round(rr_from_ret_dd(df["ret_20"].mean(), df["max_dd_20"].mean()), 3)}]
     if not events.empty:
