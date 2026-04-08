@@ -1,2 +1,0 @@
-symbol,trade_n,ret_mean,ret_median,mae_mean,wr,rr_mean,strategy_dsa_thr,strategy_vwap_thr,strategy_bars_thr,strategy_weekly_pos_thr,strategy_hold_bars,strategy_cooldown_bars,commission_rate,stamp_tax_rate,slippage_side
-603990.SH,8,0.052698431200606057,-0.04271893637589497,-0.059621540402693254,0.375,3.3610291363635136,0.3,-1.0,3,0.7,40,20,0.001,0.0005,0.001

@@ -1,5 +1,0 @@
-scene,task,target,n_samples,n_features,overall_ic,overall_rank_ic
-sceneA_T0_reg,regression,hold_ret,106412,21,0.024,0.019
-sceneB_T1_reg,regression,hold_ret_t1,106412,22,0.0168,0.0073
-sceneC_T0_cls,classification,win_label,107009,21,-0.0051,-0.0157
-sceneD_T1_cls,classification,win_label,107009,22,0.0117,-0.0155
