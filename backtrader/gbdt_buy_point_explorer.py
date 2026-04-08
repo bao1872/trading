@@ -39,9 +39,25 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import roc_auc_score
+
+try:
+    from xgboost import XGBClassifier, XGBRegressor  # type: ignore
+    HAS_XGBOOST = True
+except Exception:
+    XGBClassifier = None  # type: ignore
+    XGBRegressor = None  # type: ignore
+    HAS_XGBOOST = False
+
+try:
+    from lightgbm import LGBMClassifier, LGBMRegressor  # type: ignore
+    HAS_LIGHTGBM = True
+except Exception:
+    LGBMClassifier = None  # type: ignore
+    LGBMRegressor = None  # type: ignore
+    HAS_LIGHTGBM = False
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -506,6 +522,100 @@ def classification_score(y_true: pd.Series, y_prob: np.ndarray) -> Dict[str, flo
     return out
 
 
+def build_highperf_model(model_type: str, random_state: int = RANDOM_STATE):
+    """
+    高性能 GBDT 后端：优先 xgboost，其次 lightgbm，最后 sklearn HistGB。
+    返回 (backend_name, model)
+    """
+    if model_type == "reg":
+        if HAS_XGBOOST:
+            return "xgboost", XGBRegressor(
+                random_state=random_state,
+                n_estimators=400,
+                max_depth=4,
+                learning_rate=0.03,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_alpha=0.0,
+                reg_lambda=1.0,
+                min_child_weight=8,
+                objective="reg:squarederror",
+                tree_method="hist",
+                n_jobs=-1,
+            )
+        if HAS_LIGHTGBM:
+            return "lightgbm", LGBMRegressor(
+                random_state=random_state,
+                n_estimators=400,
+                learning_rate=0.03,
+                num_leaves=31,
+                max_depth=-1,
+                min_child_samples=20,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_alpha=0.0,
+                reg_lambda=1.0,
+                objective="regression",
+                n_jobs=-1,
+                verbosity=-1,
+            )
+        return "sklearn_histgb", HistGradientBoostingRegressor(
+            random_state=random_state,
+            learning_rate=0.03,
+            max_iter=400,
+            max_depth=4,
+            min_samples_leaf=20,
+            l2_regularization=1.0,
+            early_stopping=True,
+            validation_fraction=0.1,
+            n_iter_no_change=20,
+        )
+    else:
+        if HAS_XGBOOST:
+            return "xgboost", XGBClassifier(
+                random_state=random_state,
+                n_estimators=400,
+                max_depth=4,
+                learning_rate=0.03,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_alpha=0.0,
+                reg_lambda=1.0,
+                min_child_weight=8,
+                objective="binary:logistic",
+                eval_metric="auc",
+                tree_method="hist",
+                n_jobs=-1,
+            )
+        if HAS_LIGHTGBM:
+            return "lightgbm", LGBMClassifier(
+                random_state=random_state,
+                n_estimators=400,
+                learning_rate=0.03,
+                num_leaves=31,
+                max_depth=-1,
+                min_child_samples=20,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_alpha=0.0,
+                reg_lambda=1.0,
+                objective="binary",
+                n_jobs=-1,
+                verbosity=-1,
+            )
+        return "sklearn_histgb", HistGradientBoostingClassifier(
+            random_state=random_state,
+            learning_rate=0.03,
+            max_iter=400,
+            max_depth=4,
+            min_samples_leaf=20,
+            l2_regularization=1.0,
+            early_stopping=True,
+            validation_fraction=0.1,
+            n_iter_no_change=20,
+        )
+
+
 def collect_importance_rows(model_name: str, mode: str, fold_name: str, features: List[str], model, x_test: pd.DataFrame, y_test: pd.Series) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     base_importance = getattr(model, "feature_importances_", None)
@@ -543,20 +653,23 @@ def run_single_model(events: pd.DataFrame, features: Sequence[str], target_col: 
             continue
         y_train = train_df[target_col]
         y_test = test_df[target_col]
+        backend_name, model = build_highperf_model(model_type, random_state=RANDOM_STATE)
         if model_type == "reg":
-            model = GradientBoostingRegressor(random_state=RANDOM_STATE, learning_rate=0.05, n_estimators=250, max_depth=3, subsample=0.8, min_samples_leaf=20)
             model.fit(x_train, safe_numeric(y_train))
             y_pred = model.predict(x_test)
             score = regression_score(y_test, y_pred)
         else:
             if pd.Series(y_train).nunique() < 2 or pd.Series(y_test).nunique() < 1:
                 continue
-            model = GradientBoostingClassifier(random_state=RANDOM_STATE, learning_rate=0.05, n_estimators=250, max_depth=3, subsample=0.8, min_samples_leaf=20)
             model.fit(x_train, pd.Series(y_train).astype(int))
-            y_pred = model.predict_proba(x_test)[:, 1]
+            if hasattr(model, "predict_proba"):
+                y_pred = model.predict_proba(x_test)[:, 1]
+            else:
+                raw_pred = model.predict(x_test)
+                y_pred = np.asarray(raw_pred, dtype=float)
             score = classification_score(y_test, y_pred)
-        metrics_rows.append({"feature_mode": feature_mode, "target": target_col, "model_type": model_type, "fold": fold_name, "train_n": len(train_df), "test_n": len(test_df), **score})
-        importance_rows.extend(collect_importance_rows(f"{feature_mode}_{target_col}_{model_type}", feature_mode, fold_name, used_features, model, x_test, pd.Series(y_test).astype(int) if model_type == "clf" else safe_numeric(y_test)))
+        metrics_rows.append({"feature_mode": feature_mode, "target": target_col, "model_type": model_type, "model_backend": backend_name, "fold": fold_name, "train_n": len(train_df), "test_n": len(test_df), **score})
+        importance_rows.extend(collect_importance_rows(f"{feature_mode}_{target_col}_{model_type}_{backend_name}", feature_mode, fold_name, used_features, model, x_test, pd.Series(y_test).astype(int) if model_type == "clf" else safe_numeric(y_test)))
     return pd.DataFrame(metrics_rows), pd.DataFrame(importance_rows)
 
 
