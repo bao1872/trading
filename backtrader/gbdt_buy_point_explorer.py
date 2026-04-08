@@ -195,8 +195,9 @@ def get_cache_path(cache_dir: str, n_stocks: int, bars: int, freq: str, seed: in
 
 
 def cache_exists(cache_path: str) -> bool:
-    """检查缓存文件是否存在且有效"""
-    return os.path.exists(cache_path) and os.path.getsize(cache_path) > 0
+    """检查缓存文件是否存在且有效（检查parquet文件）"""
+    parquet_path = cache_path.replace('.pkl', '.parquet')
+    return os.path.exists(parquet_path) and os.path.getsize(parquet_path) > 0
 
 
 def save_cache(data: Dict, cache_path: str) -> None:
@@ -236,7 +237,7 @@ def load_cache(cache_path: str) -> Optional[Dict]:
         for symbol in combined_df['symbol'].unique():
             df = combined_df[combined_df['symbol'] == symbol].copy()
             df['datetime'] = pd.to_datetime(df['datetime'])
-            df = df.set_index('datetime')
+            # 不设置索引，保持datetime为列，与原始数据格式一致
             all_dfs.append(df)
 
         # 加载元数据
