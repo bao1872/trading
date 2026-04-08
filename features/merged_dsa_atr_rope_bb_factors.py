@@ -393,6 +393,10 @@ def compute_dsa(df: pd.DataFrame, cfg: DSAConfig) -> Tuple[pd.DataFrame, List[Di
     #    保持 HTML 输出层完全不改。
     hindsight_labels: List[Dict] = []
     hindsight_last_pivot_type = np.array([""] * n, dtype=object)
+    prev_confirmed_up_bars_arr = np.full(n, np.nan)
+    prev_confirmed_down_bars_arr = np.full(n, np.nan)
+    last_confirmed_run_bars_arr = np.full(n, np.nan)
+    current_run_bars_arr = np.full(n, np.nan)
     runs: List[Tuple[int, int, int]] = []
     if n > 0:
         run_start = 0
@@ -410,6 +414,9 @@ def compute_dsa(df: pd.DataFrame, cfg: DSAConfig) -> Tuple[pd.DataFrame, List[Di
     prev_hindsight_high = np.nan
     prev_hindsight_low = np.nan
     latest_hindsight_type = ""
+    latest_confirmed_up_bars = np.nan
+    latest_confirmed_down_bars = np.nan
+    latest_confirmed_run_bars = np.nan
     for st_run, ed_run, run_dir in runs:
         if st_run > ed_run:
             continue
@@ -447,8 +454,20 @@ def compute_dsa(df: pd.DataFrame, cfg: DSAConfig) -> Tuple[pd.DataFrame, List[Di
             })
             latest_hindsight_type = txt
 
+        run_bars = float(ed_run - st_run + 1)
+        current_run_bars_arr[st_run:ed_run + 1] = np.arange(1, ed_run - st_run + 2, dtype=float)
+        prev_confirmed_up_bars_arr[st_run:ed_run + 1] = latest_confirmed_up_bars
+        prev_confirmed_down_bars_arr[st_run:ed_run + 1] = latest_confirmed_down_bars
+        last_confirmed_run_bars_arr[st_run:ed_run + 1] = latest_confirmed_run_bars
+
         if latest_hindsight_type:
             hindsight_last_pivot_type[st_run:ed_run + 1] = latest_hindsight_type
+
+        if run_dir > 0:
+            latest_confirmed_up_bars = run_bars
+        else:
+            latest_confirmed_down_bars = run_bars
+        latest_confirmed_run_bars = run_bars
 
     # 关键：回填到原来的变量名，保持 build_figure() 完全不需要改。
     pivot_labels = hindsight_labels
@@ -508,6 +527,10 @@ def compute_dsa(df: pd.DataFrame, cfg: DSAConfig) -> Tuple[pd.DataFrame, List[Di
     out["trend_aligned_vwap_dev_pct"] = trend_aligned_vwap_dev_pct
     out["lh_hh_low_pos"] = lh_hh_low_pos
     out["last_pivot_type"] = last_pivot_type
+    out["prev_confirmed_up_bars"] = prev_confirmed_up_bars_arr
+    out["prev_confirmed_down_bars"] = prev_confirmed_down_bars_arr
+    out["last_confirmed_run_bars"] = last_confirmed_run_bars_arr
+    out["current_run_bars"] = current_run_bars_arr
     return out, pivot_labels, segments
 
 
