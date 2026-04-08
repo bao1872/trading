@@ -122,6 +122,10 @@ def normalize_score(series: pd.Series, reverse: bool = False, clip_q: Tuple[floa
     return 1.0 - z if reverse else z
 
 
+def ensure_factor_columns(df: pd.DataFrame, cols: Sequence[str]) -> List[str]:
+    return [c for c in cols if c in df.columns]
+
+
 # =========================
 # Data loaders
 # =========================
@@ -251,8 +255,156 @@ FACTOR_COLS = [
     "bb_expand_streak", "bb_contract_streak",
     "w_DSA_DIR", "w_dsa_pivot_pos_01", "w_signed_vwap_dev_pct",
 ]
+FACTOR_GROUPS = {
+    "DSA": [
+        "dsa_pivot_pos_01", "signed_vwap_dev_pct", "trend_aligned_vwap_dev_pct",
+        "lh_hh_low_pos", "bull_vwap_dev_pct", "bear_vwap_dev_pct",
+        "w_DSA_DIR", "w_dsa_pivot_pos_01", "w_signed_vwap_dev_pct",
+    ],
+    "ROPE": [
+        "rope_dir", "dist_to_rope_atr", "rope_slope_atr_5", "is_consolidating",
+        "bars_since_dir_change", "range_break_up", "range_break_up_strength",
+        "range_width_atr", "channel_pos_01", "range_pos_01", "rope_pivot_pos_01",
+    ],
+    "BB": [
+        "bb_pos_01", "bb_width_norm", "bb_width_percentile", "bb_width_change_5",
+        "bb_expanding", "bb_contracting", "bb_expand_streak", "bb_contract_streak",
+    ],
+}
 DISCRETE_COLS = ["rope_dir", "is_consolidating", "range_break_up", "bb_expanding", "bb_contracting", "w_DSA_DIR"]
 CONTINUOUS_COLS = [c for c in FACTOR_COLS if c not in DISCRETE_COLS]
+
+
+# =========================
+# Exploration-first analyses
+# =========================
+def analyze_00_factor_inventory(df: pd.DataFrame) -> pd.DataFrame:
+    print("\n" + "=" * 70)
+    print("# 层次⓪: 因子全景盘点")
+    print("=" * 70)
+    rows = []
+    for factor in FACTOR_COLS:
+        if factor not in df.columns:
+            continue
+        s = df[factor]
+        non_na = s.notna().sum()
+        rows.append({
+            "factor": factor,
+            "group": next((g for g, cols in FACTOR_GROUPS.items() if factor in cols), "OTHER"),
+            "dtype": "discrete" if factor in DISCRETE_COLS else "continuous",
+            "coverage": round(non_na / max(len(df), 1), 4),
+            "nunique": int(s.nunique(dropna=True)),
+            "mean": round(float(s.mean()), 6) if pd.api.types.is_numeric_dtype(s) and non_na else np.nan,
+            "std": round(float(s.std(ddof=0)), 6) if pd.api.types.is_numeric_dtype(s) and non_na else np.nan,
+        })
+    out = pd.DataFrame(rows).sort_values(["group", "dtype", "factor"])
+    if not out.empty:
+        print(out.to_string(index=False))
+        out.to_csv(f"{OUT_DIR}/00_factor_inventory.csv", index=False)
+    return out
+
+
+def analyze_01b_discrete_factor(df: pd.DataFrame) -> pd.DataFrame:
+    print("\n" + "=" * 70)
+    print("# 层次①B: 离散因子分组分析")
+    print("=" * 70)
+    rows = []
+    ret_cols = [f"ret_{w}" for w in RET_WINDOWS] + [f"max_dd_{w}" for w in RET_WINDOWS] + [f"win_{w}" for w in RET_WINDOWS]
+    for col in DISCRETE_COLS:
+        if col not in df.columns:
+            continue
+        sub = df[[col] + ret_cols].dropna()
+        if len(sub) < 100 or sub[col].nunique(dropna=True) <= 1:
+            continue
+        grp = sub.groupby(col, dropna=True).agg(
+            n=(col, "count"),
+            ret20=("ret_20", "mean"),
+            dd20=("max_dd_20", "mean"),
+            wr20=("win_20", "mean"),
+            ret40=("ret_40", "mean"),
+            dd40=("max_dd_40", "mean"),
+            wr40=("win_40", "mean"),
+        ).reset_index()
+        grp["rr20"] = grp.apply(lambda r: rr_from_ret_dd(r["ret20"], r["dd20"]), axis=1)
+        grp["rr40"] = grp.apply(lambda r: rr_from_ret_dd(r["ret40"], r["dd40"]), axis=1)
+        for _, r in grp.iterrows():
+            rows.append({
+                "factor": col,
+                "value": r[col],
+                "n": int(r["n"]),
+                "ret20": round(float(r["ret20"]), 5),
+                "dd20": round(float(r["dd20"]), 5),
+                "wr20": round(float(r["wr20"]), 4),
+                "rr20": round(float(r["rr20"]), 3) if pd.notna(r["rr20"]) else np.nan,
+                "ret40": round(float(r["ret40"]), 5),
+                "rr40": round(float(r["rr40"]), 3) if pd.notna(r["rr40"]) else np.nan,
+            })
+    out = pd.DataFrame(rows).sort_values(["factor", "rr20"], ascending=[True, False])
+    if not out.empty:
+        print(out.to_string(index=False))
+        out.to_csv(f"{OUT_DIR}/01b_discrete_factor.csv", index=False)
+    return out
+
+
+def analyze_03b_factor_pairs(df: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
+    print("\n" + "=" * 70)
+    print("# 层次③B: 全因子双因子组合扫描")
+    print("=" * 70)
+    usable = [c for c in CONTINUOUS_COLS if c in df.columns]
+    if len(usable) < 2:
+        return pd.DataFrame()
+    score_rows = []
+    for col in usable:
+        sub = df[[col, "ret_20"]].dropna()
+        if len(sub) < 200:
+            continue
+        rank_ic = sub[col].rank().corr(sub["ret_20"].rank())
+        score_rows.append((col, abs(rank_ic) if pd.notna(rank_ic) else 0.0))
+    top = [c for c, _ in sorted(score_rows, key=lambda x: x[1], reverse=True)[:top_n]]
+    rows = []
+    for i, a in enumerate(top):
+        for b in top[i + 1:]:
+            sub = df[[a, b, "ret_20", "max_dd_20", "win_20"]].dropna()
+            if len(sub) < 200:
+                continue
+            ma = sub[a] <= sub[a].median()
+            mb = sub[b] <= sub[b].median()
+            buckets = {
+                "LL": ma & mb,
+                "LH": ma & (~mb),
+                "HL": (~ma) & mb,
+                "HH": (~ma) & (~mb),
+            }
+            best_name = None
+            best_rr = -np.inf
+            best_row = None
+            for name, m in buckets.items():
+                g = sub[m]
+                if len(g) < 50:
+                    continue
+                ret = g["ret_20"].mean()
+                dd = g["max_dd_20"].mean()
+                rr = rr_from_ret_dd(ret, dd)
+                if pd.notna(rr) and rr > best_rr:
+                    best_rr = rr
+                    best_name = name
+                    best_row = {
+                        "factor_a": a,
+                        "factor_b": b,
+                        "best_bucket": name,
+                        "n": int(len(g)),
+                        "ret20": round(float(ret), 5),
+                        "dd20": round(float(dd), 5),
+                        "wr20": round(float(g["win_20"].mean()), 4),
+                        "rr20": round(float(rr), 3),
+                    }
+            if best_row is not None:
+                rows.append(best_row)
+    out = pd.DataFrame(rows).sort_values("rr20", ascending=False)
+    if not out.empty:
+        print(out.head(30).to_string(index=False))
+        out.to_csv(f"{OUT_DIR}/03b_factor_pairs.csv", index=False)
+    return out
 
 
 # =========================
@@ -1231,11 +1383,12 @@ def analyze_19_c2_rope_enhancement(
 # Main
 # =========================
 def main() -> None:
-    parser = argparse.ArgumentParser(description="买入点收益风险比探索（收敛验证版）")
+    parser = argparse.ArgumentParser(description="买入点收益风险比探索（全因子优先版）")
     parser.add_argument("--n-stocks", type=int, default=100, help="随机抽取股票数")
     parser.add_argument("--bars", type=int, default=800, help="每只股票K线数")
     parser.add_argument("--freq", default="d", help="频率 d/w/mo/60m等")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
+    parser.add_argument("--analysis-mode", type=str, default="exploration_first", choices=["exploration_only", "exploration_first", "strategy_only"], help="exploration_only=只做全因子探索；exploration_first=先探索后策略；strategy_only=只做策略验证")
     parser.add_argument("--c2-dsa-thr", type=float, default=0.35)
     parser.add_argument("--c2-bars-thr", type=int, default=3)
     parser.add_argument("--c2-vwap-thr", type=float, default=-1.0)
@@ -1248,6 +1401,7 @@ def main() -> None:
 
     stocks = get_stock_pool(args.n_stocks, args.seed)
     print(f"股票池抽取: {len(stocks)}只 (seed={args.seed})")
+    print(f"分析模式: {args.analysis_mode}")
 
     all_dfs: List[pd.DataFrame] = []
     for idx, code in enumerate(stocks):
@@ -1279,39 +1433,47 @@ def main() -> None:
         wr = df[f"win_{w}"].mean()
         print(f"  ret_{w}: 均值={ret:+.5f}, max_dd均值={dd:.5f}, 胜率={wr:.4f}, rr={rr_from_means(ret, dd):.3f}")
 
-    analyze_01_single_factor(df)
-    analyze_02_scenarios(df)
-    analyze_03_interaction(df)
-    analyze_04_rule_search(df)
-    analyze_05_candidate_events(df)
-    analyze_06_c2_param_scan(df)
-    analyze_07_c2_exit_compare(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr)
-    analyze_08_c2_time_slices(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr)
+    run_exploration = args.analysis_mode in {"exploration_only", "exploration_first"}
+    run_strategy = args.analysis_mode in {"strategy_only", "exploration_first"}
 
-    base_events = build_c2_events_base(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr, EVENT_DEDUP_BARS, args.c2_hold_bars)
-    stock_counts = sorted(set([100, 300, 500, 1000, args.n_stocks]))
-    analyze_09_c2_fixed_validation(df, base_events, stock_counts)
-    analyze_10_c2_local_grid(df)
-    analyze_11_c2_t3_regime_breakdown(base_events)
-    analyze_12_c2_execution_filter(base_events, args.max_signals_per_day, args.signal_rank_by)
-    analyze_13_c2_weekly_dsa_filter(base_events)
-    analyze_14_c2_weekly_filter_compare(base_events)
-    analyze_15_c2_execution_rank_compare(base_events, args.max_signals_per_day)
+    if run_exploration:
+        analyze_00_factor_inventory(df)
+        analyze_01_single_factor(df)
+        analyze_01b_discrete_factor(df)
+        analyze_02_scenarios(df)
+        analyze_03_interaction(df)
+        analyze_03b_factor_pairs(df)
+        analyze_04_rule_search(df)
 
-    # market regime from tushare; fail gracefully
-    try:
-        start_date = pd.to_datetime(df["datetime"]).min().strftime("%Y-%m-%d")
-        end_date = pd.to_datetime(df["datetime"]).max().strftime("%Y-%m-%d")
-        market_df = load_market_index_from_tushare(args.market_index_code, start_date, end_date, args.tushare_token)
-        market_feats = compute_market_regime_features(market_df)
-        market_events = merge_market_features_to_events(base_events, market_feats)
-        analyze_16_c2_market_regime_compare(base_events, market_events)
-    except Exception as e:
-        print(f"\n[WARN] 层次⑯ 跳过: {e}")
+    if run_strategy:
+        analyze_05_candidate_events(df)
+        analyze_06_c2_param_scan(df)
+        analyze_07_c2_exit_compare(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr)
+        analyze_08_c2_time_slices(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr)
 
-    analyze_17_c2_local_state_compare(base_events)
-    analyze_18_rope_coil_explosion(df)
-    analyze_19_c2_rope_enhancement(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr)
+        base_events = build_c2_events_base(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr, EVENT_DEDUP_BARS, args.c2_hold_bars)
+        stock_counts = sorted(set([100, 300, 500, 1000, args.n_stocks]))
+        analyze_09_c2_fixed_validation(df, base_events, stock_counts)
+        analyze_10_c2_local_grid(df)
+        analyze_11_c2_t3_regime_breakdown(base_events)
+        analyze_12_c2_execution_filter(base_events, args.max_signals_per_day, args.signal_rank_by)
+        analyze_13_c2_weekly_dsa_filter(base_events)
+        analyze_14_c2_weekly_filter_compare(base_events)
+        analyze_15_c2_execution_rank_compare(base_events, args.max_signals_per_day)
+
+        try:
+            start_date = pd.to_datetime(df["datetime"]).min().strftime("%Y-%m-%d")
+            end_date = pd.to_datetime(df["datetime"]).max().strftime("%Y-%m-%d")
+            market_df = load_market_index_from_tushare(args.market_index_code, start_date, end_date, args.tushare_token)
+            market_feats = compute_market_regime_features(market_df)
+            market_events = merge_market_features_to_events(base_events, market_feats)
+            analyze_16_c2_market_regime_compare(base_events, market_events)
+        except Exception as e:
+            print(f"\n[WARN] 层次⑯ 跳过: {e}")
+
+        analyze_17_c2_local_state_compare(base_events)
+        analyze_18_rope_coil_explosion(df)
+        analyze_19_c2_rope_enhancement(df, args.c2_dsa_thr, args.c2_bars_thr, args.c2_vwap_thr)
 
     print(f"\n{'='*70}")
     print(f"# 全部完成! 结果保存在 {OUT_DIR}/")
