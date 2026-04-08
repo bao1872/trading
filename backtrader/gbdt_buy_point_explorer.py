@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-基于 XGBoost Lite 的“压缩低位启动”规则实验脚本（轻量版）
+基于 GBDT 结果反推“压缩低位启动”规则的实验脚本（在 gbdt_buy_point_explorer.py 基础上扩展）
 
 Purpose
 - 保留原有框架：数据加载 → 因子计算 → forward returns → 候选事件池 → 报表输出
@@ -30,21 +30,21 @@ Outputs
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import sys
 import warnings
 from dataclasses import dataclass
+from datetime import datetime
 from itertools import product
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.inspection import permutation_importance
 from sklearn.metrics import roc_auc_score
-
-try:
-    from xgboost import XGBClassifier, XGBRegressor  # type: ignore
-except Exception as exc:
-    raise RuntimeError("缺少依赖 xgboost。请先安装，例如: pip install xgboost") from exc
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -181,6 +181,66 @@ def get_stock_pool(n: int = 100, seed: int = 42) -> List[str]:
     codes = df["ts_code"].tolist()
     rng = np.random.default_rng(seed)
     return rng.choice(codes, size=min(n, len(codes)), replace=False).tolist()
+
+
+# =========================
+# Data caching
+# =========================
+def get_cache_path(cache_dir: str, n_stocks: int, bars: int, freq: str, seed: int) -> str:
+    """生成缓存文件路径，基于参数生成唯一文件名"""
+    param_str = f"{n_stocks}_{bars}_{freq}_{seed}"
+    param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
+    cache_file = f"klines_{freq}_{bars}_{n_stocks}stocks_{param_hash}.pkl"
+    return os.path.join(cache_dir, cache_file)
+
+
+def cache_exists(cache_path: str) -> bool:
+    """检查缓存文件是否存在且有效"""
+    return os.path.exists(cache_path) and os.path.getsize(cache_path) > 0
+
+
+def save_cache(data: Dict, cache_path: str) -> None:
+    """保存数据到缓存文件"""
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    with open(cache_path, 'wb') as f:
+        import pickle
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def load_cache(cache_path: str) -> Optional[Dict]:
+    """从缓存文件加载数据"""
+    try:
+        with open(cache_path, 'rb') as f:
+            import pickle
+            return pickle.load(f)
+    except Exception as exc:
+        print(f"  [WARN] 缓存加载失败: {exc}")
+        return None
+
+
+def fetch_data_from_db(n_stocks: int, bars: int, freq: str, seed: int) -> List[pd.DataFrame]:
+    """从数据库获取所有股票数据"""
+    stocks = get_stock_pool(n_stocks, seed)
+    print(f"股票池抽取: {len(stocks)}只 (seed={seed})")
+
+    all_dfs: List[pd.DataFrame] = []
+    for idx, code in enumerate(stocks):
+        kline = load_kline(code, freq, bars)
+        if kline is None or len(kline) < 100:
+            continue
+        try:
+            fac = compute_factors(kline)
+            fac = add_forward_returns(fac, RET_WINDOWS)
+            fac["symbol"] = code
+            fac["datetime"] = fac.index
+            valid = fac.dropna(subset=["ret_20"])
+            if len(valid) > 50:
+                all_dfs.append(valid)
+                print(f"  [{idx + 1}/{len(stocks)}] {code}: {len(kline)}bars → {len(valid)}有效样本")
+        except Exception as exc:
+            print(f"  [{idx + 1}/{len(stocks)}] {code} 因子计算失败: {exc}")
+
+    return all_dfs
 
 
 # =========================
@@ -444,39 +504,37 @@ def build_neighbor_events(df: pd.DataFrame, spec: NeighborSpec, cooldown: int = 
     return events
 
 
-def prepare_feature_matrix(events: pd.DataFrame, features: Sequence[str], fill_source: Optional[pd.DataFrame] = None, keep_feature_set: bool = False) -> Tuple[pd.DataFrame, List[str]]:
-    requested = list(dict.fromkeys(features))
-    if not requested:
+def prepare_feature_matrix(events: pd.DataFrame, features: Sequence[str], fill_source: Optional[pd.DataFrame] = None) -> Tuple[pd.DataFrame, List[str]]:
+    cols = [c for c in features if c in events.columns]
+    if not cols:
         return pd.DataFrame(index=events.index), []
-
-    # 关键修复：测试集必须严格对齐训练集列集合，缺失列也要补出来，不能因为当前子集里没有该列就直接丢掉。
-    x = events.reindex(columns=requested).copy()
-    for col in requested:
+    x = events[cols].copy()
+    for col in cols:
         x[col] = safe_numeric(x[col])
-        if fill_source is not None:
-            base = fill_source[col] if col in fill_source.columns else pd.Series(dtype=float)
-            med = safe_numeric(base).median() if len(base) > 0 else np.nan
-        else:
-            med = x[col].median()
+        med = fill_source[col].median() if fill_source is not None and col in fill_source.columns else x[col].median()
         if pd.isna(med):
             med = 0.0
         x[col] = x[col].fillna(med)
-
-    if keep_feature_set:
-        return x[requested], requested
-
     nunique = x.nunique(dropna=False)
-    cols = [c for c in requested if nunique.get(c, 0) > 1]
+    cols = [c for c in cols if nunique.get(c, 0) > 1]
     return x[cols], cols
 
 
 def make_time_folds(events: pd.DataFrame, min_train: int = 80, min_test: int = 30) -> List[Tuple[str, np.ndarray, np.ndarray]]:
-    """Lite 模式：仅做一次顺序切分，显著降低训练次数。"""
-    if len(events) < (min_train + min_test):
-        return []
-    split = int(len(events) * 0.7)
-    split = max(min_train, min(split, len(events) - min_test))
-    return [("lite_70_30", events.index[:split].to_numpy(), events.index[split:].to_numpy())]
+    ordered_years = sorted(pd.Series(events["year"].dropna().unique()).astype(int).tolist())
+    folds: List[Tuple[str, np.ndarray, np.ndarray]] = []
+    for i in range(1, len(ordered_years)):
+        train_years = ordered_years[:i]
+        test_year = ordered_years[i]
+        train_idx = events.index[events["year"].isin(train_years)].to_numpy()
+        test_idx = events.index[events["year"] == test_year].to_numpy()
+        if len(train_idx) >= min_train and len(test_idx) >= min_test:
+            folds.append((f"train_{train_years[0]}_{train_years[-1]}__test_{test_year}", train_idx, test_idx))
+    if not folds and len(events) >= (min_train + min_test):
+        split = int(len(events) * 0.7)
+        folds.append(("fallback_70_30", events.index[:split].to_numpy(), events.index[split:].to_numpy()))
+    return folds
+
 
 def regression_score(y_true: pd.Series, y_pred: np.ndarray) -> Dict[str, float]:
     y_true = safe_numeric(y_true)
@@ -501,30 +559,18 @@ def classification_score(y_true: pd.Series, y_prob: np.ndarray) -> Dict[str, flo
     return out
 
 
-def build_highperf_model(model_type: str, random_state: int = RANDOM_STATE):
-    """仅保留 xgboost。环境未安装时，脚本在导入阶段直接报错。"""
-    common = dict(
-        random_state=random_state,
-        n_estimators=220,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_alpha=0.0,
-        reg_lambda=1.0,
-        min_child_weight=8,
-        tree_method="hist",
-        n_jobs=-1,
-    )
-    if model_type == "reg":
-        return "xgboost", XGBRegressor(objective="reg:squarederror", **common)
-    return "xgboost", XGBClassifier(objective="binary:logistic", eval_metric="auc", **common)
-
 def collect_importance_rows(model_name: str, mode: str, fold_name: str, features: List[str], model, x_test: pd.DataFrame, y_test: pd.Series) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     base_importance = getattr(model, "feature_importances_", None)
     if base_importance is None:
         base_importance = np.zeros(len(features), dtype=float)
+    perm_values = np.full(len(features), np.nan, dtype=float)
+    if len(x_test) >= 25 and y_test.nunique(dropna=True) > 1:
+        try:
+            perm = permutation_importance(model, x_test, y_test, n_repeats=5, random_state=RANDOM_STATE, n_jobs=1)
+            perm_values = perm.importances_mean
+        except Exception:
+            pass
     for i, feat in enumerate(features):
         rows.append({
             "model_name": model_name,
@@ -532,9 +578,10 @@ def collect_importance_rows(model_name: str, mode: str, fold_name: str, features
             "fold": fold_name,
             "feature": feat,
             "gain_importance": round(float(base_importance[i]), 6),
-            "perm_importance": np.nan,
+            "perm_importance": round(float(perm_values[i]), 6) if pd.notna(perm_values[i]) else np.nan,
         })
     return rows
+
 
 def run_single_model(events: pd.DataFrame, features: Sequence[str], target_col: str, model_type: str, feature_mode: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     folds = make_time_folds(events)
@@ -543,29 +590,26 @@ def run_single_model(events: pd.DataFrame, features: Sequence[str], target_col: 
     for fold_name, train_idx, test_idx in folds:
         train_df = events.loc[train_idx].copy()
         test_df = events.loc[test_idx].copy()
-        x_train, used_features = prepare_feature_matrix(train_df, features, fill_source=train_df, keep_feature_set=False)
-        x_test, _ = prepare_feature_matrix(test_df, used_features, fill_source=train_df, keep_feature_set=True)
+        x_train, used_features = prepare_feature_matrix(train_df, features, fill_source=train_df)
+        x_test, _ = prepare_feature_matrix(test_df, used_features, fill_source=train_df)
         if len(used_features) < 3:
             continue
         y_train = train_df[target_col]
         y_test = test_df[target_col]
-        backend_name, model = build_highperf_model(model_type, random_state=RANDOM_STATE)
         if model_type == "reg":
+            model = GradientBoostingRegressor(random_state=RANDOM_STATE, learning_rate=0.05, n_estimators=250, max_depth=3, subsample=0.8, min_samples_leaf=20)
             model.fit(x_train, safe_numeric(y_train))
             y_pred = model.predict(x_test)
             score = regression_score(y_test, y_pred)
         else:
             if pd.Series(y_train).nunique() < 2 or pd.Series(y_test).nunique() < 1:
                 continue
+            model = GradientBoostingClassifier(random_state=RANDOM_STATE, learning_rate=0.05, n_estimators=250, max_depth=3, subsample=0.8, min_samples_leaf=20)
             model.fit(x_train, pd.Series(y_train).astype(int))
-            if hasattr(model, "predict_proba"):
-                y_pred = model.predict_proba(x_test)[:, 1]
-            else:
-                raw_pred = model.predict(x_test)
-                y_pred = np.asarray(raw_pred, dtype=float)
+            y_pred = model.predict_proba(x_test)[:, 1]
             score = classification_score(y_test, y_pred)
-        metrics_rows.append({"feature_mode": feature_mode, "target": target_col, "model_type": model_type, "model_backend": backend_name, "fold": fold_name, "train_n": len(train_df), "test_n": len(test_df), **score})
-        importance_rows.extend(collect_importance_rows(f"{feature_mode}_{target_col}_{model_type}_{backend_name}", feature_mode, fold_name, used_features, model, x_test, pd.Series(y_test).astype(int) if model_type == "clf" else safe_numeric(y_test)))
+        metrics_rows.append({"feature_mode": feature_mode, "target": target_col, "model_type": model_type, "fold": fold_name, "train_n": len(train_df), "test_n": len(test_df), **score})
+        importance_rows.extend(collect_importance_rows(f"{feature_mode}_{target_col}_{model_type}", feature_mode, fold_name, used_features, model, x_test, pd.Series(y_test).astype(int) if model_type == "clf" else safe_numeric(y_test)))
     return pd.DataFrame(metrics_rows), pd.DataFrame(importance_rows)
 
 
@@ -919,270 +963,6 @@ def build_stability_slices(events: pd.DataFrame, scan_df: pd.DataFrame) -> pd.Da
         rdf.to_csv(f"{OUT_DIR}/10_rule_stability_slices.csv", index=False)
     return rdf
 
-
-@dataclass
-class StageSpec:
-    name: str
-    ret5_min: Optional[float] = None
-    ret5_max: Optional[float] = None
-
-
-@dataclass
-class EnvGateSpec:
-    name: str
-    trend_min: Optional[float] = None
-    weekly_dev_min: Optional[float] = None
-    trend_gap_min: Optional[float] = None
-
-
-@dataclass
-class FixedRuleSpec:
-    name: str = "fixed_rule_v1"
-    dsa_trade_pos_max: float = 0.40
-    dsa_confirmed_pos_max: float = 0.34
-    prev_down_min: float = 46.0
-    prev_down_max: float = 76.0
-    rope_dir_required: int = 1
-    bars_since_max: float = 8.0
-    dsa_width_max: float = 0.28
-    weekly_dev_min: float = -2.3
-    trend_score_min: float = 0.68
-    top_n_per_month: int = 8
-
-
-def filter_stage_events(events: pd.DataFrame, spec: StageSpec) -> pd.DataFrame:
-    if events.empty:
-        return events.copy()
-    sub = events.copy()
-    if "ret_5" in sub.columns:
-        s = safe_numeric(sub["ret_5"])
-        if spec.ret5_min is not None:
-            sub = sub[s >= float(spec.ret5_min)]
-            s = safe_numeric(sub["ret_5"])
-        if spec.ret5_max is not None:
-            sub = sub[s < float(spec.ret5_max)]
-    return dedup_events(sub)
-
-
-def filter_env_gate(events: pd.DataFrame, spec: EnvGateSpec) -> pd.DataFrame:
-    if events.empty:
-        return events.copy()
-    sub = events.copy()
-    cond = pd.Series(True, index=sub.index)
-    if spec.trend_min is not None and "score_trend_total" in sub.columns:
-        cond &= safe_numeric(sub["score_trend_total"]).fillna(-99) >= float(spec.trend_min)
-    if spec.weekly_dev_min is not None and "w_dsa_signed_vwap_dev_pct" in sub.columns:
-        cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= float(spec.weekly_dev_min)
-    if spec.trend_gap_min is not None and "trend_gap_10_20" in sub.columns:
-        cond &= safe_numeric(sub["trend_gap_10_20"]).fillna(-99) >= float(spec.trend_gap_min)
-    return dedup_events(sub[cond].copy())
-
-
-def build_stage_split_summary(events: pd.DataFrame) -> pd.DataFrame:
-    rows: List[Dict[str, object]] = []
-    stage_specs = [
-        StageSpec(name="all_candidate", ret5_min=None, ret5_max=None),
-        StageSpec(name="pure_compression", ret5_min=None, ret5_max=0.02),
-        StageSpec(name="launch_confirmation", ret5_min=0.02, ret5_max=None),
-    ]
-    env_specs = [
-        EnvGateSpec(name="no_env_gate", trend_min=None, weekly_dev_min=None, trend_gap_min=None),
-        EnvGateSpec(name="with_env_gate", trend_min=0.68, weekly_dev_min=-2.3, trend_gap_min=0.0),
-    ]
-    for stage in stage_specs:
-        stage_df = filter_stage_events(events, stage)
-        for env in env_specs:
-            gated = filter_env_gate(stage_df, env)
-            stat = summarize_events(gated, [20, 40, 60])
-            rows.append({
-                "stage_name": stage.name,
-                "env_gate": env.name,
-                "stock_n": int(gated["symbol"].nunique()) if not gated.empty and "symbol" in gated.columns else 0,
-                **stat,
-            })
-    rdf = pd.DataFrame(rows)
-    if not rdf.empty:
-        rdf.to_csv(f"{OUT_DIR}/11_stage_split_summary.csv", index=False)
-    return rdf
-
-
-def build_env_gate_comparison(events: pd.DataFrame) -> pd.DataFrame:
-    rows: List[Dict[str, object]] = []
-    stage_specs = [
-        StageSpec(name="pure_compression", ret5_min=None, ret5_max=0.02),
-        StageSpec(name="launch_confirmation", ret5_min=0.02, ret5_max=None),
-    ]
-    env_specs = [
-        EnvGateSpec(name="base", trend_min=None, weekly_dev_min=None, trend_gap_min=None),
-        EnvGateSpec(name="trend_only", trend_min=0.68, weekly_dev_min=None, trend_gap_min=None),
-        EnvGateSpec(name="weekly_only", trend_min=None, weekly_dev_min=-2.3, trend_gap_min=None),
-        EnvGateSpec(name="trend_gap_only", trend_min=None, weekly_dev_min=None, trend_gap_min=0.0),
-        EnvGateSpec(name="full_gate", trend_min=0.68, weekly_dev_min=-2.3, trend_gap_min=0.0),
-    ]
-    for stage in stage_specs:
-        stage_df = filter_stage_events(events, stage)
-        for env in env_specs:
-            sub = filter_env_gate(stage_df, env)
-            stat = summarize_events(sub, [20, 40, 60])
-            rows.append({
-                "stage_name": stage.name,
-                "gate_name": env.name,
-                "stock_n": int(sub["symbol"].nunique()) if not sub.empty and "symbol" in sub.columns else 0,
-                **stat,
-            })
-    rdf = pd.DataFrame(rows)
-    if not rdf.empty:
-        rdf["coverage_vs_candidates"] = rdf["n"] / max(len(events), 1)
-        rdf.to_csv(f"{OUT_DIR}/12_env_gate_comparison.csv", index=False)
-    return rdf
-
-
-def apply_fixed_rule(events: pd.DataFrame, rule: FixedRuleSpec, stage_name: str) -> pd.DataFrame:
-    if events.empty:
-        return events.copy()
-    sub = events.copy()
-    if stage_name == "pure_compression" and "ret_5" in sub.columns:
-        sub = sub[safe_numeric(sub["ret_5"]) < 0.02]
-    elif stage_name == "launch_confirmation" and "ret_5" in sub.columns:
-        sub = sub[safe_numeric(sub["ret_5"]) >= 0.02]
-    if "dsa_trade_pos_01" in sub.columns:
-        sub = sub[safe_numeric(sub["dsa_trade_pos_01"]) <= rule.dsa_trade_pos_max]
-    if "dsa_confirmed_pivot_pos_01" in sub.columns:
-        sub = sub[safe_numeric(sub["dsa_confirmed_pivot_pos_01"]).fillna(1) <= rule.dsa_confirmed_pos_max]
-    if "prev_confirmed_down_bars" in sub.columns:
-        prev_down = safe_numeric(sub["prev_confirmed_down_bars"])
-        sub = sub[(prev_down >= rule.prev_down_min) & (prev_down <= rule.prev_down_max)]
-    if "rope_dir" in sub.columns:
-        sub = sub[safe_numeric(sub["rope_dir"]).fillna(0) == rule.rope_dir_required]
-    if "bars_since_dir_change" in sub.columns:
-        sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= rule.bars_since_max]
-    if "dsa_trade_range_width_pct" in sub.columns:
-        sub = sub[safe_numeric(sub["dsa_trade_range_width_pct"]).fillna(99) <= rule.dsa_width_max]
-    if "w_dsa_signed_vwap_dev_pct" in sub.columns:
-        sub = sub[safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= rule.weekly_dev_min]
-    if "score_trend_total" in sub.columns:
-        sub = sub[safe_numeric(sub["score_trend_total"]).fillna(-99) >= rule.trend_score_min]
-    if sub.empty:
-        return sub.copy()
-    sub = dedup_events(sub)
-    return sub
-
-
-def add_soft_ranking_score(sub: pd.DataFrame) -> pd.DataFrame:
-    out = sub.copy()
-    score_parts = pd.DataFrame(index=out.index)
-    score_parts["ret5"] = normalize_01(safe_numeric(out.get("ret_5", pd.Series(index=out.index))), reverse=False)
-    score_parts["confirmed_low"] = normalize_01(safe_numeric(out.get("dsa_confirmed_pivot_pos_01", pd.Series(index=out.index))), reverse=True)
-    score_parts["trend"] = normalize_01(safe_numeric(out.get("score_trend_total", pd.Series(index=out.index))), reverse=False)
-    prev_down = safe_numeric(out.get("prev_confirmed_down_bars", pd.Series(index=out.index)))
-    center_dist = (prev_down - 61.0).abs()
-    score_parts["prev_down_mid"] = normalize_01(center_dist, reverse=True)
-    score_parts["weekly_dev"] = normalize_01(safe_numeric(out.get("w_dsa_signed_vwap_dev_pct", pd.Series(index=out.index))), reverse=False)
-    out["soft_rank_score"] = pd.concat([
-        0.32 * score_parts["ret5"],
-        0.22 * score_parts["confirmed_low"],
-        0.22 * score_parts["trend"],
-        0.12 * score_parts["prev_down_mid"],
-        0.12 * score_parts["weekly_dev"],
-    ], axis=1).sum(axis=1)
-    return out
-
-
-def build_fixed_rule_ranked_results(events: pd.DataFrame, top_k_export: int = 300) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    if events.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    rows: List[Dict[str, object]] = []
-    export_frames: List[pd.DataFrame] = []
-    rules = [
-        FixedRuleSpec(name="fixed_rule_v1", top_n_per_month=8),
-        FixedRuleSpec(name="fixed_rule_v1_top5", top_n_per_month=5),
-        FixedRuleSpec(name="fixed_rule_v1_top10", top_n_per_month=10),
-    ]
-    for stage_name in ["pure_compression", "launch_confirmation"]:
-        for rule in rules:
-            sub = apply_fixed_rule(events, rule, stage_name)
-            if sub.empty:
-                continue
-            sub = add_soft_ranking_score(sub)
-            if "year_month" in sub.columns:
-                ranked = sub.sort_values(["year_month", "soft_rank_score", "ret_5"], ascending=[True, False, False]).copy()
-                ranked["month_pick_rank"] = ranked.groupby("year_month")["soft_rank_score"].rank(method="first", ascending=False)
-                picked = ranked[ranked["month_pick_rank"] <= rule.top_n_per_month].copy()
-            else:
-                ranked = sub.sort_values(["soft_rank_score", "ret_5"], ascending=[False, False]).copy()
-                ranked["month_pick_rank"] = np.arange(len(ranked)) + 1
-                picked = ranked.head(rule.top_n_per_month).copy()
-            picked = dedup_events(picked)
-            if len(picked) < 12:
-                continue
-            stat = summarize_events(picked, [20, 40, 60])
-            rows.append({
-                "stage_name": stage_name,
-                "rule_name": rule.name,
-                "top_n_per_month": rule.top_n_per_month,
-                "stock_n": int(picked["symbol"].nunique()) if "symbol" in picked.columns else 0,
-                "avg_soft_rank_score": round(float(safe_numeric(picked["soft_rank_score"]).mean()), 6),
-                **stat,
-            })
-            keep_cols = [c for c in [
-                "symbol", "datetime", "year_month", "close", "ret_5", "ret_20", "ret_40", "ret_60", "max_dd_20", "max_dd_40", "max_dd_60",
-                "rr_20", "dsa_trade_pos_01", "dsa_confirmed_pivot_pos_01", "prev_confirmed_down_bars", "bars_since_dir_change",
-                "dsa_trade_range_width_pct", "w_dsa_signed_vwap_dev_pct", "score_trend_total", "trend_gap_10_20", "soft_rank_score", "month_pick_rank"
-            ] if c in picked.columns]
-            tmp = picked[keep_cols].copy()
-            tmp["stage_name"] = stage_name
-            tmp["rule_name"] = rule.name
-            export_frames.append(tmp)
-    scan_df = pd.DataFrame(rows).sort_values(["rr_20", "ret_20", "wr_20", "n"], ascending=[False, False, False, False]).reset_index(drop=True) if rows else pd.DataFrame()
-    top_df = pd.concat(export_frames, ignore_index=True).sort_values(["stage_name", "rule_name", "datetime", "month_pick_rank"]).head(top_k_export) if export_frames else pd.DataFrame()
-    if not scan_df.empty:
-        scan_df.to_csv(f"{OUT_DIR}/13_fixed_rule_ranked_scan.csv", index=False)
-    if not top_df.empty:
-        top_df.to_csv(f"{OUT_DIR}/13b_fixed_rule_top_events.csv", index=False)
-    return scan_df, top_df
-
-
-def build_fixed_rule_stability(events: pd.DataFrame, fixed_scan_df: pd.DataFrame) -> pd.DataFrame:
-    if events.empty or fixed_scan_df.empty:
-        return pd.DataFrame()
-    rows: List[Dict[str, object]] = []
-    work = events.copy()
-    work["turnover_proxy"] = safe_numeric(work.get("close", pd.Series(index=work.index))) * safe_numeric(work.get("vol", pd.Series(index=work.index)))
-    work["year"] = pd.to_datetime(work["datetime"]).dt.year if "datetime" in work.columns else np.nan
-    if work["turnover_proxy"].notna().sum() >= 30:
-        try:
-            work["liquidity_bucket"] = pd.qcut(work["turnover_proxy"], q=3, labels=["small", "mid", "large"], duplicates="drop")
-        except Exception:
-            work["liquidity_bucket"] = "all"
-    else:
-        work["liquidity_bucket"] = "all"
-    med = float(work["ret_20"].median()) if "ret_20" in work.columns and work["ret_20"].notna().sum() >= 30 else 0.0
-    work["env_bucket"] = np.where(safe_numeric(work.get("ret_20", pd.Series(index=work.index))).fillna(-99) >= med, "better", "worse")
-    for _, row in fixed_scan_df.head(4).iterrows():
-        stage_name = str(row["stage_name"])
-        rule = FixedRuleSpec(name=str(row["rule_name"]), top_n_per_month=int(row.get("top_n_per_month", 8)))
-        sub = apply_fixed_rule(work, rule, stage_name)
-        if sub.empty:
-            continue
-        sub = add_soft_ranking_score(sub)
-        if "year_month" in sub.columns:
-            sub = sub.sort_values(["year_month", "soft_rank_score"], ascending=[True, False]).copy()
-            sub["month_pick_rank"] = sub.groupby("year_month")["soft_rank_score"].rank(method="first", ascending=False)
-            sub = sub[sub["month_pick_rank"] <= rule.top_n_per_month].copy()
-        sub = dedup_events(sub)
-        if len(sub) < 12:
-            continue
-        for dim in ["year", "liquidity_bucket", "env_bucket"]:
-            for key, g in sub.groupby(dim, dropna=False):
-                if len(g) < 8:
-                    continue
-                stat = summarize_events(g, [20, 40, 60])
-                rows.append({"stage_name": stage_name, "rule_name": rule.name, "top_n_per_month": rule.top_n_per_month, "slice_dim": dim, "slice_key": str(key), **stat})
-    rdf = pd.DataFrame(rows)
-    if not rdf.empty:
-        rdf.to_csv(f"{OUT_DIR}/14_fixed_rule_stability_slices.csv", index=False)
-    return rdf
-
 def analyze_00_dataset_summary(df: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     rows = [{"section": "global", "sample_n": int(len(df)), "stock_n": int(df["symbol"].nunique()), "ret20_mean": round(float(df["ret_20"].mean()), 5), "dd20_mean": round(float(df["max_dd_20"].mean()), 5), "wr20_mean": round(float(df["win_20"].mean()), 4), "rr20_mean": round(rr_from_ret_dd(df["ret_20"].mean(), df["max_dd_20"].mean()), 3)}]
     if not events.empty:
@@ -1206,7 +986,7 @@ def analyze_01_feature_inventory(events: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="基于 XGBoost Lite 的买点实验脚本")
+    parser = argparse.ArgumentParser(description="基于 GBDT 结果反推规则的买点实验脚本")
     parser.add_argument("--n-stocks", type=int, default=100)
     parser.add_argument("--bars", type=int, default=800)
     parser.add_argument("--freq", default="d")
@@ -1216,28 +996,34 @@ def main() -> None:
     parser.add_argument("--neighbor-prev-down-min", type=float, default=8.0)
     parser.add_argument("--neighbor-current-run-max", type=float, default=20.0)
     parser.add_argument("--neighbor-bars-since-max", type=float, default=12.0)
+    parser.add_argument("--use-cache", action="store_true", help="使用缓存数据，避免重复从数据库拉取")
+    parser.add_argument("--refresh-cache", action="store_true", help="强制刷新缓存，重新从数据库拉取")
+    parser.add_argument("--cache-dir", default="data_cache/gbdt_explorer", help="缓存文件存放目录")
     args = parser.parse_args()
 
-    stocks = get_stock_pool(args.n_stocks, args.seed)
-    print(f"股票池抽取: {len(stocks)}只 (seed={args.seed})")
-    print("研究目标: XGBoost Lite（单次切分/单模型/无 permutation）")
+    cache_path = get_cache_path(args.cache_dir, args.n_stocks, args.bars, args.freq, args.seed)
 
-    all_dfs: List[pd.DataFrame] = []
-    for idx, code in enumerate(stocks):
-        kline = load_kline(code, args.freq, args.bars)
-        if kline is None or len(kline) < 100:
-            continue
-        try:
-            fac = compute_factors(kline)
-            fac = add_forward_returns(fac, RET_WINDOWS)
-            fac["symbol"] = code
-            fac["datetime"] = fac.index
-            valid = fac.dropna(subset=["ret_20"])
-            if len(valid) > 50:
-                all_dfs.append(valid)
-                print(f"  [{idx + 1}/{len(stocks)}] {code}: {len(kline)}bars → {len(valid)}有效样本")
-        except Exception as exc:
-            print(f"  [{idx + 1}/{len(stocks)}] {code} 因子计算失败: {exc}")
+    if args.use_cache and not args.refresh_cache and cache_exists(cache_path):
+        print(f"从缓存加载数据: {cache_path}")
+        cached_data = load_cache(cache_path)
+        if cached_data is not None:
+            all_dfs = cached_data.get("all_dfs", [])
+            print(f"缓存加载成功: {len(all_dfs)}只股票数据")
+        else:
+            print("缓存加载失败，将从数据库重新拉取")
+            all_dfs = fetch_data_from_db(args.n_stocks, args.bars, args.freq, args.seed)
+            if args.use_cache and all_dfs:
+                save_cache({"all_dfs": all_dfs, "metadata": {"created_at": datetime.now().isoformat(), "n_stocks": args.n_stocks, "bars": args.bars, "freq": args.freq, "seed": args.seed}}, cache_path)
+                print(f"数据已缓存到: {cache_path}")
+    else:
+        if args.refresh_cache:
+            print("强制刷新缓存，从数据库重新拉取数据...")
+        else:
+            print("从数据库拉取数据...")
+        all_dfs = fetch_data_from_db(args.n_stocks, args.bars, args.freq, args.seed)
+        if (args.use_cache or args.refresh_cache) and all_dfs:
+            save_cache({"all_dfs": all_dfs, "metadata": {"created_at": datetime.now().isoformat(), "n_stocks": args.n_stocks, "bars": args.bars, "freq": args.freq, "seed": args.seed}}, cache_path)
+            print(f"数据已缓存到: {cache_path}")
 
     if not all_dfs:
         print("无有效数据，退出")
@@ -1263,24 +1049,44 @@ def main() -> None:
         return
 
     if args.analysis_mode != "rule_only":
+        fold_frames: List[pd.DataFrame] = []
+        trade_reg_metrics, trade_reg_imp = run_single_model(events, TRADE_FEATURES, "ret_20", "reg", "trade")
+        trade_clf_metrics, trade_clf_imp = run_single_model(events, TRADE_FEATURES, "good20", "clf", "trade")
         research_reg_metrics, research_reg_imp = run_single_model(events, RESEARCH_FEATURES, "ret_20", "reg", "research")
-        research_reg_imp_agg = aggregate_importance(research_reg_imp)
+        research_clf_metrics, research_clf_imp = run_single_model(events, RESEARCH_FEATURES, "good20", "clf", "research")
+        for frame in [trade_reg_metrics, trade_clf_metrics, research_reg_metrics, research_clf_metrics]:
+            if not frame.empty:
+                fold_frames.append(frame)
+        if fold_frames:
+            pd.concat(fold_frames, ignore_index=True).to_csv(f"{OUT_DIR}/05_fold_metrics.csv", index=False)
 
-        if not research_reg_metrics.empty:
-            research_reg_metrics.to_csv(f"{OUT_DIR}/05_fold_metrics.csv", index=False)
+        trade_reg_imp_agg = aggregate_importance(trade_reg_imp)
+        trade_clf_imp_agg = aggregate_importance(trade_clf_imp)
+        research_reg_imp_agg = aggregate_importance(research_reg_imp)
+        research_clf_imp_agg = aggregate_importance(research_clf_imp)
+
+        if not trade_reg_imp_agg.empty:
+            trade_reg_imp_agg.to_csv(f"{OUT_DIR}/03_trade_reg_importance.csv", index=False)
+        if not trade_clf_imp_agg.empty:
+            trade_clf_imp_agg.to_csv(f"{OUT_DIR}/03b_trade_clf_importance.csv", index=False)
         if not research_reg_imp_agg.empty:
             research_reg_imp_agg.to_csv(f"{OUT_DIR}/04_research_reg_importance.csv", index=False)
+        if not research_clf_imp_agg.empty:
+            research_clf_imp_agg.to_csv(f"{OUT_DIR}/04b_research_clf_importance.csv", index=False)
 
+        trade_top = trade_reg_imp_agg.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False) if not trade_reg_imp_agg.empty else pd.DataFrame()
         research_top = research_reg_imp_agg.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False) if not research_reg_imp_agg.empty else pd.DataFrame()
+        trade_feats_for_bucket = trade_top["feature"].head(8).tolist() if not trade_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in TRADE_FEATURES]
         research_feats_for_bucket = research_top["feature"].head(8).tolist() if not research_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in RESEARCH_FEATURES]
+        build_bucket_profiles(events, trade_feats_for_bucket, f"{OUT_DIR}/06_trade_bucket_profiles.csv")
         build_bucket_profiles(events, research_feats_for_bucket, f"{OUT_DIR}/06b_research_bucket_profiles.csv")
         build_bucket_profiles(events, COMPOSITE_FEATURES, f"{OUT_DIR}/08_composite_feature_profiles.csv")
-        build_parameter_hints(events, pd.DataFrame(columns=["feature", "rank_score"]), research_reg_imp_agg)
+        build_parameter_hints(events, pd.concat([trade_reg_imp_agg, trade_clf_imp_agg], ignore_index=True), pd.concat([research_reg_imp_agg, research_clf_imp_agg], ignore_index=True))
 
-        print("\n=== Lite 关键结果预览 ===")
-        if not research_reg_imp_agg.empty:
-            print("\n[research 回归重要性 Top10]")
-            print(research_reg_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
+        print("\n=== 关键结果预览 ===")
+        if not trade_reg_imp_agg.empty:
+            print("\n[trade-safe 回归重要性 Top10]")
+            print(trade_reg_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
 
     scan_df, _ = build_compression_launch_scan(events)
     build_stability_slices(events, scan_df)
