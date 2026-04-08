@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-基于 GBDT 结果反推“压缩低位启动”规则的实验脚本（在 gbdt_buy_point_explorer.py 基础上扩展）
+基于 XGBoost Lite 的“压缩低位启动”规则实验脚本（轻量版）
 
 Purpose
 - 保留原有框架：数据加载 → 因子计算 → forward returns → 候选事件池 → 报表输出
@@ -39,25 +39,12 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
-from sklearn.inspection import permutation_importance
 from sklearn.metrics import roc_auc_score
 
 try:
     from xgboost import XGBClassifier, XGBRegressor  # type: ignore
-    HAS_XGBOOST = True
-except Exception:
-    XGBClassifier = None  # type: ignore
-    XGBRegressor = None  # type: ignore
-    HAS_XGBOOST = False
-
-try:
-    from lightgbm import LGBMClassifier, LGBMRegressor  # type: ignore
-    HAS_LIGHTGBM = True
-except Exception:
-    LGBMClassifier = None  # type: ignore
-    LGBMRegressor = None  # type: ignore
-    HAS_LIGHTGBM = False
+except Exception as exc:
+    raise RuntimeError("缺少依赖 xgboost。请先安装，例如: pip install xgboost") from exc
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -484,20 +471,12 @@ def prepare_feature_matrix(events: pd.DataFrame, features: Sequence[str], fill_s
 
 
 def make_time_folds(events: pd.DataFrame, min_train: int = 80, min_test: int = 30) -> List[Tuple[str, np.ndarray, np.ndarray]]:
-    ordered_years = sorted(pd.Series(events["year"].dropna().unique()).astype(int).tolist())
-    folds: List[Tuple[str, np.ndarray, np.ndarray]] = []
-    for i in range(1, len(ordered_years)):
-        train_years = ordered_years[:i]
-        test_year = ordered_years[i]
-        train_idx = events.index[events["year"].isin(train_years)].to_numpy()
-        test_idx = events.index[events["year"] == test_year].to_numpy()
-        if len(train_idx) >= min_train and len(test_idx) >= min_test:
-            folds.append((f"train_{train_years[0]}_{train_years[-1]}__test_{test_year}", train_idx, test_idx))
-    if not folds and len(events) >= (min_train + min_test):
-        split = int(len(events) * 0.7)
-        folds.append(("fallback_70_30", events.index[:split].to_numpy(), events.index[split:].to_numpy()))
-    return folds
-
+    """Lite 模式：仅做一次顺序切分，显著降低训练次数。"""
+    if len(events) < (min_train + min_test):
+        return []
+    split = int(len(events) * 0.7)
+    split = max(min_train, min(split, len(events) - min_test))
+    return [("lite_70_30", events.index[:split].to_numpy(), events.index[split:].to_numpy())]
 
 def regression_score(y_true: pd.Series, y_pred: np.ndarray) -> Dict[str, float]:
     y_true = safe_numeric(y_true)
@@ -523,111 +502,29 @@ def classification_score(y_true: pd.Series, y_prob: np.ndarray) -> Dict[str, flo
 
 
 def build_highperf_model(model_type: str, random_state: int = RANDOM_STATE):
-    """
-    高性能 GBDT 后端：优先 xgboost，其次 lightgbm，最后 sklearn HistGB。
-    返回 (backend_name, model)
-    """
+    """仅保留 xgboost。环境未安装时，脚本在导入阶段直接报错。"""
+    common = dict(
+        random_state=random_state,
+        n_estimators=220,
+        max_depth=4,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=0.0,
+        reg_lambda=1.0,
+        min_child_weight=8,
+        tree_method="hist",
+        n_jobs=-1,
+    )
     if model_type == "reg":
-        if HAS_XGBOOST:
-            return "xgboost", XGBRegressor(
-                random_state=random_state,
-                n_estimators=400,
-                max_depth=4,
-                learning_rate=0.03,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                reg_alpha=0.0,
-                reg_lambda=1.0,
-                min_child_weight=8,
-                objective="reg:squarederror",
-                tree_method="hist",
-                n_jobs=-1,
-            )
-        if HAS_LIGHTGBM:
-            return "lightgbm", LGBMRegressor(
-                random_state=random_state,
-                n_estimators=400,
-                learning_rate=0.03,
-                num_leaves=31,
-                max_depth=-1,
-                min_child_samples=20,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                reg_alpha=0.0,
-                reg_lambda=1.0,
-                objective="regression",
-                n_jobs=-1,
-                verbosity=-1,
-            )
-        return "sklearn_histgb", HistGradientBoostingRegressor(
-            random_state=random_state,
-            learning_rate=0.03,
-            max_iter=400,
-            max_depth=4,
-            min_samples_leaf=20,
-            l2_regularization=1.0,
-            early_stopping=True,
-            validation_fraction=0.1,
-            n_iter_no_change=20,
-        )
-    else:
-        if HAS_XGBOOST:
-            return "xgboost", XGBClassifier(
-                random_state=random_state,
-                n_estimators=400,
-                max_depth=4,
-                learning_rate=0.03,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                reg_alpha=0.0,
-                reg_lambda=1.0,
-                min_child_weight=8,
-                objective="binary:logistic",
-                eval_metric="auc",
-                tree_method="hist",
-                n_jobs=-1,
-            )
-        if HAS_LIGHTGBM:
-            return "lightgbm", LGBMClassifier(
-                random_state=random_state,
-                n_estimators=400,
-                learning_rate=0.03,
-                num_leaves=31,
-                max_depth=-1,
-                min_child_samples=20,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                reg_alpha=0.0,
-                reg_lambda=1.0,
-                objective="binary",
-                n_jobs=-1,
-                verbosity=-1,
-            )
-        return "sklearn_histgb", HistGradientBoostingClassifier(
-            random_state=random_state,
-            learning_rate=0.03,
-            max_iter=400,
-            max_depth=4,
-            min_samples_leaf=20,
-            l2_regularization=1.0,
-            early_stopping=True,
-            validation_fraction=0.1,
-            n_iter_no_change=20,
-        )
-
+        return "xgboost", XGBRegressor(objective="reg:squarederror", **common)
+    return "xgboost", XGBClassifier(objective="binary:logistic", eval_metric="auc", **common)
 
 def collect_importance_rows(model_name: str, mode: str, fold_name: str, features: List[str], model, x_test: pd.DataFrame, y_test: pd.Series) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     base_importance = getattr(model, "feature_importances_", None)
     if base_importance is None:
         base_importance = np.zeros(len(features), dtype=float)
-    perm_values = np.full(len(features), np.nan, dtype=float)
-    if len(x_test) >= 25 and y_test.nunique(dropna=True) > 1:
-        try:
-            perm = permutation_importance(model, x_test, y_test, n_repeats=5, random_state=RANDOM_STATE, n_jobs=1)
-            perm_values = perm.importances_mean
-        except Exception:
-            pass
     for i, feat in enumerate(features):
         rows.append({
             "model_name": model_name,
@@ -635,10 +532,9 @@ def collect_importance_rows(model_name: str, mode: str, fold_name: str, features
             "fold": fold_name,
             "feature": feat,
             "gain_importance": round(float(base_importance[i]), 6),
-            "perm_importance": round(float(perm_values[i]), 6) if pd.notna(perm_values[i]) else np.nan,
+            "perm_importance": np.nan,
         })
     return rows
-
 
 def run_single_model(events: pd.DataFrame, features: Sequence[str], target_col: str, model_type: str, feature_mode: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     folds = make_time_folds(events)
@@ -1310,7 +1206,7 @@ def analyze_01_feature_inventory(events: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="基于 GBDT 结果反推规则的买点实验脚本")
+    parser = argparse.ArgumentParser(description="基于 XGBoost Lite 的买点实验脚本")
     parser.add_argument("--n-stocks", type=int, default=100)
     parser.add_argument("--bars", type=int, default=800)
     parser.add_argument("--freq", default="d")
@@ -1324,7 +1220,7 @@ def main() -> None:
 
     stocks = get_stock_pool(args.n_stocks, args.seed)
     print(f"股票池抽取: {len(stocks)}只 (seed={args.seed})")
-    print("研究目标: 保留 GBDT 归因，同时新增规则反推实验")
+    print("研究目标: XGBoost Lite（单次切分/单模型/无 permutation）")
 
     all_dfs: List[pd.DataFrame] = []
     for idx, code in enumerate(stocks):
@@ -1367,44 +1263,24 @@ def main() -> None:
         return
 
     if args.analysis_mode != "rule_only":
-        fold_frames: List[pd.DataFrame] = []
-        trade_reg_metrics, trade_reg_imp = run_single_model(events, TRADE_FEATURES, "ret_20", "reg", "trade")
-        trade_clf_metrics, trade_clf_imp = run_single_model(events, TRADE_FEATURES, "good20", "clf", "trade")
         research_reg_metrics, research_reg_imp = run_single_model(events, RESEARCH_FEATURES, "ret_20", "reg", "research")
-        research_clf_metrics, research_clf_imp = run_single_model(events, RESEARCH_FEATURES, "good20", "clf", "research")
-        for frame in [trade_reg_metrics, trade_clf_metrics, research_reg_metrics, research_clf_metrics]:
-            if not frame.empty:
-                fold_frames.append(frame)
-        if fold_frames:
-            pd.concat(fold_frames, ignore_index=True).to_csv(f"{OUT_DIR}/05_fold_metrics.csv", index=False)
-
-        trade_reg_imp_agg = aggregate_importance(trade_reg_imp)
-        trade_clf_imp_agg = aggregate_importance(trade_clf_imp)
         research_reg_imp_agg = aggregate_importance(research_reg_imp)
-        research_clf_imp_agg = aggregate_importance(research_clf_imp)
 
-        if not trade_reg_imp_agg.empty:
-            trade_reg_imp_agg.to_csv(f"{OUT_DIR}/03_trade_reg_importance.csv", index=False)
-        if not trade_clf_imp_agg.empty:
-            trade_clf_imp_agg.to_csv(f"{OUT_DIR}/03b_trade_clf_importance.csv", index=False)
+        if not research_reg_metrics.empty:
+            research_reg_metrics.to_csv(f"{OUT_DIR}/05_fold_metrics.csv", index=False)
         if not research_reg_imp_agg.empty:
             research_reg_imp_agg.to_csv(f"{OUT_DIR}/04_research_reg_importance.csv", index=False)
-        if not research_clf_imp_agg.empty:
-            research_clf_imp_agg.to_csv(f"{OUT_DIR}/04b_research_clf_importance.csv", index=False)
 
-        trade_top = trade_reg_imp_agg.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False) if not trade_reg_imp_agg.empty else pd.DataFrame()
         research_top = research_reg_imp_agg.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False) if not research_reg_imp_agg.empty else pd.DataFrame()
-        trade_feats_for_bucket = trade_top["feature"].head(8).tolist() if not trade_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in TRADE_FEATURES]
         research_feats_for_bucket = research_top["feature"].head(8).tolist() if not research_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in RESEARCH_FEATURES]
-        build_bucket_profiles(events, trade_feats_for_bucket, f"{OUT_DIR}/06_trade_bucket_profiles.csv")
         build_bucket_profiles(events, research_feats_for_bucket, f"{OUT_DIR}/06b_research_bucket_profiles.csv")
         build_bucket_profiles(events, COMPOSITE_FEATURES, f"{OUT_DIR}/08_composite_feature_profiles.csv")
-        build_parameter_hints(events, pd.concat([trade_reg_imp_agg, trade_clf_imp_agg], ignore_index=True), pd.concat([research_reg_imp_agg, research_clf_imp_agg], ignore_index=True))
+        build_parameter_hints(events, pd.DataFrame(columns=["feature", "rank_score"]), research_reg_imp_agg)
 
-        print("\n=== 关键结果预览 ===")
-        if not trade_reg_imp_agg.empty:
-            print("\n[trade-safe 回归重要性 Top10]")
-            print(trade_reg_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
+        print("\n=== Lite 关键结果预览 ===")
+        if not research_reg_imp_agg.empty:
+            print("\n[research 回归重要性 Top10]")
+            print(research_reg_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
 
     scan_df, _ = build_compression_launch_scan(events)
     build_stability_slices(events, scan_df)
