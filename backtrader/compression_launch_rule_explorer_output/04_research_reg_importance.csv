@@ -1,0 +1,16 @@
+model_name,mode,feature,gain_importance,perm_importance,fold_count,rank_score
+research_ret_20_reg,research,dsa_confirmed_pivot_pos_01,0.1094115,0.1588725,2,0.13414199999999998
+research_ret_20_reg,research,w_dsa_signed_vwap_dev_pct,0.153223,0.0218425,2,0.08753274999999999
+research_ret_20_reg,research,lh_hh_low_pos,0.10846549999999999,0.041281500000000006,2,0.0748735
+research_ret_20_reg,research,dsa_trend_aligned_vwap_dev_pct,0.0983735,-0.0027395000000000006,2,0.047817
+research_ret_20_reg,research,prev_confirmed_down_bars,0.082176,-0.0049770000000000005,2,0.0385995
+research_ret_20_reg,research,current_run_bars,0.0948595,-0.027013,2,0.03392325
+research_ret_20_reg,research,prev_confirmed_up_bars,0.1046485,-0.037138,2,0.03375525
+research_ret_20_reg,research,dsa_signed_vwap_dev_pct,0.041438,0.0033665,2,0.022402250000000002
+research_ret_20_reg,research,w_prev_confirmed_down_bars,0.022257,0.0157035,2,0.018980249999999997
+research_ret_20_reg,research,w_prev_confirmed_up_bars,0.0369415,-0.0023344999999999998,2,0.0173035
+research_ret_20_reg,research,last_confirmed_run_bars,0.1068175,-0.074974,2,0.01592175
+research_ret_20_reg,research,dsa_bear_vwap_dev_pct,0.033842,-0.003962,2,0.014939999999999998
+research_ret_20_reg,research,w_DSA_DIR,0.006544,-0.004524,2,0.00101
+research_ret_20_reg,research,dsa_bull_vwap_dev_pct,0.001003,-0.000177,2,0.000413
+research_ret_20_reg,research,w_dsa_confirmed_pivot_pos_01,0.0,0.0,2,0.0

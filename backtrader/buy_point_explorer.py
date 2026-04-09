@@ -1,21 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-买入点收益风险比探索（全因子优先 + DSA双轨版）
+轻量版：基于 GBDT 结果反推“压缩低位启动”规则的实验脚本
 
 Purpose
-  - 全因子探索优先：先做因子普查、单因子、离散因子、双因子扫描，再进入策略验证
-  - DSA 双轨：
-      * confirmed/research：来自 merged_dsa_atr_rope_bb_factors_with_confirmed_run_bars.py 的回看确认特征
-      * trade-safe：在本脚本内基于 rolling 区间构造的交易代理特征，默认用于策略入口
-  - 纳入新增结构长度因子：
-      * prev_confirmed_up_bars
-      * prev_confirmed_down_bars
-      * last_confirmed_run_bars
-      * current_run_bars
+- 保留原有框架：数据加载 → 因子计算 → forward returns → 候选事件池 → 报表输出
+- 轻量化默认配置：去掉 permutation importance，默认只跑单模型，缩小规则扫描组合
+- 聚焦 20 日目标，优先验证 周线环境过滤 / 低位压缩 / 启动别太晚 / expand vs break 分层
 
-Notes
-  - rr = ret / abs(MAE)
-  - MAE 使用未来窗口内最低价相对入场价的回撤，long 为负值
+How to Run
+    python compression_launch_rule_explorer.py --n-stocks 200 --bars 1000 --freq d
+
+Outputs
+- 00_dataset_summary.csv
+- 01_feature_inventory.csv
+- 02_candidate_events.csv
+- 03_trade_reg_importance.csv
+- 03b_trade_clf_importance.csv
+- 04_research_reg_importance.csv
+- 04b_research_clf_importance.csv
+- 05_fold_metrics.csv
+- 06_trade_bucket_profiles.csv
+- 06b_research_bucket_profiles.csv
+- 07_parameter_hints.csv
+- 08_composite_feature_profiles.csv
+- 09_rule_reverse_scan.csv
+- 09b_rule_reverse_top_events.csv
 """
 from __future__ import annotations
 
@@ -23,10 +32,14 @@ import argparse
 import os
 import sys
 import warnings
+from dataclasses import dataclass
+from itertools import product
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.metrics import roc_auc_score
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -41,7 +54,7 @@ try:
         compute_dsa,
     )
 except Exception:
-    from merged_dsa_atr_rope_bb_factors_with_confirmed_run_bars import (
+    from merged_dsa_atr_rope_bb_factors import (
         DSAConfig,
         RopeConfig,
         compute_atr_rope,
@@ -51,17 +64,36 @@ except Exception:
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-OUT_DIR = "buy_point_explorer_redesigned"
+OUT_DIR = "compression_launch_rule_explorer_output"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 RET_WINDOWS = [5, 10, 20, 40, 60]
 EVENT_DEDUP_BARS = 20
+RANDOM_STATE = 42
 
 
 def rr_from_ret_dd(ret: float, dd: float) -> float:
     if pd.isna(ret) or pd.isna(dd) or dd == 0:
         return np.nan
     return float(ret / abs(dd))
+
+
+def safe_numeric(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(s, errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+
+def normalize_01(s: pd.Series, reverse: bool = False, q: Tuple[float, float] = (0.05, 0.95)) -> pd.Series:
+    x = safe_numeric(s).copy()
+    lo = x.quantile(q[0])
+    hi = x.quantile(q[1])
+    if pd.isna(lo) or pd.isna(hi) or hi <= lo:
+        out = pd.Series(0.5, index=x.index, dtype=float)
+    else:
+        x = x.clip(lower=lo, upper=hi)
+        out = (x - lo) / (hi - lo)
+    if reverse:
+        out = 1.0 - out
+    return out.clip(0.0, 1.0)
 
 
 def summarize_events(events: pd.DataFrame, windows: Sequence[int]) -> Dict[str, float]:
@@ -99,29 +131,6 @@ def dedup_events(df: pd.DataFrame, cooldown_bars: int = EVENT_DEDUP_BARS) -> pd.
                 accepted_positions.append(pos)
                 keep_idx.append(idx)
     return work.loc[keep_idx].sort_values(["datetime", "symbol"]).reset_index(drop=True)
-
-
-def slice_equal_time_buckets(df: pd.DataFrame, n_slices: int = 3, time_col: str = "datetime") -> pd.DataFrame:
-    out = df.sort_values(time_col).copy()
-    if len(out) == 0:
-        out["time_slice"] = []
-        return out
-    labels = [f"T{i+1}" for i in range(n_slices)]
-    ranks = np.linspace(0, n_slices, len(out), endpoint=False)
-    out["time_slice"] = [labels[min(int(x), n_slices - 1)] for x in ranks]
-    return out
-
-
-def normalize_score(series: pd.Series, reverse: bool = False, clip_q: Tuple[float, float] = (0.01, 0.99)) -> pd.Series:
-    s = series.astype(float).copy()
-    lo = s.quantile(clip_q[0])
-    hi = s.quantile(clip_q[1])
-    if pd.isna(lo) or pd.isna(hi) or hi <= lo:
-        z = pd.Series(np.zeros(len(s)), index=s.index, dtype=float)
-    else:
-        s = s.clip(lower=lo, upper=hi)
-        z = (s - lo) / (hi - lo)
-    return 1.0 - z if reverse else z
 
 
 # =========================
@@ -199,37 +208,6 @@ def build_trade_safe_dsa_features(df: pd.DataFrame, lookback: int = 50, prefix: 
     return out
 
 
-def _rolling_true_streak(mask: pd.Series) -> pd.Series:
-    arr = mask.fillna(False).astype(bool).to_numpy()
-    out = np.zeros(len(arr), dtype=float)
-    streak = 0
-    for i, flag in enumerate(arr):
-        if flag:
-            streak += 1
-        else:
-            streak = 0
-        out[i] = streak
-    return pd.Series(out, index=mask.index)
-
-
-def add_rope_coil_features(df: pd.DataFrame) -> pd.DataFrame:
-    out = pd.DataFrame(index=df.index)
-    if "dist_to_rope_atr" not in df.columns:
-        return out
-    dist = df["dist_to_rope_atr"].astype(float)
-    abs_dist = dist.abs()
-    out["rope_near_core"] = (abs_dist <= 0.30).astype(float)
-    out["rope_near_soft"] = (abs_dist <= 0.50).astype(float)
-    out["rope_near_core_streak"] = _rolling_true_streak(abs_dist <= 0.30)
-    out["rope_near_soft_streak"] = _rolling_true_streak(abs_dist <= 0.50)
-    out["rope_near_soft_ratio_5"] = (abs_dist <= 0.50).rolling(5, min_periods=1).mean()
-    out["rope_near_soft_ratio_8"] = (abs_dist <= 0.50).rolling(8, min_periods=1).mean()
-    if "range_width_atr" in df.columns:
-        width = df["range_width_atr"].astype(float)
-        out["rope_coil_tight"] = (width <= width.rolling(120, min_periods=30).median()).astype(float)
-    return out
-
-
 def map_weekly_dsa_confirmed_to_daily(daily: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(index=daily.index)
     wk = aggregate_weekly_strict(daily)
@@ -263,10 +241,87 @@ def map_weekly_dsa_trade_to_daily(daily: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def add_micro_features(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.copy()
+    vol = d["vol"].astype(float)
+    close = d["close"].astype(float)
+    d["ret_1"] = close.pct_change(1)
+    d["ret_3"] = close.pct_change(3)
+    d["ret_5"] = close.pct_change(5)
+    d["vol_ma_20"] = vol.rolling(20, min_periods=5).mean()
+    d["vol_ratio_20"] = vol / d["vol_ma_20"].replace(0, np.nan)
+    vol_std = vol.rolling(20, min_periods=10).std().replace(0, np.nan)
+    d["vol_z_20"] = (vol - d["vol_ma_20"]) / vol_std
+    d["close_ma_10"] = close.rolling(10, min_periods=5).mean()
+    d["close_ma_20"] = close.rolling(20, min_periods=10).mean()
+    d["trend_gap_10_20"] = (d["close_ma_10"] - d["close_ma_20"]) / close.replace(0, np.nan)
+    return d
+
+
+def add_composite_features(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    low_pos_parts = [c for c in [
+        "dsa_trade_pos_01", "bb_pos_01", "channel_pos_01", "range_pos_01", "rope_pivot_pos_01", "w_dsa_trade_pos_01"
+    ] if c in out.columns]
+    if low_pos_parts:
+        out["position_in_structure"] = pd.concat([safe_numeric(out[c]) for c in low_pos_parts], axis=1).mean(axis=1)
+    else:
+        out["position_in_structure"] = np.nan
+
+    dir_flags = pd.DataFrame(index=out.index)
+    dir_flags["rope_up"] = (safe_numeric(out.get("rope_dir", pd.Series(index=out.index))) == 1).astype(float)
+    dir_flags["rope_slope_pos"] = (safe_numeric(out.get("rope_slope_atr_5", pd.Series(index=out.index))) > 0).astype(float)
+    dir_flags["recent_turn"] = (safe_numeric(out.get("bars_since_dir_change", pd.Series(index=out.index))).fillna(99) <= 8).astype(float)
+    dir_flags["breakout_or_expand"] = ((safe_numeric(out.get("range_break_up", pd.Series(index=out.index))).fillna(0) > 0) |
+                                        (safe_numeric(out.get("bb_expanding", pd.Series(index=out.index))).fillna(0) > 0) |
+                                        (safe_numeric(out.get("dsa_trade_breakout_20", pd.Series(index=out.index))).fillna(0) > 0)).astype(float)
+    dir_flags["weekly_support"] = ((safe_numeric(out.get("w_DSA_DIR", pd.Series(index=out.index))).fillna(0) >= 0) |
+                                    (safe_numeric(out.get("w_dsa_trade_pos_01", pd.Series(index=out.index))).fillna(1) <= 0.5)).astype(float)
+    out["dir_consistent"] = dir_flags.sum(axis=1)
+
+    trend_parts = pd.DataFrame(index=out.index)
+    trend_parts["rope_slope"] = normalize_01(safe_numeric(out.get("rope_slope_atr_5", pd.Series(index=out.index))), reverse=False)
+    trend_parts["trend_gap"] = normalize_01(safe_numeric(out.get("trend_gap_10_20", pd.Series(index=out.index))), reverse=False)
+    trend_parts["signed_dev"] = normalize_01(safe_numeric(out.get("dsa_signed_vwap_dev_pct", pd.Series(index=out.index))), reverse=False)
+    trend_parts["current_run_early"] = normalize_01(safe_numeric(out.get("current_run_bars", pd.Series(index=out.index))), reverse=True)
+    trend_parts["bars_since_early"] = normalize_01(safe_numeric(out.get("bars_since_dir_change", pd.Series(index=out.index))), reverse=True)
+    out["score_trend_total"] = trend_parts.mean(axis=1)
+
+    volume_parts = pd.DataFrame(index=out.index)
+    volume_parts["vol_ratio"] = normalize_01(safe_numeric(out.get("vol_ratio_20", pd.Series(index=out.index))), reverse=False)
+    volume_parts["vol_z"] = normalize_01(safe_numeric(out.get("vol_z_20", pd.Series(index=out.index))), reverse=False)
+    volume_parts["break_strength"] = normalize_01(safe_numeric(out.get("range_break_up_strength", pd.Series(index=out.index))), reverse=False)
+    out["score_volume_total"] = volume_parts.mean(axis=1)
+
+    width_parts = pd.DataFrame(index=out.index)
+    width_parts["bbw_pct_low"] = normalize_01(safe_numeric(out.get("bb_width_percentile", pd.Series(index=out.index))), reverse=True)
+    width_parts["range_atr_low"] = normalize_01(safe_numeric(out.get("range_width_atr", pd.Series(index=out.index))), reverse=True)
+    width_parts["dsa_width_low"] = normalize_01(safe_numeric(out.get("dsa_trade_range_width_pct", pd.Series(index=out.index))), reverse=True)
+    width_parts["contract"] = normalize_01(safe_numeric(out.get("bb_contract_streak", pd.Series(index=out.index))), reverse=False)
+    out["score_width_total"] = width_parts.mean(axis=1)
+
+    rope_parts = pd.DataFrame(index=out.index)
+    rope_parts["near_rope"] = normalize_01(safe_numeric(out.get("dist_to_rope_atr", pd.Series(index=out.index))).abs(), reverse=True)
+    rope_parts["rope_up"] = dir_flags["rope_up"]
+    rope_parts["rope_slope"] = normalize_01(safe_numeric(out.get("rope_slope_atr_5", pd.Series(index=out.index))), reverse=False)
+    out["score_rope_total"] = rope_parts.mean(axis=1)
+
+    out["score_setup_total"] = pd.concat([
+        safe_numeric(out["position_in_structure"]).pipe(lambda s: 1 - s.clip(0, 1)),
+        normalize_01(out["dir_consistent"], reverse=False),
+        safe_numeric(out["score_trend_total"]),
+        safe_numeric(out["score_volume_total"]),
+        safe_numeric(out["score_width_total"]),
+        safe_numeric(out["score_rope_total"]),
+    ], axis=1).mean(axis=1)
+    return out
+
+
 def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
     if "vol" in d.columns and "volume" not in d.columns:
         d["volume"] = d["vol"]
+    d = add_micro_features(d)
     dsa_df, _, _ = compute_dsa(d, DSAConfig(prd=50, base_apt=20.0))
     dsa_confirmed = dsa_df.rename(columns={
         "dsa_pivot_high": "dsa_confirmed_pivot_high",
@@ -281,13 +336,13 @@ def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
     dsa_trade = build_trade_safe_dsa_features(d, lookback=50)
     rope_df = compute_atr_rope(d, RopeConfig(length=14, multi=1.5))
     bb_df = compute_bollinger(d, length=20, mult=2.0, pct_lookback=120)
-    rope_coil_df = add_rope_coil_features(rope_df)
     weekly_confirmed = map_weekly_dsa_confirmed_to_daily(d)
     weekly_trade = map_weekly_dsa_trade_to_daily(d)
     merged = pd.concat(
-        [d, dsa_confirmed, dsa_trade, rope_df.drop(columns=d.columns, errors="ignore"), bb_df.drop(columns=d.columns, errors="ignore"), rope_coil_df, weekly_confirmed, weekly_trade],
+        [d, dsa_confirmed, dsa_trade, rope_df.drop(columns=d.columns, errors="ignore"), bb_df.drop(columns=d.columns, errors="ignore"), weekly_confirmed, weekly_trade],
         axis=1,
     )
+    merged = add_composite_features(merged)
     return merged
 
 
@@ -311,699 +366,531 @@ def add_forward_returns(df: pd.DataFrame, windows: Sequence[int] = RET_WINDOWS) 
     return out
 
 
-FACTOR_COLS = [
-    # DSA trade-safe
-    "dsa_trade_pos_01", "dsa_trade_range_width_pct", "dsa_trade_dist_to_low_01", "dsa_trade_dist_to_high_01",
+TRADE_FEATURES = [
+    "dsa_trade_pos_01", "dsa_trade_dist_to_low_01", "dsa_trade_dist_to_high_01", "dsa_trade_range_width_pct",
+    "bb_pos_01", "bb_width_norm", "bb_width_percentile", "bb_width_change_5", "bb_expanding", "bb_contracting",
+    "bb_expand_streak", "bb_contract_streak",
+    "rope_dir", "dist_to_rope_atr", "rope_slope_atr_5", "bars_since_dir_change", "is_consolidating",
+    "range_break_up", "range_break_up_strength", "range_width_atr", "channel_pos_01", "range_pos_01", "rope_pivot_pos_01",
     "dsa_trade_breakout_20", "dsa_trade_breakdown_20",
-    # DSA confirmed / research
+    "w_dsa_trade_pos_01", "w_dsa_trade_dist_to_low_01", "w_dsa_trade_dist_to_high_01", "w_dsa_trade_range_width_pct",
+    "w_factor_available", "w_sample_count",
+    "ret_1", "ret_3", "ret_5", "vol_ratio_20", "vol_z_20", "trend_gap_10_20",
+    "position_in_structure", "dir_consistent", "score_trend_total", "score_volume_total", "score_width_total", "score_rope_total", "score_setup_total",
+]
+
+RESEARCH_FEATURES = [
     "dsa_confirmed_pivot_pos_01", "dsa_signed_vwap_dev_pct", "dsa_trend_aligned_vwap_dev_pct",
     "lh_hh_low_pos", "dsa_bull_vwap_dev_pct", "dsa_bear_vwap_dev_pct",
     "prev_confirmed_up_bars", "prev_confirmed_down_bars", "last_confirmed_run_bars", "current_run_bars",
-    # Rope
-    "rope_dir", "dist_to_rope_atr", "rope_slope_atr_5", "is_consolidating", "bars_since_dir_change",
-    "range_break_up", "range_break_up_strength", "range_width_atr", "channel_pos_01", "range_pos_01", "rope_pivot_pos_01",
-    "rope_near_core", "rope_near_soft", "rope_near_core_streak", "rope_near_soft_streak", "rope_near_soft_ratio_5", "rope_near_soft_ratio_8", "rope_coil_tight",
-    # BB
-    "bb_pos_01", "bb_width_norm", "bb_width_percentile", "bb_width_change_5", "bb_expanding", "bb_contracting",
-    "bb_expand_streak", "bb_contract_streak",
-    # Weekly
     "w_DSA_DIR", "w_dsa_confirmed_pivot_pos_01", "w_dsa_signed_vwap_dev_pct", "w_prev_confirmed_up_bars", "w_prev_confirmed_down_bars",
-    "w_dsa_trade_pos_01", "w_dsa_trade_range_width_pct", "w_dsa_trade_dist_to_low_01", "w_dsa_trade_dist_to_high_01",
-    "w_factor_available", "w_sample_count",
-]
-FACTOR_GROUPS = {
-    "DSA_TRADE": [
-        "dsa_trade_pos_01", "dsa_trade_range_width_pct", "dsa_trade_dist_to_low_01", "dsa_trade_dist_to_high_01",
-        "dsa_trade_breakout_20", "dsa_trade_breakdown_20", "w_dsa_trade_pos_01", "w_dsa_trade_range_width_pct",
-        "w_dsa_trade_dist_to_low_01", "w_dsa_trade_dist_to_high_01",
-    ],
-    "DSA_CONFIRMED": [
-        "dsa_confirmed_pivot_pos_01", "dsa_signed_vwap_dev_pct", "dsa_trend_aligned_vwap_dev_pct",
-        "lh_hh_low_pos", "dsa_bull_vwap_dev_pct", "dsa_bear_vwap_dev_pct",
-        "prev_confirmed_up_bars", "prev_confirmed_down_bars", "last_confirmed_run_bars", "current_run_bars",
-        "w_DSA_DIR", "w_dsa_confirmed_pivot_pos_01", "w_dsa_signed_vwap_dev_pct", "w_prev_confirmed_up_bars", "w_prev_confirmed_down_bars",
-    ],
-    "ROPE": [
-        "rope_dir", "dist_to_rope_atr", "rope_slope_atr_5", "is_consolidating", "bars_since_dir_change",
-        "range_break_up", "range_break_up_strength", "range_width_atr", "channel_pos_01", "range_pos_01", "rope_pivot_pos_01",
-        "rope_near_core", "rope_near_soft", "rope_near_core_streak", "rope_near_soft_streak", "rope_near_soft_ratio_5", "rope_near_soft_ratio_8", "rope_coil_tight",
-    ],
-    "BB": [
-        "bb_pos_01", "bb_width_norm", "bb_width_percentile", "bb_width_change_5", "bb_expanding", "bb_contracting", "bb_expand_streak", "bb_contract_streak",
-    ],
-    "WEEKLY_META": ["w_factor_available", "w_sample_count"],
-}
-FACTOR_USAGE = {c: "trade" for c in FACTOR_COLS}
-for c in [
-    "dsa_confirmed_pivot_pos_01", "dsa_signed_vwap_dev_pct", "dsa_trend_aligned_vwap_dev_pct", "lh_hh_low_pos", "dsa_bull_vwap_dev_pct",
-    "dsa_bear_vwap_dev_pct", "prev_confirmed_up_bars", "prev_confirmed_down_bars", "last_confirmed_run_bars", "current_run_bars",
-    "w_DSA_DIR", "w_dsa_confirmed_pivot_pos_01", "w_dsa_signed_vwap_dev_pct", "w_prev_confirmed_up_bars", "w_prev_confirmed_down_bars",
-]:
-    FACTOR_USAGE[c] = "research"
-DISCRETE_COLS = [
-    "rope_dir", "is_consolidating", "range_break_up", "bb_expanding", "bb_contracting", "rope_near_core", "rope_near_soft", "rope_coil_tight",
-    "w_DSA_DIR", "dsa_trade_breakout_20", "dsa_trade_breakdown_20", "w_factor_available",
-]
-CONTINUOUS_COLS = [c for c in FACTOR_COLS if c not in DISCRETE_COLS]
-TRADE_FACTOR_COLS = [c for c in FACTOR_COLS if FACTOR_USAGE.get(c) == "trade"]
-RESEARCH_FACTOR_COLS = [c for c in FACTOR_COLS if FACTOR_USAGE.get(c) == "research"]
-
-
-# =========================
-# Exploration-first analyses
-# =========================
-def analyze_00_factor_inventory(df: pd.DataFrame) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次⓪: 因子全景盘点")
-    print("=" * 70)
-    rows = []
-    for factor in FACTOR_COLS:
-        present = factor in df.columns
-        s = df[factor] if present else pd.Series(dtype=float)
-        coverage = float(s.notna().mean()) if present else 0.0
-        dtype_name = str(s.dtype) if present else "missing"
-        nunique = int(s.nunique(dropna=True)) if present else 0
-        rows.append({
-            "factor": factor,
-            "group": next((g for g, cols in FACTOR_GROUPS.items() if factor in cols), "OTHER"),
-            "usage": FACTOR_USAGE.get(factor, "shared"),
-            "present": int(present),
-            "coverage": round(coverage, 4),
-            "dtype": dtype_name,
-            "nunique": nunique,
-            "mean": round(float(s.mean()), 6) if present and pd.api.types.is_numeric_dtype(s) else np.nan,
-            "std": round(float(s.std()), 6) if present and pd.api.types.is_numeric_dtype(s) else np.nan,
-        })
-    rdf = pd.DataFrame(rows).sort_values(["present", "coverage", "group", "factor"], ascending=[False, False, True, True])
-    if not rdf.empty:
-        print(rdf[["factor", "group", "usage", "coverage", "nunique", "mean", "std"]].to_string(index=False))
-        rdf.to_csv(f"{OUT_DIR}/00_factor_inventory.csv", index=False)
-    return rdf
-
-
-def analyze_01_single_factor(df: pd.DataFrame) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次①: 单因子截面分析 (主口径 ret_20)")
-    print("=" * 70)
-    ret_cols = [f"ret_{w}" for w in RET_WINDOWS] + [f"max_dd_{w}" for w in RET_WINDOWS] + [f"win_{w}" for w in RET_WINDOWS]
-    results = []
-    for col in CONTINUOUS_COLS:
-        if col not in df.columns:
-            continue
-        sub = df[[col] + ret_cols].dropna()
-        if len(sub) < 200:
-            continue
-        try:
-            qcol = f"{col}_q"
-            sub[qcol] = pd.qcut(sub[col], q=5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"], duplicates="drop")
-            grp = sub.groupby(qcol, observed=True).agg(n=(col, "count"), mean_ret20=("ret_20", "mean"), mean_max_dd=("max_dd_20", "mean"), win_rate=("win_20", "mean"))
-            grp["risk_reward"] = grp.apply(lambda r: rr_from_ret_dd(r["mean_ret20"], r["mean_max_dd"]), axis=1)
-            ic = sub[col].corr(sub["ret_20"])
-            rank_ic = sub[col].rank().corr(sub["ret_20"].rank())
-            best_q = grp["risk_reward"].idxmax() if not grp["risk_reward"].isna().all() else "N/A"
-            results.append({
-                "factor": col,
-                "usage": FACTOR_USAGE.get(col, "shared"),
-                "IC": round(ic, 4),
-                "Rank_IC": round(rank_ic, 4),
-                "best_Q_rr": best_q,
-                "Q1_rr": round(grp.loc["Q1", "risk_reward"], 3) if "Q1" in grp.index else np.nan,
-                "Q5_rr": round(grp.loc["Q5", "risk_reward"], 3) if "Q5" in grp.index else np.nan,
-                "Q1_ret20": round(grp.loc["Q1", "mean_ret20"], 5) if "Q1" in grp.index else np.nan,
-                "Q5_ret20": round(grp.loc["Q5", "mean_ret20"], 5) if "Q5" in grp.index else np.nan,
-            })
-        except Exception as e:
-            results.append({"factor": col, "usage": FACTOR_USAGE.get(col, "shared"), "error": str(e)[:80]})
-    rdf = pd.DataFrame(results).sort_values("Rank_IC", key=lambda s: s.abs(), ascending=False)
-    if not rdf.empty:
-        print(rdf.head(25)[["factor", "usage", "IC", "Rank_IC", "best_Q_rr", "Q1_rr", "Q5_rr", "Q1_ret20", "Q5_ret20"]].to_string(index=False))
-        rdf.to_csv(f"{OUT_DIR}/01_single_factor.csv", index=False)
-    return rdf
-
-
-def analyze_01b_discrete_factor(df: pd.DataFrame) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次①B: 离散因子分组分析")
-    print("=" * 70)
-    rows = []
-    for col in DISCRETE_COLS:
-        if col not in df.columns:
-            continue
-        sub = df[[col, "ret_20", "max_dd_20", "win_20"]].dropna()
-        if len(sub) < 100:
-            continue
-        for key, g in sub.groupby(col, observed=True):
-            if len(g) < 20:
-                continue
-            ret = g["ret_20"].mean()
-            dd = g["max_dd_20"].mean()
-            wr = g["win_20"].mean()
-            rows.append({
-                "factor": col,
-                "usage": FACTOR_USAGE.get(col, "shared"),
-                "bucket": key,
-                "n": len(g),
-                "ret20": round(ret, 5),
-                "dd20": round(dd, 5),
-                "wr20": round(wr, 4),
-                "rr20": round(rr_from_ret_dd(ret, dd), 3),
-            })
-    rdf = pd.DataFrame(rows).sort_values(["factor", "rr20"], ascending=[True, False])
-    if not rdf.empty:
-        print(rdf.head(40).to_string(index=False))
-        rdf.to_csv(f"{OUT_DIR}/01b_discrete_factor.csv", index=False)
-    return rdf
-
-
-SCENARIOS = {
-    "S1_Rope触底反弹": lambda d: (d["rope_dir"] == 1) & (d["rope_dir"].shift(1) == -1) & (d["dist_to_rope_atr"] < 0.5),
-    "S2_盘整突破": lambda d: (d["range_break_up"] == 1) & (d["range_width_atr"] < d["range_width_atr"].median()),
-    "S3_BB下轨回弹": lambda d: (d["bb_pos_01"] < 0.15) & (d["close"] > d["open"]),
-    "S4_BB_Squeeze突破": lambda d: (d["bb_width_percentile"] < 0.2) & (d["bb_expanding"] == 1),
-    "S5_Trade低位+Rope向上": lambda d: (d["dsa_trade_pos_01"] < 0.4) & (d["rope_dir"] == 1),
-    "S6_长下跌段后转强": lambda d: (d.get("prev_confirmed_down_bars", 0) >= 10) & (d["rope_dir"] == 1),
-}
-
-
-def eval_scenario(mask: pd.Series, name: str, df: pd.DataFrame, baseline_n: int) -> Optional[Dict[str, float]]:
-    sm = df[mask]
-    if len(sm) < 30:
-        return None
-    row: Dict[str, float] = {"scenario": name, "n": len(sm), "coverage_pct": round(len(sm) / baseline_n * 100, 1)}
-    for w in [5, 10, 20, 60]:
-        ret = sm[f"ret_{w}"].mean()
-        dd = sm[f"max_dd_{w}"].mean()
-        wr = sm[f"win_{w}"].mean()
-        row[f"ret{w}"] = round(ret, 5)
-        row[f"dd{w}"] = round(dd, 5)
-        row[f"wr{w}"] = round(wr, 4)
-        row[f"rr{w}"] = round(rr_from_ret_dd(ret, dd), 3)
-    return row
-
-
-def analyze_02_scenarios(df: pd.DataFrame) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次②: 经典买入场景回测")
-    print("=" * 70)
-    need = list(dict.fromkeys(FACTOR_COLS + ["open", "close"] + [f"ret_{w}" for w in [5, 10, 20, 60]] + [f"max_dd_{w}" for w in [5, 10, 20, 60]] + [f"win_{w}" for w in [5, 10, 20, 60]]))
-    sub = df[[c for c in need if c in df.columns]].dropna()
-    baseline_n = len(sub)
-    rows = []
-    for name, fn in SCENARIOS.items():
-        try:
-            r = eval_scenario(fn(sub), name, sub, baseline_n)
-            if r:
-                rows.append(r)
-        except Exception as e:
-            print(f"  [WARN] {name} 失败: {e}")
-    rdf = pd.DataFrame(rows).sort_values("rr20", ascending=False)
-    if not rdf.empty:
-        print(rdf[[c for c in ["scenario", "n", "coverage_pct", "ret20", "dd20", "wr20", "rr20", "ret60", "rr60"] if c in rdf.columns]].to_string(index=False))
-        rdf.to_csv(f"{OUT_DIR}/02_scenarios.csv", index=False)
-    return rdf
-
-
-def analyze_03_interaction(df: pd.DataFrame) -> None:
-    print("\n" + "=" * 70)
-    print("# 层次③: 因子交互效应分析 (四象限)")
-    print("=" * 70)
-    need = ["rope_dir", "bb_pos_01", "dsa_trade_pos_01", "rope_slope_atr_5", "bb_width_percentile", "ret_20", "max_dd_20", "win_20"]
-    sub = df[[c for c in need if c in df.columns]].dropna()
-    if len(sub) == 0:
-        return
-    inters = [
-        ("rope_dir × bb_pos_01", "rope_dir", pd.cut(sub["bb_pos_01"], bins=[0, 0.2, 0.5, 0.8, 1.01], labels=["超卖", "偏弱", "偏强", "超买"], include_lowest=True)),
-        ("trade_pos × rope_slope", pd.cut(sub["dsa_trade_pos_01"], bins=[0, 0.3, 0.7, 1.01], labels=["低位", "中位", "高位"], include_lowest=True), pd.cut(sub["rope_slope_atr_5"], bins=[-np.inf, -0.01, 0.01, 0.05, np.inf], labels=["强跌", "微跌", "微涨", "强涨"])),
-    ]
-    for label, a, b in inters:
-        tmp = sub.copy()
-        tmp["a"] = a if isinstance(a, pd.Series) else tmp[a]
-        tmp["b"] = b if isinstance(b, pd.Series) else tmp[b]
-        g = tmp.groupby(["a", "b"], observed=True).agg(n=("ret_20", "count"), ret20=("ret_20", "mean"), dd20=("max_dd_20", "mean"), wr20=("win_20", "mean"))
-        g["rr20"] = g.apply(lambda r: rr_from_ret_dd(r["ret20"], r["dd20"]), axis=1).round(3)
-        print(f"\n--- {label} ---")
-        print(g.to_string())
-
-
-def analyze_03b_factor_pairs(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次③B: 第二轮 trade-only 双因子组合扫描")
-    print("=" * 70)
-    candidate_cols = [c for c in ROUND2_TRADE_CANDIDATES if c in df.columns and c not in DISCRETE_COLS and df[c].notna().sum() >= 300]
-    rows = []
-    for i in range(len(candidate_cols)):
-        for j in range(i + 1, len(candidate_cols)):
-            a, b = candidate_cols[i], candidate_cols[j]
-            sub = df[[a, b, "ret_20", "max_dd_20", "win_20"]].dropna()
-            if len(sub) < 200:
-                continue
-            try:
-                qa = pd.qcut(sub[a], q=3, labels=["L", "M", "H"], duplicates="drop")
-                qb = pd.qcut(sub[b], q=3, labels=["L", "M", "H"], duplicates="drop")
-                grp = sub.groupby([qa, qb], observed=True).agg(n=("ret_20", "count"), ret20=("ret_20", "mean"), dd20=("max_dd_20", "mean"), wr20=("win_20", "mean"))
-                grp["rr20"] = grp.apply(lambda r: rr_from_ret_dd(r["ret20"], r["dd20"]), axis=1)
-                best_idx = grp["rr20"].idxmax() if not grp["rr20"].isna().all() else None
-                if best_idx is None:
-                    continue
-                best = grp.loc[best_idx]
-                rows.append({
-                    "f1": a, "f2": b, "best_bucket": f"{best_idx[0]}×{best_idx[1]}", "n": int(best["n"]),
-                    "ret20": round(float(best["ret20"]), 5), "dd20": round(float(best["dd20"]), 5), "wr20": round(float(best["wr20"]), 4), "rr20": round(float(best["rr20"]), 3),
-                })
-            except Exception:
-                continue
-    rdf = pd.DataFrame(rows).sort_values("rr20", ascending=False)
-    if not rdf.empty:
-        print(rdf.head(25).to_string(index=False))
-        rdf.to_csv(f"{OUT_DIR}/03b_factor_pairs.csv", index=False)
-    return rdf
-
-
-def analyze_04_rule_search(df: pd.DataFrame) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次④: 最优规则搜索")
-    print("=" * 70)
-    need = [c for c in list(dict.fromkeys(FACTOR_COLS + ["ret_20", "max_dd_20", "win_20", "open", "close", "vol"])) if c in df.columns]
-    sub = df[need].dropna(subset=["ret_20", "max_dd_20"]).copy()
-    if len(sub) == 0:
-        return pd.DataFrame()
-    sub["vol_zscore"] = (sub["vol"] - sub["vol"].rolling(60, min_periods=20).mean()) / sub["vol"].rolling(60, min_periods=20).std()
-    baseline_n = len(sub)
-
-    def eval_rule(mask: pd.Series, name: str) -> Optional[Dict[str, float]]:
-        g = sub[mask]
-        if len(g) < 50 or len(g) / baseline_n < 0.005:
-            return None
-        ret = g["ret_20"].mean()
-        dd = g["max_dd_20"].mean()
-        wr = g["win_20"].mean()
-        return {"rule": name, "n": len(g), "coverage_pct": round(len(g) / baseline_n * 100, 1), "ret20": round(ret, 5), "dd20": round(dd, 5), "wr20": round(wr, 4), "rr20": round(rr_from_ret_dd(ret, dd), 3)}
-
-    results: List[Dict[str, float]] = []
-    candidates = [
-        ("dsa_trade_pos_01", [0.2, 0.3, 0.4]),
-        ("dist_to_rope_atr", [-1.0, -0.5, 0.0]),
-        ("bb_pos_01", [0.15, 0.2, 0.25]),
-        ("bars_since_dir_change", [3, 5]),
-        ("bb_width_percentile", [0.2, 0.25, 0.3]),
-        ("prev_confirmed_down_bars", [5, 10, 20]),
-    ]
-    for col, vals in candidates:
-        if col not in sub.columns:
-            continue
-        for hi in vals:
-            mask = sub[col] <= hi if col != "prev_confirmed_down_bars" else sub[col] >= hi
-            r = eval_rule(mask, f"{col}{'<=' if col != 'prev_confirmed_down_bars' else '>='}{hi}")
-            if r:
-                results.append(r)
-    combos = {
-        "tradepos<0.4&窄幅突破": (sub.get("dsa_trade_pos_01", np.nan) < 0.4) & (sub.get("range_break_up", 0) == 1) & (sub.get("range_width_atr", np.inf) < sub["range_width_atr"].median()),
-        "tradepos<0.4&rope_up": (sub.get("dsa_trade_pos_01", np.nan) < 0.4) & (sub.get("rope_dir", 0) == 1) & (sub.get("bars_since_dir_change", np.inf) <= 3),
-        "downbars_long&rope_up": (sub.get("prev_confirmed_down_bars", -np.inf) >= 10) & (sub.get("rope_dir", 0) == 1) & (sub.get("bb_pos_01", np.nan) < 0.3),
-    }
-    for name, mask in combos.items():
-        r = eval_rule(mask, name)
-        if r:
-            results.append(r)
-    rdf = pd.DataFrame(results).sort_values("rr20", ascending=False)
-    if not rdf.empty:
-        print(rdf.head(20).to_string(index=False))
-        rdf.to_csv(f"{OUT_DIR}/04_rules.csv", index=False)
-    return rdf
-
-
-
-
-# =========================
-# Round2 strategy specs
-# =========================
-ROUND2_TRADE_CANDIDATES = [
-    "dsa_trade_pos_01", "dsa_trade_dist_to_low_01", "dist_to_rope_atr", "bb_pos_01",
-    "rope_dir", "bars_since_dir_change", "rope_slope_atr_5", "range_break_up",
-    "prev_confirmed_down_bars", "current_run_bars",
-    "rope_near_core_streak", "rope_near_soft_streak", "rope_near_soft_ratio_5", "rope_near_soft_ratio_8",
 ]
 
-ROUND2_STRATEGY_SPECS: Dict[str, Dict[str, object]] = {
-    "A_low_repair": {
-        "desc": "低位修复主线",
-        "dsa_thr": 0.35,
-        "dist_thr": -0.8,
-        "bars_thr": 8,
-        "prev_down_min": 10,
-        "need_rope_up": True,
-    },
-    "B_low_repair_strong_trigger": {
-        "desc": "低位+更强触发",
-        "dsa_thr": 0.35,
-        "dist_thr": -0.5,
-        "bars_thr": 5,
-        "prev_down_min": None,
-        "need_rope_up": True,
-        "slope_min": 0.0,
-    },
-    "C_long_down_repair": {
-        "desc": "长下跌段后的修复",
-        "dsa_thr": 0.40,
-        "dist_thr": None,
-        "bars_thr": 8,
-        "prev_down_min": 20,
-        "need_rope_up": True,
-        "current_run_max": 15,
-    },
-    "D_low_breakout": {
-        "desc": "低位+breakout",
-        "dsa_thr": 0.40,
-        "dist_thr": None,
-        "bars_thr": None,
-        "prev_down_min": 10,
-        "need_rope_up": False,
-        "bb_pos_max": 0.35,
-        "range_break_up": 1,
-    },
-    "E_rope_coil_launch": {
-        "desc": "Rope贴线蓄势后启动（增强版）",
-        "dsa_thr": None,
-        "dist_min": -1.0,
-        "dist_max": 0.2,
-        "bars_thr": 5,
-        "prev_down_min": None,
-        "need_rope_up": True,
-        "slope_min": 0.0,
-        "bb_pos_max": 0.5,
-        "range_break_up_or_bb_expand": True,
-        "rope_near_soft_streak_min": 3,
-        "rope_near_soft_ratio_5_min": 0.6,
-        "bb_width_percentile_max": 0.4,
-        "rope_coil_tight": 1,
-    },
-    "F_rope_coil_launch_strict": {
-        "desc": "更严格的贴Rope压缩后启动",
-        "dsa_thr": None,
-        "dist_min": -0.8,
-        "dist_max": 0.15,
-        "bars_thr": 3,
-        "prev_down_min": None,
-        "need_rope_up": True,
-        "slope_min": 0.0,
-        "bb_pos_max": 0.45,
-        "range_break_up_or_bb_expand": True,
-        "rope_near_core_streak_min": 2,
-        "rope_near_soft_ratio_8_min": 0.75,
-        "bb_width_percentile_max": 0.3,
-        "rope_coil_tight": 1,
-    },
-}
+PRIMARY_HINT_FEATURES = [
+    "position_in_structure", "dir_consistent", "range_width_atr", "score_trend_total", "score_volume_total",
+    "score_width_total", "score_rope_total", "score_setup_total", "dsa_trade_pos_01", "bb_width_percentile",
+    "bars_since_dir_change", "prev_confirmed_down_bars", "current_run_bars", "dist_to_rope_atr",
+]
+
+COMPOSITE_FEATURES = [
+    "position_in_structure", "dir_consistent", "score_trend_total", "score_volume_total",
+    "score_width_total", "score_rope_total", "score_setup_total",
+]
 
 
-def build_round2_events(df: pd.DataFrame, strategy_name: str, cooldown: int = EVENT_DEDUP_BARS, override: Optional[Dict[str, object]] = None) -> pd.DataFrame:
-    if strategy_name not in ROUND2_STRATEGY_SPECS:
-        raise ValueError(f"未知策略: {strategy_name}")
-    spec = dict(ROUND2_STRATEGY_SPECS[strategy_name])
-    if override:
-        spec.update(override)
-    need = [
+@dataclass
+class NeighborSpec:
+    dsa_max: float = 0.45
+    prev_down_min: float = 8.0
+    need_rope_up: bool = True
+    current_run_max: float = 20.0
+    bars_since_max: float = 12.0
+
+
+def build_neighbor_events(df: pd.DataFrame, spec: NeighborSpec, cooldown: int = EVENT_DEDUP_BARS) -> pd.DataFrame:
+    need = list(dict.fromkeys([
         "symbol", "datetime", "open", "high", "low", "close",
-        "dsa_trade_pos_01", "dsa_trade_dist_to_low_01", "dist_to_rope_atr", "bb_pos_01",
-        "rope_dir", "bars_since_dir_change", "rope_slope_atr_5", "range_break_up", "bb_expanding",
-        "prev_confirmed_down_bars", "current_run_bars",
-        "rope_near_core", "rope_near_soft", "rope_near_core_streak", "rope_near_soft_streak", "rope_near_soft_ratio_5", "rope_near_soft_ratio_8", "rope_coil_tight", "bb_width_percentile",
-        "w_DSA_DIR", "w_dsa_confirmed_pivot_pos_01", "w_dsa_trade_pos_01", "w_dsa_signed_vwap_dev_pct", "w_factor_available", "w_sample_count",
-    ] + [f"ret_{w}" for w in [20, 40, 60]] + [f"max_dd_{w}" for w in [20, 40, 60]] + [f"win_{w}" for w in [20, 40, 60]]
+        *TRADE_FEATURES, *RESEARCH_FEATURES,
+        *[f"ret_{w}" for w in RET_WINDOWS],
+        *[f"max_dd_{w}" for w in RET_WINDOWS],
+        *[f"win_{w}" for w in RET_WINDOWS],
+    ]))
     need = [c for c in need if c in df.columns]
-    sub = df[need].dropna(subset=[c for c in ["ret_20", "max_dd_20", "rope_dir"] if c in need]).copy()
-    mask = pd.Series(True, index=sub.index)
-    dsa_thr = spec.get("dsa_thr")
-    if dsa_thr is not None and "dsa_trade_pos_01" in sub.columns:
-        mask &= sub["dsa_trade_pos_01"] <= float(dsa_thr)
-    dist_thr = spec.get("dist_thr")
-    if dist_thr is not None and "dist_to_rope_atr" in sub.columns:
-        mask &= sub["dist_to_rope_atr"] <= float(dist_thr)
-    dist_min = spec.get("dist_min")
-    if dist_min is not None and "dist_to_rope_atr" in sub.columns:
-        mask &= sub["dist_to_rope_atr"] >= float(dist_min)
-    dist_max = spec.get("dist_max")
-    if dist_max is not None and "dist_to_rope_atr" in sub.columns:
-        mask &= sub["dist_to_rope_atr"] <= float(dist_max)
-    if spec.get("need_rope_up") and "rope_dir" in sub.columns:
+    sub = df[need].dropna(subset=[c for c in ["ret_20", "max_dd_20", "dsa_trade_pos_01", "rope_dir"] if c in need]).copy()
+    mask = sub["dsa_trade_pos_01"] <= float(spec.dsa_max)
+    if "prev_confirmed_down_bars" in sub.columns:
+        mask &= sub["prev_confirmed_down_bars"] >= float(spec.prev_down_min)
+    if spec.need_rope_up and "rope_dir" in sub.columns:
         mask &= sub["rope_dir"] == 1
-    bars_thr = spec.get("bars_thr")
-    if bars_thr is not None and "bars_since_dir_change" in sub.columns:
-        mask &= sub["bars_since_dir_change"] <= int(bars_thr)
-    slope_min = spec.get("slope_min")
-    if slope_min is not None and "rope_slope_atr_5" in sub.columns:
-        mask &= sub["rope_slope_atr_5"] > float(slope_min)
-    prev_down_min = spec.get("prev_down_min")
-    if prev_down_min is not None and "prev_confirmed_down_bars" in sub.columns:
-        mask &= sub["prev_confirmed_down_bars"] >= float(prev_down_min)
-    current_run_max = spec.get("current_run_max")
-    if current_run_max is not None and "current_run_bars" in sub.columns:
-        mask &= sub["current_run_bars"] <= float(current_run_max)
-    bb_pos_max = spec.get("bb_pos_max")
-    if bb_pos_max is not None and "bb_pos_01" in sub.columns:
-        mask &= sub["bb_pos_01"] <= float(bb_pos_max)
-    if spec.get("range_break_up") is not None and "range_break_up" in sub.columns:
-        mask &= sub["range_break_up"] == float(spec["range_break_up"])
-    if spec.get("range_break_up_or_bb_expand"):
-        cond = pd.Series(False, index=sub.index)
-        if "range_break_up" in sub.columns:
-            cond |= sub["range_break_up"] == 1
-        if "bb_expanding" in sub.columns:
-            cond |= sub["bb_expanding"] == 1
-        mask &= cond
-    rope_near_core_streak_min = spec.get("rope_near_core_streak_min")
-    if rope_near_core_streak_min is not None and "rope_near_core_streak" in sub.columns:
-        mask &= sub["rope_near_core_streak"] >= float(rope_near_core_streak_min)
-    rope_near_soft_streak_min = spec.get("rope_near_soft_streak_min")
-    if rope_near_soft_streak_min is not None and "rope_near_soft_streak" in sub.columns:
-        mask &= sub["rope_near_soft_streak"] >= float(rope_near_soft_streak_min)
-    rope_near_soft_ratio_5_min = spec.get("rope_near_soft_ratio_5_min")
-    if rope_near_soft_ratio_5_min is not None and "rope_near_soft_ratio_5" in sub.columns:
-        mask &= sub["rope_near_soft_ratio_5"] >= float(rope_near_soft_ratio_5_min)
-    rope_near_soft_ratio_8_min = spec.get("rope_near_soft_ratio_8_min")
-    if rope_near_soft_ratio_8_min is not None and "rope_near_soft_ratio_8" in sub.columns:
-        mask &= sub["rope_near_soft_ratio_8"] >= float(rope_near_soft_ratio_8_min)
-    bb_width_percentile_max = spec.get("bb_width_percentile_max")
-    if bb_width_percentile_max is not None and "bb_width_percentile" in sub.columns:
-        mask &= sub["bb_width_percentile"] <= float(bb_width_percentile_max)
-    if spec.get("rope_coil_tight") is not None and "rope_coil_tight" in sub.columns:
-        mask &= sub["rope_coil_tight"] == float(spec["rope_coil_tight"])
-    events = dedup_events(sub[mask].copy(), cooldown)
-    for w in [20, 40, 60]:
-        if f"ret_{w}" in events.columns:
-            events[f"rr_{w}"] = events.apply(lambda r: rr_from_ret_dd(r[f"ret_{w}"], r[f"max_dd_{w}"]), axis=1)
-    return events.reset_index(drop=True)
-
-# =========================
-# Strategy analyses
-# =========================
-def build_c2_events(df: pd.DataFrame, dsa_thr: float = 0.30, bars_thr: int = 3, vwap_thr: Optional[float] = -1.0, cooldown: int = EVENT_DEDUP_BARS) -> pd.DataFrame:
-    need = [
-        "symbol", "datetime", "open", "high", "low", "close",
-        "dsa_trade_pos_01", "dsa_confirmed_pivot_pos_01", "dsa_signed_vwap_dev_pct",
-        "rope_dir", "bars_since_dir_change", "rope_slope_atr_5", "bb_pos_01", "bb_width_percentile",
-        "prev_confirmed_up_bars", "prev_confirmed_down_bars",
-        "w_DSA_DIR", "w_dsa_confirmed_pivot_pos_01", "w_dsa_trade_pos_01", "w_dsa_signed_vwap_dev_pct", "w_factor_available", "w_sample_count",
-    ] + [f"ret_{w}" for w in [20, 40, 60]] + [f"max_dd_{w}" for w in [20, 40, 60]] + [f"win_{w}" for w in [20, 40, 60]]
-    need = [c for c in need if c in df.columns]
-    sub = df[need].dropna(subset=[c for c in ["ret_20", "max_dd_20", "dsa_trade_pos_01", "rope_dir", "bars_since_dir_change"] if c in need]).copy()
-    mask = (sub["dsa_trade_pos_01"] <= dsa_thr) & (sub["rope_dir"] == 1) & (sub["bars_since_dir_change"] <= bars_thr)
-    if vwap_thr is not None and "dsa_signed_vwap_dev_pct" in sub.columns:
-        mask &= sub["dsa_signed_vwap_dev_pct"] <= vwap_thr
-    if "bb_pos_01" in sub.columns:
-        mask &= sub["bb_pos_01"] <= 0.35
-    events = dedup_events(sub[mask].copy(), cooldown)
-    for w in [20, 40, 60]:
-        if f"ret_{w}" in events.columns:
-            events[f"rr_{w}"] = events.apply(lambda r: rr_from_ret_dd(r[f"ret_{w}"], r[f"max_dd_{w}"]), axis=1)
-    return events.reset_index(drop=True)
-
-
-def analyze_05_candidate_events(df: pd.DataFrame) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次⑤: Round2 候选策略事件表")
-    print("=" * 70)
-    rows, all_events = [], []
-    for name in ROUND2_STRATEGY_SPECS:
-        events = build_round2_events(df, name)
-        if len(events) == 0:
-            continue
-        row = {"strategy": name}
-        row.update(summarize_events(events, [20, 60]))
-        row = {("event_n" if k == "n" else k): v for k, v in row.items()}
-        rows.append(row)
-        tmp = events.copy(); tmp["strategy"] = name; all_events.append(tmp)
-    if not rows:
-        print("  无足够事件，跳过候选策略")
-        return pd.DataFrame()
-    rdf = pd.DataFrame(rows).sort_values("rr_20", ascending=False)
-    print(rdf[["strategy", "event_n", "ret_20", "mae_20", "wr_20", "rr_20", "ret_60", "rr_60"]].to_string(index=False))
-    rdf.to_csv(f"{OUT_DIR}/05_candidate_summary.csv", index=False)
-    if all_events:
-        pd.concat(all_events, ignore_index=True).to_csv(f"{OUT_DIR}/05_candidate_events.csv", index=False)
-    return rdf
-
-
-def analyze_06_long_down_repair_scan(df: pd.DataFrame) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次⑥: C_long_down_repair 主线参数扫描")
-    print("=" * 70)
-    rows = []
-    for dsa_thr in [0.25, 0.30, 0.35, 0.40]:
-        for prev_down_min in [10, 15, 20, 30]:
-            for current_run_max in [5, 8, 10, 15]:
-                for dist_mode in ["le_-1.0", "le_-0.5", "between_-1_0", "none"]:
-                    override = {
-                        "dsa_thr": dsa_thr,
-                        "prev_down_min": prev_down_min,
-                        "current_run_max": current_run_max,
-                        "bars_thr": 8,
-                        "need_rope_up": True,
-                    }
-                    if dist_mode == "le_-1.0":
-                        override.update({"dist_thr": -1.0, "dist_min": None, "dist_max": None})
-                    elif dist_mode == "le_-0.5":
-                        override.update({"dist_thr": -0.5, "dist_min": None, "dist_max": None})
-                    elif dist_mode == "between_-1_0":
-                        override.update({"dist_thr": None, "dist_min": -1.0, "dist_max": 0.0})
-                    else:
-                        override.update({"dist_thr": None, "dist_min": None, "dist_max": None})
-                    events = build_round2_events(df, "C_long_down_repair", override=override)
-                    if len(events) < 20:
-                        continue
-                    row = {
-                        "dsa_thr": dsa_thr,
-                        "prev_down_min": prev_down_min,
-                        "current_run_max": current_run_max,
-                        "dist_mode": dist_mode,
-                        "event_n": len(events),
-                    }
-                    row.update(summarize_events(events, [20, 40, 60]))
-                    rows.append(row)
-    if not rows:
-        print("  无足够事件，跳过主线参数扫描")
-        return pd.DataFrame()
-    rdf = pd.DataFrame(rows)
-    rdf["rr_20"] = rdf.get("rr_20", pd.Series(dtype=float)).fillna(-np.inf)
-    rdf = rdf.sort_values(["rr_20", "event_n"], ascending=[False, False])
-    print(rdf.head(12)[["dsa_thr", "prev_down_min", "current_run_max", "dist_mode", "event_n", "ret_20", "mae_20", "wr_20", "rr_20"]].to_string(index=False))
-    rdf.to_csv(f"{OUT_DIR}/06_long_down_repair_scan.csv", index=False)
-    return rdf
-
-
-def analyze_06b_rope_coil_scan(df: pd.DataFrame) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次⑥B: E/F Rope贴线蓄势参数扫描")
-    print("=" * 70)
-    rows = []
-    for strategy_name in ["E_rope_coil_launch", "F_rope_coil_launch_strict"]:
-        for soft_streak in [2, 3, 4]:
-            for ratio5 in [0.6, 0.8]:
-                for bb_width_max in [0.3, 0.4, 0.5]:
-                    override = {
-                        "rope_near_soft_streak_min": soft_streak,
-                        "rope_near_soft_ratio_5_min": ratio5,
-                        "bb_width_percentile_max": bb_width_max,
-                    }
-                    events = build_round2_events(df, strategy_name, override=override)
-                    if len(events) < 20:
-                        continue
-                    row = {
-                        "strategy": strategy_name,
-                        "soft_streak_min": soft_streak,
-                        "soft_ratio5_min": ratio5,
-                        "bb_width_max": bb_width_max,
-                        "event_n": len(events),
-                    }
-                    row.update(summarize_events(events, [20, 40, 60]))
-                    rows.append(row)
-    if not rows:
-        print("  无足够事件，跳过Rope贴线扫描")
-        return pd.DataFrame()
-    rdf = pd.DataFrame(rows)
-    rdf["rr_20"] = rdf.get("rr_20", pd.Series(dtype=float)).fillna(-np.inf)
-    rdf = rdf.sort_values(["rr_20", "event_n"], ascending=[False, False])
-    print(rdf.head(12)[["strategy", "soft_streak_min", "soft_ratio5_min", "bb_width_max", "event_n", "ret_20", "mae_20", "wr_20", "rr_20"]].to_string(index=False))
-    rdf.to_csv(f"{OUT_DIR}/06b_rope_coil_scan.csv", index=False)
-    return rdf
-
-
-def analyze_07_c2_time_slices(df: pd.DataFrame, strategy_name: str) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次⑦: Round2 时间切片验证")
-    print("=" * 70)
-    events = slice_equal_time_buckets(build_round2_events(df, strategy_name), 3)
-    rows = []
-    for name, g in events.groupby("time_slice", observed=True):
-        row = {"time_slice": str(name), "start": g["datetime"].min().strftime("%Y-%m"), "end": g["datetime"].max().strftime("%Y-%m")}
-        row.update(summarize_events(g, [20, 60]))
-        rows.append(row)
-    rdf = pd.DataFrame(rows).sort_values("time_slice") if rows else pd.DataFrame()
-    if not rdf.empty:
-        print(rdf[["time_slice", "start", "end", "n", "ret_20", "mae_20", "wr_20", "rr_20", "ret_60", "rr_60"]].to_string(index=False))
-        rdf.to_csv(f"{OUT_DIR}/07_c2_time_slices.csv", index=False)
-    return rdf
-
-
-def analyze_08_c2_weekly_compare(events: pd.DataFrame) -> pd.DataFrame:
-    print("\n" + "=" * 70)
-    print("# 层次⑧: 周线过滤与周线覆盖率对比")
-    print("=" * 70)
+    if "current_run_bars" in sub.columns:
+        mask &= sub["current_run_bars"] <= float(spec.current_run_max)
+    if "bars_since_dir_change" in sub.columns:
+        mask &= sub["bars_since_dir_change"] <= float(spec.bars_since_max)
+    events = dedup_events(sub[mask].copy(), cooldown).reset_index(drop=True)
     if events.empty:
-        print("  无事件数据，跳过周线对比")
-        return pd.DataFrame()
-    variants: List[Tuple[str, pd.Series]] = [("Base", pd.Series(True, index=events.index))]
-    if "w_factor_available" in events.columns:
-        variants += [("W0_has_weekly", events["w_factor_available"] == 1)]
-    if "w_dsa_trade_pos_01" in events.columns:
-        variants += [
-            ("W1_wtrade_lt_0.7", events["w_dsa_trade_pos_01"] < 0.7),
-            ("W2_wtrade_le_0.4", events["w_dsa_trade_pos_01"] <= 0.4),
-        ]
-    if "w_DSA_DIR" in events.columns:
-        variants += [("W3_wconfirmed_dir_up", events["w_DSA_DIR"] == 1)]
-    if {"w_dsa_trade_pos_01", "w_DSA_DIR"}.issubset(events.columns):
-        variants += [("W4_wtrade_le_0.4_and_wdir_up", (events["w_dsa_trade_pos_01"] <= 0.4) & (events["w_DSA_DIR"] == 1))]
-    rows = []
-    for name, mask in variants:
-        g = events[mask.fillna(False)] if hasattr(mask, "fillna") else events[mask]
-        if len(g) < 10:
+        return events
+    events["rr_20"] = events.apply(lambda r: rr_from_ret_dd(r["ret_20"], r["max_dd_20"]), axis=1)
+    med_ret20 = float(events["ret_20"].median()) if events["ret_20"].notna().any() else 0.0
+    med_rr20 = float(events["rr_20"].dropna().median()) if events["rr_20"].notna().any() else 0.0
+    events["good20"] = ((events["ret_20"] > med_ret20) & (events["rr_20"] > med_rr20)).astype(int)
+    events["good20_hard"] = ((events["ret_20"] > 0.03) & (events["max_dd_20"] > -0.08)).astype(int)
+    events["year"] = pd.to_datetime(events["datetime"]).dt.year
+    events["year_month"] = pd.to_datetime(events["datetime"]).dt.to_period("M").astype(str)
+    return events
+
+
+def prepare_feature_matrix(events: pd.DataFrame, features: Sequence[str], fill_source: Optional[pd.DataFrame] = None) -> Tuple[pd.DataFrame, List[str]]:
+    cols = [c for c in features if c in events.columns]
+    if not cols:
+        return pd.DataFrame(index=events.index), []
+    x = events[cols].copy()
+    for col in cols:
+        x[col] = safe_numeric(x[col])
+        med = fill_source[col].median() if fill_source is not None and col in fill_source.columns else x[col].median()
+        if pd.isna(med):
+            med = 0.0
+        x[col] = x[col].fillna(med)
+    nunique = x.nunique(dropna=False)
+    cols = [c for c in cols if nunique.get(c, 0) > 1]
+    return x[cols], cols
+
+
+def make_time_folds(events: pd.DataFrame, min_train: int = 80, min_test: int = 30) -> List[Tuple[str, np.ndarray, np.ndarray]]:
+    ordered_years = sorted(pd.Series(events["year"].dropna().unique()).astype(int).tolist())
+    folds: List[Tuple[str, np.ndarray, np.ndarray]] = []
+    for i in range(1, len(ordered_years)):
+        train_years = ordered_years[:i]
+        test_year = ordered_years[i]
+        train_idx = events.index[events["year"].isin(train_years)].to_numpy()
+        test_idx = events.index[events["year"] == test_year].to_numpy()
+        if len(train_idx) >= min_train and len(test_idx) >= min_test:
+            folds.append((f"train_{train_years[0]}_{train_years[-1]}__test_{test_year}", train_idx, test_idx))
+    if not folds and len(events) >= (min_train + min_test):
+        split = int(len(events) * 0.7)
+        folds.append(("fallback_70_30", events.index[:split].to_numpy(), events.index[split:].to_numpy()))
+    return folds
+
+
+def regression_score(y_true: pd.Series, y_pred: np.ndarray) -> Dict[str, float]:
+    y_true = safe_numeric(y_true)
+    pred = pd.Series(y_pred, index=y_true.index)
+    corr = y_true.corr(pred) if len(y_true) > 1 else np.nan
+    mse = float(np.nanmean((y_true - pred) ** 2))
+    return {"pred_corr": round(float(corr), 4) if pd.notna(corr) else np.nan, "mse": round(mse, 6)}
+
+
+def classification_score(y_true: pd.Series, y_prob: np.ndarray) -> Dict[str, float]:
+    y_true = pd.Series(y_true).astype(int)
+    out: Dict[str, float] = {}
+    if y_true.nunique() < 2:
+        out["auc"] = np.nan
+    else:
+        try:
+            out["auc"] = round(float(roc_auc_score(y_true, y_prob)), 4)
+        except Exception:
+            out["auc"] = np.nan
+    pred = (y_prob >= 0.5).astype(int)
+    out["acc"] = round(float((pred == y_true.to_numpy()).mean()), 4)
+    return out
+
+
+
+def collect_importance_rows(model_name: str, mode: str, fold_name: str, features: List[str], model, x_test: pd.DataFrame, y_test: pd.Series) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    base_importance = getattr(model, "feature_importances_", None)
+    if base_importance is None:
+        base_importance = np.zeros(len(features), dtype=float)
+    for i, feat in enumerate(features):
+        rows.append({
+            "model_name": model_name,
+            "mode": mode,
+            "fold": fold_name,
+            "feature": feat,
+            "gain_importance": round(float(base_importance[i]), 6),
+            "perm_importance": np.nan,
+        })
+    return rows
+
+
+def run_single_model(events: pd.DataFrame, features: Sequence[str], target_col: str, model_type: str, feature_mode: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    folds = make_time_folds(events)
+    metrics_rows: List[Dict[str, object]] = []
+    importance_rows: List[Dict[str, object]] = []
+    for fold_name, train_idx, test_idx in folds:
+        train_df = events.loc[train_idx].copy()
+        test_df = events.loc[test_idx].copy()
+        x_train, used_features = prepare_feature_matrix(train_df, features, fill_source=train_df)
+        x_test, _ = prepare_feature_matrix(test_df, used_features, fill_source=train_df)
+        if len(used_features) < 3:
             continue
-        row = {"variant": name, "event_n": len(g)}
-        row.update(summarize_events(g, [20, 40]))
-        rows.append(row)
-    if not rows:
-        print("  无足够事件，跳过周线对比")
-        return pd.DataFrame()
+        y_train = train_df[target_col]
+        y_test = test_df[target_col]
+        if model_type == "reg":
+            model = GradientBoostingRegressor(random_state=RANDOM_STATE, learning_rate=0.05, n_estimators=250, max_depth=3, subsample=0.8, min_samples_leaf=20)
+            model.fit(x_train, safe_numeric(y_train))
+            y_pred = model.predict(x_test)
+            score = regression_score(y_test, y_pred)
+        else:
+            if pd.Series(y_train).nunique() < 2 or pd.Series(y_test).nunique() < 1:
+                continue
+            model = GradientBoostingClassifier(random_state=RANDOM_STATE, learning_rate=0.05, n_estimators=250, max_depth=3, subsample=0.8, min_samples_leaf=20)
+            model.fit(x_train, pd.Series(y_train).astype(int))
+            y_pred = model.predict_proba(x_test)[:, 1]
+            score = classification_score(y_test, y_pred)
+        metrics_rows.append({"feature_mode": feature_mode, "target": target_col, "model_type": model_type, "fold": fold_name, "train_n": len(train_df), "test_n": len(test_df), **score})
+        importance_rows.extend(collect_importance_rows(f"{feature_mode}_{target_col}_{model_type}", feature_mode, fold_name, used_features, model, x_test, pd.Series(y_test).astype(int) if model_type == "clf" else safe_numeric(y_test)))
+    return pd.DataFrame(metrics_rows), pd.DataFrame(importance_rows)
+
+
+def aggregate_importance(imp_df: pd.DataFrame) -> pd.DataFrame:
+    if imp_df.empty:
+        return imp_df
+    grp = imp_df.groupby(["model_name", "mode", "feature"], as_index=False).agg(
+        gain_importance=("gain_importance", "mean"),
+        perm_importance=("perm_importance", "mean"),
+        fold_count=("fold", "nunique"),
+    )
+    grp["rank_score"] = grp[["gain_importance", "perm_importance"]].fillna(0).mean(axis=1)
+    return grp.sort_values(["model_name", "rank_score"], ascending=[True, False]).reset_index(drop=True)
+
+
+def build_bucket_profiles(events: pd.DataFrame, features: Sequence[str], out_path: str) -> pd.DataFrame:
+    rows: List[Dict[str, object]] = []
+    for feat in features:
+        if feat not in events.columns:
+            continue
+        sub = events[[feat, "ret_20", "max_dd_20", "win_20", "rr_20"]].copy()
+        sub[feat] = safe_numeric(sub[feat])
+        sub = sub.dropna(subset=[feat, "ret_20", "max_dd_20"])
+        if len(sub) < 40 or sub[feat].nunique() < 4:
+            continue
+        try:
+            sub["bucket"] = pd.qcut(sub[feat], q=5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"], duplicates="drop")
+        except Exception:
+            continue
+        grp = sub.groupby("bucket", observed=True).agg(n=(feat, "count"), mean_value=(feat, "mean"), ret20=("ret_20", "mean"), dd20=("max_dd_20", "mean"), wr20=("win_20", "mean"), rr20=("rr_20", "mean")).reset_index()
+        best_row = grp.sort_values(["rr20", "ret20"], ascending=[False, False]).iloc[0]
+        for _, row in grp.iterrows():
+            rows.append({
+                "feature": feat,
+                "bucket": row["bucket"],
+                "n": int(row["n"]),
+                "mean_value": round(float(row["mean_value"]), 6),
+                "ret20": round(float(row["ret20"]), 5),
+                "dd20": round(float(row["dd20"]), 5),
+                "wr20": round(float(row["wr20"]), 4),
+                "rr20": round(float(row["rr20"]), 3),
+                "is_best_bucket": int(row["bucket"] == best_row["bucket"]),
+            })
     rdf = pd.DataFrame(rows)
-    # 确保 rr_40 列存在，缺失值填充为 -inf 以便排序
-    if "rr_40" not in rdf.columns:
-        rdf["rr_40"] = -np.inf
-    rdf["rr_40"] = rdf["rr_40"].fillna(-np.inf)
-    rdf = rdf.sort_values("rr_40", ascending=False)
     if not rdf.empty:
-        print(rdf.to_string(index=False))
-        rdf.to_csv(f"{OUT_DIR}/08_c2_weekly_compare.csv", index=False)
+        rdf.to_csv(out_path, index=False)
     return rdf
 
 
-# =========================
-# Main
-# =========================
+def build_parameter_hints(events: pd.DataFrame, trade_imp: pd.DataFrame, research_imp: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
+    rows: List[Dict[str, object]] = []
+    if events.empty:
+        return pd.DataFrame()
+    merged_top = pd.concat([
+        trade_imp[["feature", "rank_score"]] if not trade_imp.empty else pd.DataFrame(columns=["feature", "rank_score"]),
+        research_imp[["feature", "rank_score"]] if not research_imp.empty else pd.DataFrame(columns=["feature", "rank_score"]),
+    ], ignore_index=True)
+    if merged_top.empty:
+        feature_list = [c for c in PRIMARY_HINT_FEATURES if c in events.columns]
+    else:
+        feature_list = (merged_top.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False)["feature"].tolist())
+        feature_list = [f for f in feature_list if f in events.columns]
+    feature_list = list(dict.fromkeys(feature_list + [f for f in PRIMARY_HINT_FEATURES if f in events.columns]))[:max(top_n, len(PRIMARY_HINT_FEATURES))]
+    for feat in feature_list:
+        s = safe_numeric(events[feat]).dropna()
+        if len(s) < 40 or s.nunique() < 4:
+            continue
+        q20 = float(s.quantile(0.2)); q35 = float(s.quantile(0.35)); q50 = float(s.quantile(0.5)); q65 = float(s.quantile(0.65)); q80 = float(s.quantile(0.8))
+        try:
+            tmp = events[[feat, "ret_20", "max_dd_20", "win_20", "rr_20"]].copy()
+            tmp[feat] = safe_numeric(tmp[feat])
+            tmp = tmp.dropna(subset=[feat, "ret_20", "max_dd_20"])
+            tmp["bucket"] = pd.qcut(tmp[feat], q=5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"], duplicates="drop")
+            grp = tmp.groupby("bucket", observed=True).agg(ret20=("ret_20", "mean"), rr20=("rr_20", "mean"), n=(feat, "count"))
+            best_bucket = grp.sort_values(["rr20", "ret20"], ascending=[False, False]).index[0]
+        except Exception:
+            best_bucket = "Q?"
+        if best_bucket in {"Q1", "Q2"}:
+            hint_rule = f"{feat} <= {q35:.4f}"
+            direction = "lower_better"
+        elif best_bucket in {"Q4", "Q5"}:
+            hint_rule = f"{feat} >= {q65:.4f}"
+            direction = "higher_better"
+        else:
+            hint_rule = f"{q35:.4f} <= {feat} <= {q65:.4f}"
+            direction = "middle_better"
+        rows.append({"feature": feat, "best_bucket": best_bucket, "direction": direction, "q20": round(q20, 6), "q35": round(q35, 6), "q50": round(q50, 6), "q65": round(q65, 6), "q80": round(q80, 6), "hint_rule": hint_rule, "sample_n": int(len(s))})
+    rdf = pd.DataFrame(rows)
+    if not rdf.empty:
+        rdf.to_csv(f"{OUT_DIR}/07_parameter_hints.csv", index=False)
+    return rdf
+
+
+
+def _apply_weekly_filter(sub: pd.DataFrame, weekly_mode: str, weekly_dev_min: float, weekly_prev_down_min: Optional[float] = None, weekly_prev_down_max: Optional[float] = None) -> pd.DataFrame:
+    cond = pd.Series(True, index=sub.index)
+    if "w_dsa_signed_vwap_dev_pct" in sub.columns:
+        cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= weekly_dev_min
+    if "w_factor_available" in sub.columns:
+        cond &= safe_numeric(sub["w_factor_available"]).fillna(0) > 0
+    if weekly_mode == "strict":
+        if "w_dsa_trade_pos_01" in sub.columns:
+            cond &= safe_numeric(sub["w_dsa_trade_pos_01"]).fillna(1) <= 0.70
+        if "w_DSA_DIR" in sub.columns:
+            cond &= safe_numeric(sub["w_DSA_DIR"]).fillna(-1) >= 0
+    if weekly_prev_down_min is not None and "w_prev_confirmed_down_bars" in sub.columns:
+        cond &= safe_numeric(sub["w_prev_confirmed_down_bars"]).fillna(-1) >= float(weekly_prev_down_min)
+    if weekly_prev_down_max is not None and "w_prev_confirmed_down_bars" in sub.columns:
+        cond &= safe_numeric(sub["w_prev_confirmed_down_bars"]).fillna(999) <= float(weekly_prev_down_max)
+    return sub[cond]
+
+
+def _apply_trigger_filter(sub: pd.DataFrame, trigger_type: str) -> pd.DataFrame:
+    expand = safe_numeric(sub["bb_expanding"]).fillna(0) > 0 if "bb_expanding" in sub.columns else pd.Series(False, index=sub.index)
+    break_sig = pd.Series(False, index=sub.index)
+    for col in ["range_break_up", "dsa_trade_breakout_20"]:
+        if col in sub.columns:
+            break_sig |= safe_numeric(sub[col]).fillna(0) > 0
+    if trigger_type == "expand_only":
+        cond = expand & (~break_sig)
+    elif trigger_type == "break_only":
+        cond = break_sig & (~expand)
+    elif trigger_type == "expand_and_break":
+        cond = expand & break_sig
+    elif trigger_type == "expand_or_break":
+        cond = expand | break_sig
+    else:
+        cond = pd.Series(True, index=sub.index)
+    return sub[cond]
+
+
+def build_compression_launch_scan(events: pd.DataFrame, top_k_export: int = 200) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    rows: List[Dict[str, object]] = []
+    top_event_rows: List[pd.DataFrame] = []
+    if events.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    dsa_grid = [0.30, 0.34, 0.38]
+    width_grid = [0.22, 0.28, 0.35]
+    bars_since_grid = [6, 9, 12]
+    weekly_dev_min_grid = [-2.3, -1.6, -1.0]
+    weekly_modes = ["soft", "strict"]
+    weekly_prev_down_grid = [(None, None), (11, 28)]
+    trigger_types = ["expand_only", "break_only", "expand_and_break", "expand_or_break"]
+
+    for dsa_max, width_max, bars_since_max, weekly_dev_min, weekly_mode, weekly_prev_down_rng, trigger_type in product(
+        dsa_grid, width_grid, bars_since_grid, weekly_dev_min_grid, weekly_modes, weekly_prev_down_grid, trigger_types
+    ):
+        sub = events.copy()
+
+        if "dsa_confirmed_pivot_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_confirmed_pivot_pos_01"]).fillna(1) <= dsa_max]
+        elif "dsa_trade_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]).fillna(1) <= dsa_max]
+
+        if "dsa_trade_range_width_pct" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_range_width_pct"]).fillna(999) <= width_max]
+
+        if "bars_since_dir_change" in sub.columns:
+            sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= bars_since_max]
+
+        sub = _apply_weekly_filter(
+            sub,
+            weekly_mode=weekly_mode,
+            weekly_dev_min=weekly_dev_min,
+            weekly_prev_down_min=weekly_prev_down_rng[0],
+            weekly_prev_down_max=weekly_prev_down_rng[1],
+        )
+        sub = _apply_trigger_filter(sub, trigger_type)
+        sub = dedup_events(sub)
+
+        if len(sub) < 12:
+            continue
+
+        stat = summarize_events(sub, [20])
+        quality_parts = []
+        for c in ["score_width_total", "score_trend_total", "score_setup_total"]:
+            if c in sub.columns:
+                quality_parts.append(float(safe_numeric(sub[c]).mean()))
+        quality = float(np.nanmean(quality_parts)) if quality_parts else 0.0
+        rank_score = (
+            140 * (stat.get("rr_20") or 0)
+            + 15 * (stat.get("ret_20") or 0)
+            + 6 * (stat.get("wr_20") or 0)
+            - 20 * abs(stat.get("mae_20") or 0)
+            + 2 * quality
+            + min(len(sub), 80) / 20
+        )
+        rows.append({
+            "dsa_confirmed_pos_max": dsa_max,
+            "dsa_trade_width_pct_max": width_max,
+            "bars_since_dir_change_max": bars_since_max,
+            "w_dsa_signed_vwap_dev_min": weekly_dev_min,
+            "weekly_mode": weekly_mode,
+            "weekly_prev_down_range": "none" if weekly_prev_down_rng[0] is None else f"{weekly_prev_down_rng[0]}_{weekly_prev_down_rng[1]}",
+            "trigger_type": trigger_type,
+            **stat,
+            "quality_score": round(float(quality), 4),
+            "rank_score": round(float(rank_score), 3),
+        })
+
+    scan_df = pd.DataFrame(rows).sort_values(["rank_score", "rr_20", "ret_20", "n"], ascending=[False, False, False, False]).reset_index(drop=True) if rows else pd.DataFrame()
+    if not scan_df.empty:
+        scan_df.to_csv(f"{OUT_DIR}/09_compression_launch_scan.csv", index=False)
+
+    for rank, row in scan_df.head(20).iterrows() if not scan_df.empty else []:
+        sub = events.copy()
+        if "dsa_confirmed_pivot_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_confirmed_pivot_pos_01"]).fillna(1) <= row["dsa_confirmed_pos_max"]]
+        elif "dsa_trade_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]).fillna(1) <= row["dsa_confirmed_pos_max"]]
+        if "dsa_trade_range_width_pct" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_range_width_pct"]).fillna(999) <= row["dsa_trade_width_pct_max"]]
+        if "bars_since_dir_change" in sub.columns:
+            sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= row["bars_since_dir_change_max"]]
+        wk_rng = None if row["weekly_prev_down_range"] == "none" else tuple(int(x) for x in str(row["weekly_prev_down_range"]).split("_"))
+        sub = _apply_weekly_filter(
+            sub,
+            weekly_mode=str(row["weekly_mode"]),
+            weekly_dev_min=float(row["w_dsa_signed_vwap_dev_min"]),
+            weekly_prev_down_min=None if wk_rng is None else wk_rng[0],
+            weekly_prev_down_max=None if wk_rng is None else wk_rng[1],
+        )
+        sub = _apply_trigger_filter(sub, str(row["trigger_type"]))
+        sub = dedup_events(sub)
+        if sub.empty:
+            continue
+        keep_cols = [c for c in [
+            "symbol", "datetime", "close", "ret_20", "max_dd_20", "rr_20",
+            "dsa_confirmed_pivot_pos_01", "dsa_trade_pos_01", "dsa_trade_range_width_pct",
+            "bars_since_dir_change", "w_dsa_signed_vwap_dev_pct", "w_prev_confirmed_down_bars",
+            "bb_expanding", "range_break_up", "dsa_trade_breakout_20",
+            "score_width_total", "score_trend_total", "score_volume_total", "score_setup_total",
+        ] if c in sub.columns]
+        tmp = sub[keep_cols].copy()
+        tmp["rule_rank"] = rank + 1
+        tmp["trigger_type"] = row["trigger_type"]
+        top_event_rows.append(tmp)
+
+    top_df = pd.concat(top_event_rows, ignore_index=True).head(top_k_export) if top_event_rows else pd.DataFrame()
+    if not top_df.empty:
+        top_df.to_csv(f"{OUT_DIR}/09b_compression_launch_top_events.csv", index=False)
+    return scan_df, top_df
+
+
+
+def build_stability_slices(events: pd.DataFrame, scan_df: pd.DataFrame) -> pd.DataFrame:
+    if events.empty or scan_df.empty:
+        return pd.DataFrame()
+    top = scan_df.head(6)
+    rows: List[Dict[str, object]] = []
+    work = events.copy()
+    work["turnover_proxy"] = safe_numeric(work.get("close", pd.Series(index=work.index))) * safe_numeric(work.get("vol", pd.Series(index=work.index)))
+    if "datetime" in work.columns:
+        work["year"] = pd.to_datetime(work["datetime"]).dt.year
+    else:
+        work["year"] = np.nan
+    if work["turnover_proxy"].notna().sum() >= 30:
+        try:
+            work["liquidity_bucket"] = pd.qcut(work["turnover_proxy"], q=3, labels=["small", "mid", "large"], duplicates="drop")
+        except Exception:
+            work["liquidity_bucket"] = "all"
+    else:
+        work["liquidity_bucket"] = "all"
+    if "ret_20" in work.columns and work["ret_20"].notna().sum() >= 30:
+        med = float(work["ret_20"].median())
+        work["env_bucket"] = np.where(work["ret_20"] >= med, "better", "worse")
+    else:
+        work["env_bucket"] = "all"
+
+    for rank, row in top.iterrows():
+        sub = work.copy()
+        if "dsa_confirmed_pivot_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_confirmed_pivot_pos_01"]).fillna(1) <= row["dsa_confirmed_pos_max"]]
+        elif "dsa_trade_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]).fillna(1) <= row["dsa_confirmed_pos_max"]]
+        if "dsa_trade_range_width_pct" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_range_width_pct"]).fillna(999) <= row["dsa_trade_width_pct_max"]]
+        if "bars_since_dir_change" in sub.columns:
+            sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= row["bars_since_dir_change_max"]]
+        wk_rng = None if row["weekly_prev_down_range"] == "none" else tuple(int(x) for x in str(row["weekly_prev_down_range"]).split("_"))
+        sub = _apply_weekly_filter(
+            sub,
+            weekly_mode=str(row["weekly_mode"]),
+            weekly_dev_min=float(row["w_dsa_signed_vwap_dev_min"]),
+            weekly_prev_down_min=None if wk_rng is None else wk_rng[0],
+            weekly_prev_down_max=None if wk_rng is None else wk_rng[1],
+        )
+        sub = _apply_trigger_filter(sub, str(row["trigger_type"]))
+        sub = dedup_events(sub)
+        if len(sub) < 12:
+            continue
+        for dim in ["year", "liquidity_bucket", "env_bucket", "trigger_type"]:
+            if dim == "trigger_type":
+                g = sub.copy()
+                g["trigger_type"] = str(row["trigger_type"])
+                groups = g.groupby("trigger_type", dropna=False)
+            else:
+                groups = sub.groupby(dim, dropna=False)
+            for key, g in groups:
+                if len(g) < 8:
+                    continue
+                stat = summarize_events(g, [20])
+                rows.append({
+                    "rule_rank": rank + 1,
+                    "slice_dim": dim,
+                    "slice_key": str(key),
+                    **stat,
+                })
+    rdf = pd.DataFrame(rows)
+    if not rdf.empty:
+        rdf.to_csv(f"{OUT_DIR}/10_rule_stability_slices.csv", index=False)
+    return rdf
+
+def analyze_00_dataset_summary(df: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+    rows = [{"section": "global", "sample_n": int(len(df)), "stock_n": int(df["symbol"].nunique()), "ret20_mean": round(float(df["ret_20"].mean()), 5), "dd20_mean": round(float(df["max_dd_20"].mean()), 5), "wr20_mean": round(float(df["win_20"].mean()), 4), "rr20_mean": round(rr_from_ret_dd(df["ret_20"].mean(), df["max_dd_20"].mean()), 3)}]
+    if not events.empty:
+        rows.append({"section": "candidate_pool", "sample_n": int(len(events)), "stock_n": int(events["symbol"].nunique()), "ret20_mean": round(float(events["ret_20"].mean()), 5), "dd20_mean": round(float(events["max_dd_20"].mean()), 5), "wr20_mean": round(float(events["win_20"].mean()), 4), "rr20_mean": round(rr_from_ret_dd(events["ret_20"].mean(), events["max_dd_20"].mean()), 3)})
+    rdf = pd.DataFrame(rows)
+    rdf.to_csv(f"{OUT_DIR}/00_dataset_summary.csv", index=False)
+    return rdf
+
+
+def analyze_01_feature_inventory(events: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    all_features = list(dict.fromkeys(TRADE_FEATURES + RESEARCH_FEATURES + COMPOSITE_FEATURES))
+    for feat in all_features:
+        present = feat in events.columns
+        s = events[feat] if present else pd.Series(dtype=float)
+        mode = "trade" if feat in TRADE_FEATURES else ("research" if feat in RESEARCH_FEATURES else "composite")
+        rows.append({"feature": feat, "feature_mode": mode, "present": int(present), "coverage": round(float(s.notna().mean()), 4) if present else 0.0, "nunique": int(s.nunique(dropna=True)) if present else 0, "mean": round(float(safe_numeric(s).mean()), 6) if present else np.nan, "std": round(float(safe_numeric(s).std()), 6) if present else np.nan})
+    rdf = pd.DataFrame(rows).sort_values(["feature_mode", "coverage", "feature"], ascending=[True, False, True])
+    rdf.to_csv(f"{OUT_DIR}/01_feature_inventory.csv", index=False)
+    return rdf
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="买入点收益风险比探索（全因子优先 + DSA双轨版）")
-    parser.add_argument("--n-stocks", type=int, default=100, help="随机抽取股票数")
-    parser.add_argument("--bars", type=int, default=800, help="每只股票K线数")
-    parser.add_argument("--freq", default="d", help="频率 d/w/mo/60m等")
-    parser.add_argument("--seed", type=int, default=42, help="随机种子")
-    parser.add_argument("--analysis-mode", type=str, default="exploration_first", choices=["exploration_only", "exploration_first", "strategy_only"], help="exploration_only=只做全因子探索；exploration_first=先探索后策略；strategy_only=只做策略验证")
-    parser.add_argument("--base-strategy", type=str, default="A_low_repair", choices=list(ROUND2_STRATEGY_SPECS.keys()), help="时间切片与周线对比默认使用的基准策略")
+    parser = argparse.ArgumentParser(description="基于 GBDT 结果反推规则的买点实验脚本")
+    parser.add_argument("--n-stocks", type=int, default=100)
+    parser.add_argument("--bars", type=int, default=800)
+    parser.add_argument("--freq", default="d")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--analysis-mode", type=str, default="light", choices=["light", "full", "prepare_only", "model_only", "rule_only"])
+    parser.add_argument("--neighbor-dsa-max", type=float, default=0.45)
+    parser.add_argument("--neighbor-prev-down-min", type=float, default=8.0)
+    parser.add_argument("--neighbor-current-run-max", type=float, default=20.0)
+    parser.add_argument("--neighbor-bars-since-max", type=float, default=12.0)
     args = parser.parse_args()
 
     stocks = get_stock_pool(args.n_stocks, args.seed)
     print(f"股票池抽取: {len(stocks)}只 (seed={args.seed})")
-    print(f"分析模式: {args.analysis_mode}")
-    print("DSA口径说明: confirmed字段仅用于研究解释；策略入口默认使用trade-safe代理字段")
+    print("研究目标: 轻量化 GBDT 归因 + 定向规则反推实验")
 
     all_dfs: List[pd.DataFrame] = []
     for idx, code in enumerate(stocks):
@@ -1018,41 +905,103 @@ def main() -> None:
             valid = fac.dropna(subset=["ret_20"])
             if len(valid) > 50:
                 all_dfs.append(valid)
-                print(f"  [{idx+1}/{len(stocks)}] {code}: {len(kline)}bars → {len(valid)}有效样本")
-        except Exception as e:
-            print(f"  [{idx+1}/{len(stocks)}] {code} 因子计算失败: {e}")
+                print(f"  [{idx + 1}/{len(stocks)}] {code}: {len(kline)}bars → {len(valid)}有效样本")
+        except Exception as exc:
+            print(f"  [{idx + 1}/{len(stocks)}] {code} 因子计算失败: {exc}")
 
     if not all_dfs:
         print("无有效数据，退出")
         return
 
     df = pd.concat(all_dfs, ignore_index=True)
+    neighbor_spec = NeighborSpec(dsa_max=args.neighbor_dsa_max, prev_down_min=args.neighbor_prev_down_min, current_run_max=args.neighbor_current_run_max, bars_since_max=args.neighbor_bars_since_max)
+    events = build_neighbor_events(df, neighbor_spec)
+
+    analyze_00_dataset_summary(df, events)
+    analyze_01_feature_inventory(events)
+    if not events.empty:
+        events.to_csv(f"{OUT_DIR}/02_candidate_events.csv", index=False)
+
     print(f"\n总样本: {len(df)}, 股票数: {df['symbol'].nunique()}")
-    for w in [5, 10, 20, 40, 60]:
-        ret = df[f"ret_{w}"].mean()
-        dd = df[f"max_dd_{w}"].mean()
-        wr = df[f"win_{w}"].mean()
-        print(f"  ret_{w}: 均值={ret:+.5f}, max_dd均值={dd:.5f}, 胜率={wr:.4f}, rr={rr_from_ret_dd(ret, dd):.3f}")
+    print(f"C 邻域候选事件: {len(events)}, 股票数: {events['symbol'].nunique() if not events.empty else 0}")
+    if events.empty:
+        print("候选事件为空，退出")
+        return
 
-    run_exploration = args.analysis_mode in {"exploration_only", "exploration_first"}
-    run_strategy = args.analysis_mode in {"strategy_only", "exploration_first"}
+    if args.analysis_mode == "prepare_only":
+        print(f"\n全部完成，结果保存在 {OUT_DIR}/")
+        return
 
-    if run_exploration:
-        analyze_00_factor_inventory(df)
-        analyze_01_single_factor(df)
-        analyze_01b_discrete_factor(df)
-        analyze_02_scenarios(df)
-        analyze_03_interaction(df)
-        analyze_03b_factor_pairs(df)
-        analyze_04_rule_search(df)
 
-    if run_strategy:
-        analyze_05_candidate_events(df)
-        analyze_06_long_down_repair_scan(df)
-        analyze_06b_rope_coil_scan(df)
-        base_events = build_round2_events(df, args.base_strategy)
-        analyze_07_c2_time_slices(df, args.base_strategy)
-        analyze_08_c2_weekly_compare(base_events)
+    if args.analysis_mode != "rule_only":
+        fold_frames: List[pd.DataFrame] = []
+        run_light = args.analysis_mode == "light"
+
+        trade_reg_metrics, trade_reg_imp = run_single_model(events, TRADE_FEATURES, "ret_20", "reg", "trade")
+        for frame in [trade_reg_metrics]:
+            if not frame.empty:
+                fold_frames.append(frame)
+
+        if run_light:
+            research_reg_metrics = pd.DataFrame()
+            research_reg_imp = pd.DataFrame()
+            trade_clf_metrics = pd.DataFrame()
+            trade_clf_imp = pd.DataFrame()
+            research_clf_metrics = pd.DataFrame()
+            research_clf_imp = pd.DataFrame()
+        else:
+            trade_clf_metrics, trade_clf_imp = run_single_model(events, TRADE_FEATURES, "good20", "clf", "trade")
+            research_reg_metrics, research_reg_imp = run_single_model(events, RESEARCH_FEATURES, "ret_20", "reg", "research")
+            research_clf_metrics, research_clf_imp = run_single_model(events, RESEARCH_FEATURES, "good20", "clf", "research")
+            for frame in [trade_clf_metrics, research_reg_metrics, research_clf_metrics]:
+                if not frame.empty:
+                    fold_frames.append(frame)
+
+        if fold_frames:
+            pd.concat(fold_frames, ignore_index=True).to_csv(f"{OUT_DIR}/05_fold_metrics.csv", index=False)
+
+        trade_reg_imp_agg = aggregate_importance(trade_reg_imp)
+        trade_clf_imp_agg = aggregate_importance(trade_clf_imp)
+        research_reg_imp_agg = aggregate_importance(research_reg_imp)
+        research_clf_imp_agg = aggregate_importance(research_clf_imp)
+
+        if not trade_reg_imp_agg.empty:
+            trade_reg_imp_agg.to_csv(f"{OUT_DIR}/03_trade_reg_importance.csv", index=False)
+        if not trade_clf_imp_agg.empty:
+            trade_clf_imp_agg.to_csv(f"{OUT_DIR}/03b_trade_clf_importance.csv", index=False)
+        if not research_reg_imp_agg.empty:
+            research_reg_imp_agg.to_csv(f"{OUT_DIR}/04_research_reg_importance.csv", index=False)
+        if not research_clf_imp_agg.empty:
+            research_clf_imp_agg.to_csv(f"{OUT_DIR}/04b_research_clf_importance.csv", index=False)
+
+        trade_top = trade_reg_imp_agg.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False) if not trade_reg_imp_agg.empty else pd.DataFrame()
+        research_top = research_reg_imp_agg.groupby("feature", as_index=False)["rank_score"].mean().sort_values("rank_score", ascending=False) if not research_reg_imp_agg.empty else pd.DataFrame()
+        trade_feats_for_bucket = trade_top["feature"].head(8).tolist() if not trade_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in TRADE_FEATURES]
+        research_feats_for_bucket = research_top["feature"].head(8).tolist() if not research_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in RESEARCH_FEATURES]
+        build_bucket_profiles(events, trade_feats_for_bucket, f"{OUT_DIR}/06_trade_bucket_profiles.csv")
+        if not run_light:
+            build_bucket_profiles(events, research_feats_for_bucket, f"{OUT_DIR}/06b_research_bucket_profiles.csv")
+        build_bucket_profiles(events, COMPOSITE_FEATURES, f"{OUT_DIR}/08_composite_feature_profiles.csv")
+        build_parameter_hints(
+            events,
+            pd.concat([trade_reg_imp_agg, trade_clf_imp_agg], ignore_index=True) if not trade_reg_imp_agg.empty or not trade_clf_imp_agg.empty else pd.DataFrame(columns=["feature", "rank_score"]),
+            pd.concat([research_reg_imp_agg, research_clf_imp_agg], ignore_index=True) if not research_reg_imp_agg.empty or not research_clf_imp_agg.empty else pd.DataFrame(columns=["feature", "rank_score"]),
+        )
+
+        print("\n=== 关键结果预览 ===")
+        if not trade_reg_imp_agg.empty:
+            print("\n[trade-safe 回归重要性 Top10]")
+            print(trade_reg_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
+
+    scan_df, _ = build_compression_launch_scan(events)
+    build_stability_slices(events, scan_df)
+    if not scan_df.empty:
+        print("\n[压缩低位启动规则 Top10]")
+        print(scan_df[[
+            "dsa_confirmed_pos_max", "dsa_trade_width_pct_max", "bars_since_dir_change_max",
+            "w_dsa_signed_vwap_dev_min", "weekly_mode", "weekly_prev_down_range", "trigger_type",
+            "n", "ret_20", "mae_20", "wr_20", "rr_20", "rank_score"
+        ]].head(10).to_string(index=False))
 
     print(f"\n{'=' * 70}")
     print(f"# 全部完成! 结果保存在 {OUT_DIR}/")
