@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-基于 GBDT 结果反推“压缩低位启动”规则的实验脚本（在 gbdt_buy_point_explorer.py 基础上扩展）
+榜首规则精修版：基于候选事件做小范围规则精修的实验脚本
 
 Purpose
 - 保留原有框架：数据加载 → 因子计算 → forward returns → 候选事件池 → 报表输出
-- 新增复合特征：结构位置 / 方向一致性 / 趋势分 / 量能分 / 宽度分
-- 新增规则反推实验：围绕“压缩中的低位启动 + 周线不过弱”做参数扫描与切片验证
-- 让更多可能影响因素先进入实验，再根据结果删除
+- 轻量化默认配置：去掉 permutation importance，默认只跑单模型，缩小规则扫描组合
+- 聚焦 20 日目标，优先验证 周线环境过滤 / 低位压缩 / 启动别太晚 / expand vs break 分层
 
 How to Run
     python compression_launch_rule_explorer.py --n-stocks 200 --bars 1000 --freq d
@@ -36,14 +35,12 @@ import os
 import sys
 import warnings
 from dataclasses import dataclass
-from datetime import datetime
 from itertools import product
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
-from sklearn.inspection import permutation_importance
 from sklearn.metrics import roc_auc_score
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -204,20 +201,17 @@ def save_cache(data: Dict, cache_path: str) -> None:
     """保存数据到缓存文件（使用parquet格式，更稳定）"""
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
 
-    # 将DataFrame列表转换为可序列化格式
     all_dfs = data.get("all_dfs", [])
     metadata = data.get("metadata", {})
 
-    # 保存为parquet格式
     parquet_path = cache_path.replace('.pkl', '.parquet')
     if all_dfs:
         combined_df = pd.concat(all_dfs, ignore_index=True)
         combined_df.to_parquet(parquet_path, index=False, compression='zstd')
 
-    # 保存元数据为json
     meta_path = cache_path.replace('.pkl', '_meta.json')
-    with open(meta_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
 
 
 def load_cache(cache_path: str) -> Optional[Dict]:
@@ -229,21 +223,17 @@ def load_cache(cache_path: str) -> Optional[Dict]:
         if not os.path.exists(parquet_path):
             return None
 
-        # 加载parquet数据
         combined_df = pd.read_parquet(parquet_path)
 
-        # 按symbol分组，恢复为DataFrame列表
         all_dfs = []
         for symbol in combined_df['symbol'].unique():
             df = combined_df[combined_df['symbol'] == symbol].copy()
             df['datetime'] = pd.to_datetime(df['datetime'])
-            # 不设置索引，保持datetime为列，与原始数据格式一致
             all_dfs.append(df)
 
-        # 加载元数据
         metadata = {}
         if os.path.exists(meta_path):
-            with open(meta_path, 'r') as f:
+            with open(meta_path, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
 
         return {"all_dfs": all_dfs, "metadata": metadata}
@@ -593,18 +583,12 @@ def classification_score(y_true: pd.Series, y_prob: np.ndarray) -> Dict[str, flo
     return out
 
 
+
 def collect_importance_rows(model_name: str, mode: str, fold_name: str, features: List[str], model, x_test: pd.DataFrame, y_test: pd.Series) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     base_importance = getattr(model, "feature_importances_", None)
     if base_importance is None:
         base_importance = np.zeros(len(features), dtype=float)
-    perm_values = np.full(len(features), np.nan, dtype=float)
-    if len(x_test) >= 25 and y_test.nunique(dropna=True) > 1:
-        try:
-            perm = permutation_importance(model, x_test, y_test, n_repeats=5, random_state=RANDOM_STATE, n_jobs=1)
-            perm_values = perm.importances_mean
-        except Exception:
-            pass
     for i, feat in enumerate(features):
         rows.append({
             "model_name": model_name,
@@ -612,7 +596,7 @@ def collect_importance_rows(model_name: str, mode: str, fold_name: str, features
             "fold": fold_name,
             "feature": feat,
             "gain_importance": round(float(base_importance[i]), 6),
-            "perm_importance": round(float(perm_values[i]), 6) if pd.notna(perm_values[i]) else np.nan,
+            "perm_importance": np.nan,
         })
     return rows
 
@@ -737,124 +721,335 @@ def build_parameter_hints(events: pd.DataFrame, trade_imp: pd.DataFrame, researc
     return rdf
 
 
+
+def _apply_weekly_filter(sub: pd.DataFrame, weekly_mode: str, weekly_dev_min: float, weekly_prev_down_min: Optional[float] = None, weekly_prev_down_max: Optional[float] = None) -> pd.DataFrame:
+    cond = pd.Series(True, index=sub.index)
+    if "w_dsa_signed_vwap_dev_pct" in sub.columns:
+        cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= weekly_dev_min
+    if "w_factor_available" in sub.columns:
+        cond &= safe_numeric(sub["w_factor_available"]).fillna(0) > 0
+    if weekly_mode == "strict":
+        if "w_dsa_trade_pos_01" in sub.columns:
+            cond &= safe_numeric(sub["w_dsa_trade_pos_01"]).fillna(1) <= 0.70
+        if "w_DSA_DIR" in sub.columns:
+            cond &= safe_numeric(sub["w_DSA_DIR"]).fillna(-1) >= 0
+    if weekly_prev_down_min is not None and "w_prev_confirmed_down_bars" in sub.columns:
+        cond &= safe_numeric(sub["w_prev_confirmed_down_bars"]).fillna(-1) >= float(weekly_prev_down_min)
+    if weekly_prev_down_max is not None and "w_prev_confirmed_down_bars" in sub.columns:
+        cond &= safe_numeric(sub["w_prev_confirmed_down_bars"]).fillna(999) <= float(weekly_prev_down_max)
+    return sub[cond]
+
+
+def _apply_trigger_filter(sub: pd.DataFrame, trigger_type: str) -> pd.DataFrame:
+    expand = safe_numeric(sub["bb_expanding"]).fillna(0) > 0 if "bb_expanding" in sub.columns else pd.Series(False, index=sub.index)
+    break_sig = pd.Series(False, index=sub.index)
+    for col in ["range_break_up", "dsa_trade_breakout_20"]:
+        if col in sub.columns:
+            break_sig |= safe_numeric(sub[col]).fillna(0) > 0
+    if trigger_type == "expand_only":
+        cond = expand & (~break_sig)
+    elif trigger_type == "break_only":
+        cond = break_sig & (~expand)
+    elif trigger_type == "expand_and_break":
+        cond = expand & break_sig
+    elif trigger_type == "expand_or_break":
+        cond = expand | break_sig
+    else:
+        cond = pd.Series(True, index=sub.index)
+    return sub[cond]
+
+
+
+
+def add_trigger_labels(events: pd.DataFrame) -> pd.DataFrame:
+    out = events.copy()
+    expand = safe_numeric(out["bb_expanding"]).fillna(0) > 0 if "bb_expanding" in out.columns else pd.Series(False, index=out.index)
+    break_sig = pd.Series(False, index=out.index)
+    for col in ["range_break_up", "dsa_trade_breakout_20"]:
+        if col in out.columns:
+            break_sig |= safe_numeric(out[col]).fillna(0) > 0
+    trigger = np.where(expand & break_sig, "expand_and_break",
+               np.where(expand & (~break_sig), "expand_only",
+               np.where((~expand) & break_sig, "break_only", "none")))
+    out["trigger_type"] = trigger
+    out["trigger_expand_flag"] = expand.astype(int)
+    out["trigger_break_flag"] = break_sig.astype(int)
+    return out
+
+
+def _subset_by_rule(sub: pd.DataFrame, rule: Dict[str, object]) -> pd.DataFrame:
+    x = sub.copy()
+    if "dsa_confirmed_pivot_pos_01" in x.columns and pd.notna(rule.get("dsa_confirmed_pos_max")):
+        x = x[safe_numeric(x["dsa_confirmed_pivot_pos_01"]).fillna(1) <= float(rule["dsa_confirmed_pos_max"])]
+    if "dsa_trade_pos_01" in x.columns and pd.notna(rule.get("dsa_trade_pos_max")):
+        x = x[safe_numeric(x["dsa_trade_pos_01"]).fillna(1) <= float(rule["dsa_trade_pos_max"])]
+    if "bb_width_norm" in x.columns and pd.notna(rule.get("bb_width_norm_max")):
+        x = x[safe_numeric(x["bb_width_norm"]).fillna(999) <= float(rule["bb_width_norm_max"])]
+    if "bb_pos_01" in x.columns:
+        if pd.notna(rule.get("bb_pos_min")):
+            x = x[safe_numeric(x["bb_pos_01"]).fillna(-999) >= float(rule["bb_pos_min"])]
+        if pd.notna(rule.get("bb_pos_max")):
+            x = x[safe_numeric(x["bb_pos_01"]).fillna(999) <= float(rule["bb_pos_max"])]
+    if "rope_pivot_pos_01" in x.columns and pd.notna(rule.get("rope_pivot_pos_max")):
+        x = x[safe_numeric(x["rope_pivot_pos_01"]).fillna(999) <= float(rule["rope_pivot_pos_max"])]
+    if "bars_since_dir_change" in x.columns and pd.notna(rule.get("bars_since_dir_change_max")):
+        x = x[safe_numeric(x["bars_since_dir_change"]).fillna(99) <= float(rule["bars_since_dir_change_max"])]
+    weekly_prev_down_range = rule.get("weekly_prev_down_range", "none")
+    wk_rng = None if weekly_prev_down_range == "none" else tuple(int(v) for v in str(weekly_prev_down_range).split("_"))
+    x = _apply_weekly_filter(
+        x,
+        weekly_mode=str(rule.get("weekly_mode", "soft")),
+        weekly_dev_min=float(rule.get("w_dsa_signed_vwap_dev_min", -99)),
+        weekly_prev_down_min=None if wk_rng is None else wk_rng[0],
+        weekly_prev_down_max=None if wk_rng is None else wk_rng[1],
+    )
+    trigger_type = str(rule.get("trigger_type", "none"))
+    if trigger_type != "none":
+        x = x[x["trigger_type"] == trigger_type]
+    else:
+        x = x[x["trigger_type"] == "none"]
+    if "ret_5_min" in rule and pd.notna(rule.get("ret_5_min")) and "ret_5" in x.columns:
+        x = x[safe_numeric(x["ret_5"]).fillna(-999) >= float(rule["ret_5_min"])]
+    return dedup_events(x)
+
+
+def _score_rule_stats(stat: Dict[str, float], n: int, year_penalty: float = 0.0) -> float:
+    ret20 = stat.get("ret_20", np.nan)
+    rr20 = stat.get("rr_20", np.nan)
+    wr20 = stat.get("wr_20", np.nan)
+    ret60 = stat.get("ret_60", np.nan)
+    dd20 = stat.get("mae_20", np.nan)
+    ret20 = 0.0 if pd.isna(ret20) else float(ret20)
+    rr20 = 0.0 if pd.isna(rr20) else float(rr20)
+    wr20 = 0.0 if pd.isna(wr20) else float(wr20)
+    ret60 = 0.0 if pd.isna(ret60) else float(ret60)
+    dd20 = 0.0 if pd.isna(dd20) else float(dd20)
+    return round(
+        0.35 * ret20 * 100
+        + 0.30 * rr20
+        + 0.20 * wr20 * 10
+        + 0.10 * ret60 * 20
+        + 0.05 * min(np.log1p(max(n, 1)), 4.0)
+        - 0.15 * abs(dd20) * 20
+        - year_penalty,
+        4,
+    )
+
+
+def build_refined_rule_scan(events: pd.DataFrame, top_k_export: int = 300) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    if events.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    events = add_trigger_labels(events)
+
+    base_rule = {
+        "dsa_confirmed_pos_max": 0.38,
+        "dsa_trade_pos_max": 0.55,
+        "bb_width_norm_max": 0.20,
+        "bb_pos_min": 0.40,
+        "bb_pos_max": 0.95,
+        "rope_pivot_pos_max": 0.90,
+        "bars_since_dir_change_max": 15,
+        "w_dsa_signed_vwap_dev_min": -99.0,
+        "weekly_mode": "soft",
+        "weekly_prev_down_range": "none",
+        "trigger_type": "none",
+    }
+
+    # staged scan: trigger -> structure -> weekly
+    rules: List[Dict[str, object]] = []
+    for trigger_type in ["none", "expand_only", "break_only", "expand_and_break"]:
+        r = dict(base_rule)
+        r["stage"] = "trigger"
+        r["trigger_type"] = trigger_type
+        rules.append(r)
+
+    for dsa_c in [0.28, 0.33, 0.38]:
+        for dsa_t in [0.35, 0.45, 0.55]:
+            for bbw in [0.12, 0.18, 0.24]:
+                r = dict(base_rule)
+                r["stage"] = "structure"
+                r["dsa_confirmed_pos_max"] = dsa_c
+                r["dsa_trade_pos_max"] = dsa_t
+                r["bb_width_norm_max"] = bbw
+                rules.append(r)
+
+    for bb_min in [0.40, 0.50, 0.60]:
+        for bb_max in [0.80, 0.90, 1.00]:
+            if bb_min >= bb_max:
+                continue
+            r = dict(base_rule)
+            r["stage"] = "structure"
+            r["bb_pos_min"] = bb_min
+            r["bb_pos_max"] = bb_max
+            rules.append(r)
+
+    for rope_max in [0.70, 0.90]:
+        for weekly_mode in ["off", "soft", "strict"]:
+            for trigger_type in ["none", "expand_only", "break_only", "expand_and_break"]:
+                r = dict(base_rule)
+                r["stage"] = "weekly_trigger"
+                r["rope_pivot_pos_max"] = rope_max
+                r["weekly_mode"] = weekly_mode
+                r["trigger_type"] = trigger_type
+                rules.append(r)
+
+    for ret5_min in [None, 0.0]:
+        for weekly_prev in ["none", "11_28"]:
+            r = dict(base_rule)
+            r["stage"] = "weekly_filter"
+            r["ret_5_min"] = ret5_min
+            r["weekly_prev_down_range"] = weekly_prev
+            rules.append(r)
+
+    rows = []
+    top_event_rows = []
+    summary_rows = []
+
+    years = sorted(pd.to_datetime(events["datetime"]).dt.year.dropna().astype(int).unique().tolist()) if "datetime" in events.columns else []
+
+    for idx, rule in enumerate(rules, start=1):
+        sub = _subset_by_rule(events, rule)
+        if len(sub) < 12:
+            continue
+        stat = summarize_events(sub, [5, 10, 20, 60])
+        year_rr = []
+        if years:
+            tmp = sub.copy()
+            tmp["year"] = pd.to_datetime(tmp["datetime"]).dt.year
+            for y, g in tmp.groupby("year"):
+                if len(g) >= 6:
+                    ystat = summarize_events(g, [20])
+                    if pd.notna(ystat.get("rr_20")):
+                        year_rr.append(float(ystat["rr_20"]))
+        year_penalty = float(np.std(year_rr)) if len(year_rr) >= 2 else 0.0
+        score = _score_rule_stats(stat, len(sub), year_penalty=year_penalty)
+
+        trigger_mix = sub["trigger_type"].value_counts(normalize=True).to_dict() if "trigger_type" in sub.columns else {}
+        row = dict(rule)
+        row.update(stat)
+        row["year_rr_std"] = round(year_penalty, 4)
+        row["rank_score"] = score
+        row["trigger_none_pct"] = round(float(trigger_mix.get("none", 0.0)), 4)
+        row["trigger_expand_only_pct"] = round(float(trigger_mix.get("expand_only", 0.0)), 4)
+        row["trigger_break_only_pct"] = round(float(trigger_mix.get("break_only", 0.0)), 4)
+        row["trigger_expand_and_break_pct"] = round(float(trigger_mix.get("expand_and_break", 0.0)), 4)
+        rows.append(row)
+
+    scan_df = pd.DataFrame(rows)
+    if scan_df.empty:
+        return scan_df, pd.DataFrame(), pd.DataFrame()
+
+    scan_df = scan_df.sort_values(
+        ["rank_score", "rr_20", "ret_20", "wr_20", "n"],
+        ascending=[False, False, False, False, False]
+    ).reset_index(drop=True)
+    scan_df.to_csv(f"{OUT_DIR}/11_refined_rule_scan.csv", index=False)
+
+    for rank, row in scan_df.head(20).iterrows():
+        sub = _subset_by_rule(events, row.to_dict())
+        if sub.empty:
+            continue
+        keep_cols = [c for c in [
+            "symbol", "datetime", "close", "ret_5", "ret_10", "ret_20", "ret_60", "max_dd_20", "rr_20",
+            "dsa_confirmed_pivot_pos_01", "dsa_trade_pos_01", "bb_width_norm", "bb_pos_01",
+            "rope_pivot_pos_01", "bars_since_dir_change", "w_dsa_signed_vwap_dev_pct", "w_prev_confirmed_down_bars",
+            "trigger_type", "bb_expanding", "range_break_up", "dsa_trade_breakout_20"
+        ] if c in sub.columns]
+        tmp = sub[keep_cols].copy()
+        tmp["rule_rank"] = rank + 1
+        top_event_rows.append(tmp)
+
+        summary_rows.append({
+            "rule_rank": rank + 1,
+            "stage": row["stage"],
+            "style_tag": "埋伏型" if row["trigger_type"] == "none" else ("确认型" if "break" in str(row["trigger_type"]) else "扩张型"),
+            "trigger_type": row["trigger_type"],
+            "sample_n": int(row["n"]),
+            "ret_20": row["ret_20"],
+            "wr_20": row["wr_20"],
+            "rr_20": row["rr_20"],
+            "ret_60": row["ret_60"],
+            "year_rr_std": row["year_rr_std"],
+            "rule_text": (
+                f"dsa_confirmed<={row['dsa_confirmed_pos_max']}, dsa_trade<={row['dsa_trade_pos_max']}, "
+                f"bb_width<={row['bb_width_norm_max']}, bb_pos in [{row['bb_pos_min']}, {row['bb_pos_max']}], "
+                f"rope<={row['rope_pivot_pos_max']}, weekly={row['weekly_mode']}, trigger={row['trigger_type']}"
+            ),
+        })
+
+    top_df = pd.concat(top_event_rows, ignore_index=True) if top_event_rows else pd.DataFrame()
+    if not top_df.empty:
+        top_df.to_csv(f"{OUT_DIR}/11b_refined_rule_top_events.csv", index=False)
+
+    summary_df = pd.DataFrame(summary_rows)
+    if not summary_df.empty:
+        summary_df.to_csv(f"{OUT_DIR}/12_rule_candidate_summary.csv", index=False)
+    return scan_df, top_df, summary_df
 def build_compression_launch_scan(events: pd.DataFrame, top_k_export: int = 200) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    围绕本轮 GBDT 提示的主线做规则扫描：
-    - 低位，但不是绝对底部
-    - BB 压缩
-    - Rope/结构位置仍处在早中段
-    - 周线不能太弱
-    - 可选用 breakout / expand / range 宽度做二级过滤
-    """
+    rows: List[Dict[str, object]] = []
+    top_event_rows: List[pd.DataFrame] = []
     if events.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    rows: List[Dict[str, object]] = []
-    top_event_rows: List[pd.DataFrame] = []
-
-    # 主轴参数：优先围绕 GBDT 的 parameter hints 附近做扫描
-    dsa_grid = [0.30, 0.35, 0.40, 0.45]
-    bb_width_norm_grid = [0.10, 0.12, 0.14, 0.16, 0.18]
-    bb_pos_low_grid = [0.45, 0.50, 0.55, 0.58]
-    bb_pos_high_grid = [0.72, 0.78, 0.84, 0.90]
-    rope_pivot_grid = [0.60, 0.70, 0.80, 0.90]
-    weekly_dev_min_grid = [-1.0, -0.75, -0.50, -0.25]
-    range_width_min_grid = [None, 1.5, 2.0, 2.5]
-    breakout_modes = ["none", "expand_or_break", "break_only"]
+    dsa_grid = [0.30, 0.34, 0.38]
+    width_grid = [0.22, 0.28, 0.35]
+    bars_since_grid = [6, 9, 12]
+    weekly_dev_min_grid = [-2.3, -1.6, -1.0]
     weekly_modes = ["soft", "strict"]
-    ranking_modes = ["plain", "with_quality"]
+    weekly_prev_down_grid = [(None, None), (11, 28)]
+    trigger_types = ["expand_only", "break_only", "expand_and_break", "expand_or_break"]
 
-    for dsa_max, bbw_max, bb_low, bb_high, rope_pivot_max, weekly_dev_min, range_width_min, breakout_mode, weekly_mode, ranking_mode in product(
-        dsa_grid, bb_width_norm_grid, bb_pos_low_grid, bb_pos_high_grid, rope_pivot_grid, weekly_dev_min_grid, range_width_min_grid, breakout_modes, weekly_modes, ranking_modes
+    for dsa_max, width_max, bars_since_max, weekly_dev_min, weekly_mode, weekly_prev_down_rng, trigger_type in product(
+        dsa_grid, width_grid, bars_since_grid, weekly_dev_min_grid, weekly_modes, weekly_prev_down_grid, trigger_types
     ):
-        if bb_high <= bb_low:
-            continue
         sub = events.copy()
-        # 低位结构（trade-safe）
-        if "dsa_trade_pos_01" in sub.columns:
-            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]) <= dsa_max]
-        # BB 局部压缩
-        if "bb_width_norm" in sub.columns:
-            sub = sub[safe_numeric(sub["bb_width_norm"]) <= bbw_max]
-        # BB 中段启动，而不是绝对底/顶
-        if "bb_pos_01" in sub.columns:
-            bbpos = safe_numeric(sub["bb_pos_01"])
-            sub = sub[bbpos.between(bb_low, bb_high, inclusive="both")]
-        # Rope 结构位置仍早中段
-        if "rope_pivot_pos_01" in sub.columns:
-            sub = sub[safe_numeric(sub["rope_pivot_pos_01"]) <= rope_pivot_max]
 
-        # 周线过滤：软版允许 trade-safe 代理，严版要求 confirmed 周偏离不过弱
-        if weekly_mode == "soft":
-            cond = pd.Series(True, index=sub.index)
-            if "w_dsa_signed_vwap_dev_pct" in sub.columns:
-                cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= weekly_dev_min
-            if "w_factor_available" in sub.columns:
-                cond &= safe_numeric(sub["w_factor_available"]).fillna(0) > 0
-            sub = sub[cond]
-        else:
-            cond = pd.Series(True, index=sub.index)
-            if "w_dsa_signed_vwap_dev_pct" in sub.columns:
-                cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= weekly_dev_min
-            if "w_dsa_trade_pos_01" in sub.columns:
-                cond &= safe_numeric(sub["w_dsa_trade_pos_01"]).fillna(1) <= 0.70
-            if "w_DSA_DIR" in sub.columns:
-                cond &= safe_numeric(sub["w_DSA_DIR"]).fillna(-1) >= 0
-            sub = sub[cond]
+        if "dsa_confirmed_pivot_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_confirmed_pivot_pos_01"]).fillna(1) <= dsa_max]
+        elif "dsa_trade_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]).fillna(1) <= dsa_max]
 
-        # 整体结构仍有展开空间，不要太死窄
-        if range_width_min is not None and "range_width_atr" in sub.columns:
-            sub = sub[safe_numeric(sub["range_width_atr"]) >= range_width_min]
+        if "dsa_trade_range_width_pct" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_range_width_pct"]).fillna(999) <= width_max]
 
-        # 启动确认
-        if breakout_mode == "expand_or_break":
-            cond = pd.Series(False, index=sub.index)
-            for col in ["bb_expanding", "range_break_up", "dsa_trade_breakout_20"]:
-                if col in sub.columns:
-                    cond |= safe_numeric(sub[col]).fillna(0) > 0
-            sub = sub[cond]
-        elif breakout_mode == "break_only":
-            cond = pd.Series(False, index=sub.index)
-            for col in ["range_break_up", "dsa_trade_breakout_20"]:
-                if col in sub.columns:
-                    cond |= safe_numeric(sub[col]).fillna(0) > 0
-            sub = sub[cond]
-
-        # 仍保留“不要太晚”约束，但不再把 rope 当主角
         if "bars_since_dir_change" in sub.columns:
-            sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= 12]
+            sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= bars_since_max]
 
+        sub = _apply_weekly_filter(
+            sub,
+            weekly_mode=weekly_mode,
+            weekly_dev_min=weekly_dev_min,
+            weekly_prev_down_min=weekly_prev_down_rng[0],
+            weekly_prev_down_max=weekly_prev_down_rng[1],
+        )
+        sub = _apply_trigger_filter(sub, trigger_type)
         sub = dedup_events(sub)
-        if len(sub) < 20:
+
+        if len(sub) < 12:
             continue
 
-        stat = summarize_events(sub, [20, 60])
-        quality = 0.0
-        if ranking_mode == "with_quality":
-            pieces = []
-            for c, reverse in [("score_width_total", False), ("score_trend_total", False), ("score_volume_total", False), ("score_setup_total", False)]:
-                if c in sub.columns:
-                    pieces.append(float(safe_numeric(sub[c]).mean()))
-            quality = float(np.nanmean(pieces)) if pieces else 0.0
+        stat = summarize_events(sub, [20])
+        quality_parts = []
+        for c in ["score_width_total", "score_trend_total", "score_setup_total"]:
+            if c in sub.columns:
+                quality_parts.append(float(safe_numeric(sub[c]).mean()))
+        quality = float(np.nanmean(quality_parts)) if quality_parts else 0.0
         rank_score = (
-            100 * (stat.get("rr_20") or 0)
-            + 12 * (stat.get("ret_20") or 0)
-            + 4 * (stat.get("wr_20") or 0)
-            + 10 * (stat.get("rr_60") or 0)
-            + 3 * quality
-            + min(len(sub), 120) / 12
+            140 * (stat.get("rr_20") or 0)
+            + 15 * (stat.get("ret_20") or 0)
+            + 6 * (stat.get("wr_20") or 0)
+            - 20 * abs(stat.get("mae_20") or 0)
+            + 2 * quality
+            + min(len(sub), 80) / 20
         )
         rows.append({
-            "dsa_trade_pos_max": dsa_max,
-            "bb_width_norm_max": bbw_max,
-            "bb_pos_low": bb_low,
-            "bb_pos_high": bb_high,
-            "rope_pivot_pos_max": rope_pivot_max,
+            "dsa_confirmed_pos_max": dsa_max,
+            "dsa_trade_width_pct_max": width_max,
+            "bars_since_dir_change_max": bars_since_max,
             "w_dsa_signed_vwap_dev_min": weekly_dev_min,
-            "range_width_atr_min": range_width_min,
-            "breakout_mode": breakout_mode,
             "weekly_mode": weekly_mode,
-            "ranking_mode": ranking_mode,
+            "weekly_prev_down_range": "none" if weekly_prev_down_rng[0] is None else f"{weekly_prev_down_rng[0]}_{weekly_prev_down_rng[1]}",
+            "trigger_type": trigger_type,
             **stat,
             "quality_score": round(float(quality), 4),
             "rank_score": round(float(rank_score), 3),
@@ -866,58 +1061,36 @@ def build_compression_launch_scan(events: pd.DataFrame, top_k_export: int = 200)
 
     for rank, row in scan_df.head(20).iterrows() if not scan_df.empty else []:
         sub = events.copy()
-        if "dsa_trade_pos_01" in sub.columns:
-            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]) <= row["dsa_trade_pos_max"]]
-        if "bb_width_norm" in sub.columns:
-            sub = sub[safe_numeric(sub["bb_width_norm"]) <= row["bb_width_norm_max"]]
-        if "bb_pos_01" in sub.columns:
-            bbpos = safe_numeric(sub["bb_pos_01"])
-            sub = sub[bbpos.between(row["bb_pos_low"], row["bb_pos_high"], inclusive="both")]
-        if "rope_pivot_pos_01" in sub.columns:
-            sub = sub[safe_numeric(sub["rope_pivot_pos_01"]) <= row["rope_pivot_pos_max"]]
-        if row["weekly_mode"] == "soft":
-            cond = pd.Series(True, index=sub.index)
-            if "w_dsa_signed_vwap_dev_pct" in sub.columns:
-                cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= row["w_dsa_signed_vwap_dev_min"]
-            if "w_factor_available" in sub.columns:
-                cond &= safe_numeric(sub["w_factor_available"]).fillna(0) > 0
-            sub = sub[cond]
-        else:
-            cond = pd.Series(True, index=sub.index)
-            if "w_dsa_signed_vwap_dev_pct" in sub.columns:
-                cond &= safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= row["w_dsa_signed_vwap_dev_min"]
-            if "w_dsa_trade_pos_01" in sub.columns:
-                cond &= safe_numeric(sub["w_dsa_trade_pos_01"]).fillna(1) <= 0.70
-            if "w_DSA_DIR" in sub.columns:
-                cond &= safe_numeric(sub["w_DSA_DIR"]).fillna(-1) >= 0
-            sub = sub[cond]
-        if pd.notna(row["range_width_atr_min"]) and "range_width_atr" in sub.columns:
-            sub = sub[safe_numeric(sub["range_width_atr"]) >= row["range_width_atr_min"]]
-        if row["breakout_mode"] == "expand_or_break":
-            cond = pd.Series(False, index=sub.index)
-            for col in ["bb_expanding", "range_break_up", "dsa_trade_breakout_20"]:
-                if col in sub.columns:
-                    cond |= safe_numeric(sub[col]).fillna(0) > 0
-            sub = sub[cond]
-        elif row["breakout_mode"] == "break_only":
-            cond = pd.Series(False, index=sub.index)
-            for col in ["range_break_up", "dsa_trade_breakout_20"]:
-                if col in sub.columns:
-                    cond |= safe_numeric(sub[col]).fillna(0) > 0
-            sub = sub[cond]
+        if "dsa_confirmed_pivot_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_confirmed_pivot_pos_01"]).fillna(1) <= row["dsa_confirmed_pos_max"]]
+        elif "dsa_trade_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]).fillna(1) <= row["dsa_confirmed_pos_max"]]
+        if "dsa_trade_range_width_pct" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_range_width_pct"]).fillna(999) <= row["dsa_trade_width_pct_max"]]
         if "bars_since_dir_change" in sub.columns:
-            sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= 12]
+            sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= row["bars_since_dir_change_max"]]
+        wk_rng = None if row["weekly_prev_down_range"] == "none" else tuple(int(x) for x in str(row["weekly_prev_down_range"]).split("_"))
+        sub = _apply_weekly_filter(
+            sub,
+            weekly_mode=str(row["weekly_mode"]),
+            weekly_dev_min=float(row["w_dsa_signed_vwap_dev_min"]),
+            weekly_prev_down_min=None if wk_rng is None else wk_rng[0],
+            weekly_prev_down_max=None if wk_rng is None else wk_rng[1],
+        )
+        sub = _apply_trigger_filter(sub, str(row["trigger_type"]))
         sub = dedup_events(sub)
         if sub.empty:
             continue
         keep_cols = [c for c in [
-            "symbol", "datetime", "close", "ret_20", "max_dd_20", "rr_20", "ret_60", "max_dd_60", "rr_60",
-            "dsa_trade_pos_01", "bb_width_norm", "bb_pos_01", "rope_pivot_pos_01", "w_dsa_signed_vwap_dev_pct",
-            "range_width_atr", "bb_expanding", "range_break_up", "dsa_trade_breakout_20",
+            "symbol", "datetime", "close", "ret_20", "max_dd_20", "rr_20",
+            "dsa_confirmed_pivot_pos_01", "dsa_trade_pos_01", "dsa_trade_range_width_pct",
+            "bars_since_dir_change", "w_dsa_signed_vwap_dev_pct", "w_prev_confirmed_down_bars",
+            "bb_expanding", "range_break_up", "dsa_trade_breakout_20",
             "score_width_total", "score_trend_total", "score_volume_total", "score_setup_total",
         ] if c in sub.columns]
         tmp = sub[keep_cols].copy()
         tmp["rule_rank"] = rank + 1
+        tmp["trigger_type"] = row["trigger_type"]
         top_event_rows.append(tmp)
 
     top_df = pd.concat(top_event_rows, ignore_index=True).head(top_k_export) if top_event_rows else pd.DataFrame()
@@ -926,13 +1099,13 @@ def build_compression_launch_scan(events: pd.DataFrame, top_k_export: int = 200)
     return scan_df, top_df
 
 
+
 def build_stability_slices(events: pd.DataFrame, scan_df: pd.DataFrame) -> pd.DataFrame:
     if events.empty or scan_df.empty:
         return pd.DataFrame()
     top = scan_df.head(6)
     rows: List[Dict[str, object]] = []
     work = events.copy()
-    # 粗略市值代理：用 close*vol 做成交额分层，环境代理：按全样本 ret_20 中位数分组
     work["turnover_proxy"] = safe_numeric(work.get("close", pd.Series(index=work.index))) * safe_numeric(work.get("vol", pd.Series(index=work.index)))
     if "datetime" in work.columns:
         work["year"] = pd.to_datetime(work["datetime"]).dt.year
@@ -953,39 +1126,37 @@ def build_stability_slices(events: pd.DataFrame, scan_df: pd.DataFrame) -> pd.Da
 
     for rank, row in top.iterrows():
         sub = work.copy()
-        if "dsa_trade_pos_01" in sub.columns:
-            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]) <= row["dsa_trade_pos_max"]]
-        if "bb_width_norm" in sub.columns:
-            sub = sub[safe_numeric(sub["bb_width_norm"]) <= row["bb_width_norm_max"]]
-        if "bb_pos_01" in sub.columns:
-            bbpos = safe_numeric(sub["bb_pos_01"])
-            sub = sub[bbpos.between(row["bb_pos_low"], row["bb_pos_high"], inclusive="both")]
-        if "rope_pivot_pos_01" in sub.columns:
-            sub = sub[safe_numeric(sub["rope_pivot_pos_01"]) <= row["rope_pivot_pos_max"]]
-        if "w_dsa_signed_vwap_dev_pct" in sub.columns:
-            sub = sub[safe_numeric(sub["w_dsa_signed_vwap_dev_pct"]).fillna(-99) >= row["w_dsa_signed_vwap_dev_min"]]
-        if pd.notna(row["range_width_atr_min"]) and "range_width_atr" in sub.columns:
-            sub = sub[safe_numeric(sub["range_width_atr"]) >= row["range_width_atr_min"]]
-        if row["breakout_mode"] == "expand_or_break":
-            cond = pd.Series(False, index=sub.index)
-            for col in ["bb_expanding", "range_break_up", "dsa_trade_breakout_20"]:
-                if col in sub.columns:
-                    cond |= safe_numeric(sub[col]).fillna(0) > 0
-            sub = sub[cond]
-        elif row["breakout_mode"] == "break_only":
-            cond = pd.Series(False, index=sub.index)
-            for col in ["range_break_up", "dsa_trade_breakout_20"]:
-                if col in sub.columns:
-                    cond |= safe_numeric(sub[col]).fillna(0) > 0
-            sub = sub[cond]
+        if "dsa_confirmed_pivot_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_confirmed_pivot_pos_01"]).fillna(1) <= row["dsa_confirmed_pos_max"]]
+        elif "dsa_trade_pos_01" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_pos_01"]).fillna(1) <= row["dsa_confirmed_pos_max"]]
+        if "dsa_trade_range_width_pct" in sub.columns:
+            sub = sub[safe_numeric(sub["dsa_trade_range_width_pct"]).fillna(999) <= row["dsa_trade_width_pct_max"]]
+        if "bars_since_dir_change" in sub.columns:
+            sub = sub[safe_numeric(sub["bars_since_dir_change"]).fillna(99) <= row["bars_since_dir_change_max"]]
+        wk_rng = None if row["weekly_prev_down_range"] == "none" else tuple(int(x) for x in str(row["weekly_prev_down_range"]).split("_"))
+        sub = _apply_weekly_filter(
+            sub,
+            weekly_mode=str(row["weekly_mode"]),
+            weekly_dev_min=float(row["w_dsa_signed_vwap_dev_min"]),
+            weekly_prev_down_min=None if wk_rng is None else wk_rng[0],
+            weekly_prev_down_max=None if wk_rng is None else wk_rng[1],
+        )
+        sub = _apply_trigger_filter(sub, str(row["trigger_type"]))
         sub = dedup_events(sub)
         if len(sub) < 12:
             continue
-        for dim in ["year", "liquidity_bucket", "env_bucket"]:
-            for key, g in sub.groupby(dim, dropna=False):
+        for dim in ["year", "liquidity_bucket", "env_bucket", "trigger_type"]:
+            if dim == "trigger_type":
+                g = sub.copy()
+                g["trigger_type"] = str(row["trigger_type"])
+                groups = g.groupby("trigger_type", dropna=False)
+            else:
+                groups = sub.groupby(dim, dropna=False)
+            for key, g in groups:
                 if len(g) < 8:
                     continue
-                stat = summarize_events(g, [20, 60])
+                stat = summarize_events(g, [20])
                 rows.append({
                     "rule_rank": rank + 1,
                     "slice_dim": dim,
@@ -1020,77 +1191,114 @@ def analyze_01_feature_inventory(events: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="基于 GBDT 结果反推规则的买点实验脚本")
+    parser = argparse.ArgumentParser(description="基于 GBDT 结果反推规则的买点实验脚本（缓存增强 + 榜首规则精修）")
     parser.add_argument("--n-stocks", type=int, default=100)
     parser.add_argument("--bars", type=int, default=800)
     parser.add_argument("--freq", default="d")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--analysis-mode", type=str, default="full", choices=["full", "prepare_only", "model_only", "rule_only"])
+    parser.add_argument("--analysis-mode", type=str, default="light", choices=["light", "full", "prepare_only", "model_only", "rule_only"])
     parser.add_argument("--neighbor-dsa-max", type=float, default=0.45)
     parser.add_argument("--neighbor-prev-down-min", type=float, default=8.0)
     parser.add_argument("--neighbor-current-run-max", type=float, default=20.0)
     parser.add_argument("--neighbor-bars-since-max", type=float, default=12.0)
-    parser.add_argument("--use-cache", action="store_true", help="使用缓存数据，避免重复从数据库拉取")
-    parser.add_argument("--refresh-cache", action="store_true", help="强制刷新缓存，重新从数据库拉取")
-    parser.add_argument("--cache-dir", default="data_cache/gbdt_explorer", help="缓存文件存放目录")
+    parser.add_argument("--refine-from-csv", type=str, default="", help="直接读取已生成的02_candidate_events.csv做精修，不重算全市场")
+    parser.add_argument("--cache-dir", type=str, default="data_cache", help="数据缓存目录")
+    parser.add_argument("--no-cache", action="store_true", help="禁用缓存，每次都从数据库重新计算")
+    parser.add_argument("--refresh-cache", action="store_true", help="强制刷新缓存")
     args = parser.parse_args()
 
-    cache_path = get_cache_path(args.cache_dir, args.n_stocks, args.bars, args.freq, args.seed)
-
-    if args.use_cache and not args.refresh_cache and cache_exists(cache_path):
-        print(f"从缓存加载数据: {cache_path}")
-        cached_data = load_cache(cache_path)
-        if cached_data is not None:
-            all_dfs = cached_data.get("all_dfs", [])
-            print(f"缓存加载成功: {len(all_dfs)}只股票数据")
-        else:
-            print("缓存加载失败，将从数据库重新拉取")
-            all_dfs = fetch_data_from_db(args.n_stocks, args.bars, args.freq, args.seed)
-            if args.use_cache and all_dfs:
-                save_cache({"all_dfs": all_dfs, "metadata": {"created_at": datetime.now().isoformat(), "n_stocks": args.n_stocks, "bars": args.bars, "freq": args.freq, "seed": args.seed}}, cache_path)
-                print(f"数据已缓存到: {cache_path}")
+    if args.refine_from_csv:
+        print(f"直接从候选事件文件精修: {args.refine_from_csv}")
+        events = pd.read_csv(args.refine_from_csv)
+        if "datetime" in events.columns:
+            events["datetime"] = pd.to_datetime(events["datetime"])
+        df = events.copy()
     else:
-        if args.refresh_cache:
-            print("强制刷新缓存，从数据库重新拉取数据...")
-        else:
-            print("从数据库拉取数据...")
-        all_dfs = fetch_data_from_db(args.n_stocks, args.bars, args.freq, args.seed)
-        if (args.use_cache or args.refresh_cache) and all_dfs:
-            save_cache({"all_dfs": all_dfs, "metadata": {"created_at": datetime.now().isoformat(), "n_stocks": args.n_stocks, "bars": args.bars, "freq": args.freq, "seed": args.seed}}, cache_path)
-            print(f"数据已缓存到: {cache_path}")
+        print("研究目标: 保留缓存机制 + 榜首规则精修 + 小范围分阶段验证")
+        cache_path = get_cache_path(args.cache_dir, args.n_stocks, args.bars, args.freq, args.seed)
 
-    if not all_dfs:
-        print("无有效数据，退出")
-        return
+        all_dfs: List[pd.DataFrame] = []
+        if not args.no_cache and not args.refresh_cache and cache_exists(cache_path):
+            print(f"\n发现缓存文件，正在加载: {cache_path.replace('.pkl', '.parquet')}")
+            cached_data = load_cache(cache_path)
+            if cached_data is not None:
+                all_dfs = cached_data.get("all_dfs", [])
+                metadata = cached_data.get("metadata", {})
+                print(f"缓存加载成功: {len(all_dfs)}只股票, 创建时间: {metadata.get('created_at', 'unknown')}")
+            else:
+                print("缓存加载失败，将重新从数据库获取")
 
-    df = pd.concat(all_dfs, ignore_index=True)
-    neighbor_spec = NeighborSpec(dsa_max=args.neighbor_dsa_max, prev_down_min=args.neighbor_prev_down_min, current_run_max=args.neighbor_current_run_max, bars_since_max=args.neighbor_bars_since_max)
-    events = build_neighbor_events(df, neighbor_spec)
+        if not all_dfs:
+            print("\n从数据库获取数据并计算因子...")
+            all_dfs = fetch_data_from_db(args.n_stocks, args.bars, args.freq, args.seed)
 
-    analyze_00_dataset_summary(df, events)
-    analyze_01_feature_inventory(events)
-    if not events.empty:
-        events.to_csv(f"{OUT_DIR}/02_candidate_events.csv", index=False)
+            if not args.no_cache and all_dfs:
+                metadata = {
+                    "n_stocks": args.n_stocks,
+                    "bars": args.bars,
+                    "freq": args.freq,
+                    "seed": args.seed,
+                    "created_at": str(pd.Timestamp.now()),
+                    "stock_count": len(all_dfs),
+                    "sample_count": int(sum(len(df_part) for df_part in all_dfs)),
+                }
+                save_cache({"all_dfs": all_dfs, "metadata": metadata}, cache_path)
+                print(f"缓存已保存: {cache_path.replace('.pkl', '.parquet')}")
 
-    print(f"\n总样本: {len(df)}, 股票数: {df['symbol'].nunique()}")
-    print(f"C 邻域候选事件: {len(events)}, 股票数: {events['symbol'].nunique() if not events.empty else 0}")
-    if events.empty:
-        print("候选事件为空，退出")
-        return
+        if not all_dfs:
+            print("无有效数据，退出")
+            return
+
+        df = pd.concat(all_dfs, ignore_index=True)
+        neighbor_spec = NeighborSpec(
+            dsa_max=args.neighbor_dsa_max,
+            prev_down_min=args.neighbor_prev_down_min,
+            current_run_max=args.neighbor_current_run_max,
+            bars_since_max=args.neighbor_bars_since_max,
+        )
+        events = build_neighbor_events(df, neighbor_spec)
+
+        analyze_00_dataset_summary(df, events)
+        analyze_01_feature_inventory(events)
+        if not events.empty:
+            events.to_csv(f"{OUT_DIR}/02_candidate_events.csv", index=False)
+
+        print(f"\n总样本: {len(df)}, 股票数: {df['symbol'].nunique()}")
+        print(f"C 邻域候选事件: {len(events)}, 股票数: {events['symbol'].nunique() if not events.empty else 0}")
+        if events.empty:
+            print("候选事件为空，退出")
+            return
 
     if args.analysis_mode == "prepare_only":
-        print(f"\n全部完成，结果保存在 {OUT_DIR}/")
+        if args.refine_from_csv:
+            print("\n已加载候选事件，未执行模型/规则精修。")
+        else:
+            print(f"\n全部完成，结果保存在 {OUT_DIR}/")
         return
 
     if args.analysis_mode != "rule_only":
         fold_frames: List[pd.DataFrame] = []
+        run_light = args.analysis_mode == "light"
+
         trade_reg_metrics, trade_reg_imp = run_single_model(events, TRADE_FEATURES, "ret_20", "reg", "trade")
-        trade_clf_metrics, trade_clf_imp = run_single_model(events, TRADE_FEATURES, "good20", "clf", "trade")
-        research_reg_metrics, research_reg_imp = run_single_model(events, RESEARCH_FEATURES, "ret_20", "reg", "research")
-        research_clf_metrics, research_clf_imp = run_single_model(events, RESEARCH_FEATURES, "good20", "clf", "research")
-        for frame in [trade_reg_metrics, trade_clf_metrics, research_reg_metrics, research_clf_metrics]:
-            if not frame.empty:
-                fold_frames.append(frame)
+        if not trade_reg_metrics.empty:
+            fold_frames.append(trade_reg_metrics)
+
+        if run_light:
+            research_reg_metrics = pd.DataFrame()
+            research_reg_imp = pd.DataFrame()
+            trade_clf_metrics = pd.DataFrame()
+            trade_clf_imp = pd.DataFrame()
+            research_clf_metrics = pd.DataFrame()
+            research_clf_imp = pd.DataFrame()
+        else:
+            trade_clf_metrics, trade_clf_imp = run_single_model(events, TRADE_FEATURES, "good20", "clf", "trade")
+            research_reg_metrics, research_reg_imp = run_single_model(events, RESEARCH_FEATURES, "ret_20", "reg", "research")
+            research_clf_metrics, research_clf_imp = run_single_model(events, RESEARCH_FEATURES, "good20", "clf", "research")
+            for frame in [trade_clf_metrics, research_reg_metrics, research_clf_metrics]:
+                if not frame.empty:
+                    fold_frames.append(frame)
+
         if fold_frames:
             pd.concat(fold_frames, ignore_index=True).to_csv(f"{OUT_DIR}/05_fold_metrics.csv", index=False)
 
@@ -1113,23 +1321,35 @@ def main() -> None:
         trade_feats_for_bucket = trade_top["feature"].head(8).tolist() if not trade_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in TRADE_FEATURES]
         research_feats_for_bucket = research_top["feature"].head(8).tolist() if not research_top.empty else [f for f in PRIMARY_HINT_FEATURES if f in RESEARCH_FEATURES]
         build_bucket_profiles(events, trade_feats_for_bucket, f"{OUT_DIR}/06_trade_bucket_profiles.csv")
-        build_bucket_profiles(events, research_feats_for_bucket, f"{OUT_DIR}/06b_research_bucket_profiles.csv")
+        if not run_light:
+            build_bucket_profiles(events, research_feats_for_bucket, f"{OUT_DIR}/06b_research_bucket_profiles.csv")
         build_bucket_profiles(events, COMPOSITE_FEATURES, f"{OUT_DIR}/08_composite_feature_profiles.csv")
-        build_parameter_hints(events, pd.concat([trade_reg_imp_agg, trade_clf_imp_agg], ignore_index=True), pd.concat([research_reg_imp_agg, research_clf_imp_agg], ignore_index=True))
+        build_parameter_hints(
+            events,
+            pd.concat([trade_reg_imp_agg, trade_clf_imp_agg], ignore_index=True) if not trade_reg_imp_agg.empty or not trade_clf_imp_agg.empty else pd.DataFrame(columns=["feature", "rank_score"]),
+            pd.concat([research_reg_imp_agg, research_clf_imp_agg], ignore_index=True) if not research_reg_imp_agg.empty or not research_clf_imp_agg.empty else pd.DataFrame(columns=["feature", "rank_score"]),
+        )
 
         print("\n=== 关键结果预览 ===")
         if not trade_reg_imp_agg.empty:
             print("\n[trade-safe 回归重要性 Top10]")
-            print(trade_reg_imp_agg[["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"]].head(10).to_string(index=False))
+            cols = [c for c in ["feature", "rank_score", "gain_importance", "perm_importance", "fold_count"] if c in trade_reg_imp_agg.columns]
+            print(trade_reg_imp_agg[cols].head(10).to_string(index=False))
 
     scan_df, _ = build_compression_launch_scan(events)
     build_stability_slices(events, scan_df)
-    if not scan_df.empty:
-        print("\n[压缩低位启动规则 Top10]")
-        print(scan_df[[
-            "dsa_trade_pos_max", "bb_width_norm_max", "bb_pos_low", "bb_pos_high", "rope_pivot_pos_max",
-            "w_dsa_signed_vwap_dev_min", "range_width_atr_min", "breakout_mode", "weekly_mode", "n", "ret_20", "wr_20", "rr_20", "rank_score"
-        ]].head(10).to_string(index=False))
+    refined_df, _, summary_df = build_refined_rule_scan(events)
+    if not refined_df.empty:
+        print("\n[榜首规则精修 Top10]")
+        cols = [c for c in [
+            "stage", "dsa_confirmed_pos_max", "dsa_trade_pos_max", "bb_width_norm_max",
+            "bb_pos_min", "bb_pos_max", "rope_pivot_pos_max", "weekly_mode", "trigger_type",
+            "n", "ret_20", "mae_20", "wr_20", "rr_20", "ret_60", "year_rr_std", "rank_score"
+        ] if c in refined_df.columns]
+        print(refined_df[cols].head(10).to_string(index=False))
+    if not summary_df.empty:
+        print("\n[主规则候选摘要 Top5]")
+        print(summary_df.head(5).to_string(index=False))
 
     print(f"\n{'=' * 70}")
     print(f"# 全部完成! 结果保存在 {OUT_DIR}/")
