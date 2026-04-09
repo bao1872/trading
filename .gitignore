@@ -43,3 +43,11 @@ data_cache/
 *.pickle
 *.feather
 *.xlsx
+venv/
+__pycache__/
+*.pyc
+*.parquet
+*.xlsx
+data_cache/
+output/
+*_output/
