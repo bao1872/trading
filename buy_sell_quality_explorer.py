@@ -613,6 +613,21 @@ ENTRY_PROFILE_FEATURES_NO_MOMO = [
     "score_width_total", "score_setup_total",
 ]
 
+
+
+STRUCTURE_CORE_FEATURES = [
+    "dsa_trade_pos_01",
+    "bb_pos_01",
+    "dsa_trade_range_width_pct",
+    "bb_width_norm",
+    "bars_since_dir_change",
+    "bb_expand_streak",
+    "trend_gap_10_20",
+    "score_trend_total",
+]
+
+STRUCTURE_PAIR_FEATURES = list(STRUCTURE_CORE_FEATURES)
+
 RESEARCH_FEATURES = [
     "dsa_confirmed_pivot_pos_01", "dsa_signed_vwap_dev_pct", "dsa_trend_aligned_vwap_dev_pct",
     "lh_hh_low_pos", "dsa_bull_vwap_dev_pct", "dsa_bear_vwap_dev_pct",
@@ -1382,45 +1397,6 @@ def summarize_quality(events: pd.DataFrame) -> Dict[str, float]:
     return out
 
 
-def summarize_coverage(events: pd.DataFrame) -> Dict[str, float]:
-    out: Dict[str, float] = {
-        "sample_n": int(len(events)),
-        "sample_ratio": np.nan,
-        "active_months": np.nan,
-        "avg_events_per_month": np.nan,
-        "max_events_single_month": np.nan,
-    }
-    if len(events) == 0 or "datetime" not in events.columns:
-        return out
-    dt = pd.to_datetime(events["datetime"], errors="coerce")
-    dt = dt[dt.notna()]
-    if len(dt) == 0:
-        return out
-    months = dt.dt.to_period("M")
-    counts = months.value_counts().sort_index()
-    out["active_months"] = int(counts.shape[0])
-    out["avg_events_per_month"] = round(float(counts.mean()), 5)
-    out["max_events_single_month"] = int(counts.max())
-    return out
-
-
-def coverage_rank_score(sample_n: int, active_months: float, avg_events_per_month: float) -> float:
-    n_score = min(max(float(sample_n), 0.0), 120.0) / 120.0
-    m_score = min(max(float(active_months) if pd.notna(active_months) else 0.0, 0.0), 18.0) / 18.0
-    f_score = min(max(float(avg_events_per_month) if pd.notna(avg_events_per_month) else 0.0, 0.0), 4.0) / 4.0
-    return round(45.0 * n_score + 35.0 * m_score + 20.0 * f_score, 4)
-
-
-def classify_candidate_tier(robust_rank_score: float, sample_n: int, active_months: float, quality_trade_score: float) -> str:
-    q = 0.0 if pd.isna(quality_trade_score) else float(quality_trade_score)
-    months = 0.0 if pd.isna(active_months) else float(active_months)
-    if robust_rank_score >= 70 and sample_n >= 30 and months >= 6 and q >= 0.58:
-        return "A"
-    if robust_rank_score >= 55 and sample_n >= 20 and months >= 4 and q >= 0.52:
-        return "B"
-    return "C"
-
-
 def event_quality_rank(qstat: Dict[str, float], n: int, stability_penalty: float = 0.0) -> float:
     q = 0.0 if pd.isna(qstat.get("quality_trade_score")) else float(qstat.get("quality_trade_score", 0.0))
     hit5 = 0.0 if pd.isna(qstat.get(f"hit_5pct_before_stop_{PATH_QUALITY_HORIZON}")) else float(qstat.get(f"hit_5pct_before_stop_{PATH_QUALITY_HORIZON}", 0.0))
@@ -2070,139 +2046,8 @@ def export_results_workbook(result_tables: Dict[str, pd.DataFrame], out_dir: str
             df.to_excel(writer, sheet_name=_sanitize_sheet_name(sheet, used), index=False)
     return workbook_path
 
-
-def _infer_mixed_rule_family(combo_rule: str) -> str:
-    rule = str(combo_rule)
-    has_pos = ("dsa_trade_pos_01" in rule) or ("bb_pos_01" in rule)
-    has_width = ("dsa_trade_range_width_pct" in rule) or ("bb_width_norm" in rule)
-    has_heat = ("trend_gap_10_20" in rule) or ("score_trend_total" in rule)
-    if has_width and has_heat and not has_pos:
-        return "A_width_trend"
-    if has_pos and has_heat and not has_width:
-        return "B_position_trend"
-    if has_pos and has_width and has_heat:
-        return "C_position_width_trend"
-    if has_width and has_heat:
-        return "A_width_trend"
-    if has_pos and has_heat:
-        return "B_position_trend"
-    return "Z_other"
-
-
-def build_final_mixed_rules(struct_combo_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
-    if struct_combo_df.empty:
-        return pd.DataFrame()
-    mixed = struct_combo_df[struct_combo_df.get("feature_mode", pd.Series(dtype=object)).astype(str) == "mixed"].copy()
-    if mixed.empty:
-        return pd.DataFrame()
-    mixed["final_rule_family"] = mixed["combo_rule"].astype(str).map(_infer_mixed_rule_family)
-    mixed = mixed[mixed["final_rule_family"] != "Z_other"].copy()
-    if mixed.empty:
-        return pd.DataFrame()
-
-    # 以 base 发现、soft 验证、wide 压测做家族级归并
-    grp = mixed.groupby(["final_rule_family", "pool_name"], as_index=False).agg({
-        "robust_rank_score": "mean",
-        "quality_trade_score": "mean",
-        "sample_n": "mean",
-        "active_months": "mean",
-        "avg_events_per_month": "mean",
-        "combo_rule": lambda s: " | ".join(pd.Series(s).astype(str).head(3).tolist()),
-    })
-    rows = []
-    for fam, g in grp.groupby("final_rule_family", as_index=False):
-        base = g[g["pool_name"] == "pool_base"]
-        soft = g[g["pool_name"] == "pool_relaxed_soft"]
-        wide = g[g["pool_name"] == "pool_relaxed_wide"]
-        base_r = float(base["robust_rank_score"].mean()) if not base.empty else np.nan
-        soft_r = float(soft["robust_rank_score"].mean()) if not soft.empty else np.nan
-        wide_r = float(wide["robust_rank_score"].mean()) if not wide.empty else np.nan
-        base_q = float(base["quality_trade_score"].mean()) if not base.empty else np.nan
-        soft_q = float(soft["quality_trade_score"].mean()) if not soft.empty else np.nan
-        wide_q = float(wide["quality_trade_score"].mean()) if not wide.empty else np.nan
-        base_n = float(base["sample_n"].mean()) if not base.empty else np.nan
-        soft_n = float(soft["sample_n"].mean()) if not soft.empty else np.nan
-        rep = mixed[mixed["final_rule_family"] == fam].sort_values(["pool_name","robust_rank_score","quality_trade_score"], ascending=[True,False,False]).head(3)
-        rows.append({
-            "final_rule_family": fam,
-            "final_rule_name": {
-                "A_width_trend": "final_rule_A_width_trend",
-                "B_position_trend": "final_rule_B_position_trend",
-                "C_position_width_trend": "final_rule_C_position_width_trend",
-            }.get(fam, fam),
-            "representative_rule_1": rep["combo_rule"].iloc[0] if len(rep) > 0 else np.nan,
-            "representative_rule_2": rep["combo_rule"].iloc[1] if len(rep) > 1 else np.nan,
-            "representative_rule_3": rep["combo_rule"].iloc[2] if len(rep) > 2 else np.nan,
-            "base_robust_rank_score": round(base_r, 6) if pd.notna(base_r) else np.nan,
-            "soft_robust_rank_score": round(soft_r, 6) if pd.notna(soft_r) else np.nan,
-            "wide_robust_rank_score": round(wide_r, 6) if pd.notna(wide_r) else np.nan,
-            "base_quality_trade_score": round(base_q, 5) if pd.notna(base_q) else np.nan,
-            "soft_quality_trade_score": round(soft_q, 5) if pd.notna(soft_q) else np.nan,
-            "wide_quality_trade_score": round(wide_q, 5) if pd.notna(wide_q) else np.nan,
-            "base_sample_n": round(base_n, 1) if pd.notna(base_n) else np.nan,
-            "soft_sample_n": round(soft_n, 1) if pd.notna(soft_n) else np.nan,
-            "stability_gap": round(abs(base_r - soft_r), 6) if pd.notna(base_r) and pd.notna(soft_r) else np.nan,
-            "pressure_decay": round(base_r - wide_r, 6) if pd.notna(base_r) and pd.notna(wide_r) else np.nan,
-            "family_rank_score": round(float(np.nanmean([base_r, soft_r])), 6) if pd.notna(base_r) or pd.notna(soft_r) else np.nan,
-        })
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-    out = out.sort_values(["family_rank_score", "base_quality_trade_score", "base_sample_n"], ascending=[False, False, False]).head(top_n).reset_index(drop=True)
-    out["final_rule_rank"] = np.arange(1, len(out) + 1)
-    return out
-
-
-def build_best_exit_template_by_combo(matrix_df: pd.DataFrame) -> pd.DataFrame:
-    if matrix_df.empty:
-        return pd.DataFrame()
-    rows = []
-    for (pool_name, combo_rule), g in matrix_df.groupby(["pool_name", "combo_rule"], sort=False):
-        gg = g.sort_values(["ret_mean_exited", "capture_ratio_mean", "bars_to_exit_mean"], ascending=[False, False, False], na_position="last").copy()
-        best = gg.iloc[0]
-        alt = gg.iloc[1] if len(gg) > 1 else None
-        rows.append({
-            "pool_name": pool_name,
-            "combo_rule": combo_rule,
-            "final_rule_family": _infer_mixed_rule_family(combo_rule),
-            "best_template": best.get("template"),
-            "best_strategy": best.get("strategy"),
-            "best_ret_mean_exited": best.get("ret_mean_exited"),
-            "best_capture_ratio_mean": best.get("capture_ratio_mean"),
-            "best_giveback_ratio_mean": best.get("giveback_ratio_mean"),
-            "best_bars_to_exit_mean": best.get("bars_to_exit_mean"),
-            "alt_template": alt.get("template") if alt is not None else np.nan,
-            "alt_ret_mean_exited": alt.get("ret_mean_exited") if alt is not None else np.nan,
-            "template_ret_spread": round(float(best.get("ret_mean_exited") - alt.get("ret_mean_exited")), 5) if alt is not None and pd.notna(best.get("ret_mean_exited")) and pd.notna(alt.get("ret_mean_exited")) else np.nan,
-        })
-    out = pd.DataFrame(rows)
-    out = out.sort_values(["pool_name", "best_ret_mean_exited", "best_capture_ratio_mean"], ascending=[True, False, False], na_position="last").reset_index(drop=True)
-    # 家族级最终模板建议
-    fam_rows=[]
-    for (pool_name, fam), g in out.groupby(["pool_name","final_rule_family"], sort=False):
-        if fam=='Z_other':
-            continue
-        tpl = g.groupby('best_template', as_index=False).agg({
-            'best_ret_mean_exited':'mean',
-            'best_capture_ratio_mean':'mean',
-            'template_ret_spread':'mean',
-            'combo_rule':'count'
-        }).rename(columns={'combo_rule':'rule_count'}).sort_values(['best_ret_mean_exited','best_capture_ratio_mean','rule_count'], ascending=[False,False,False])
-        top=tpl.iloc[0]
-        fam_rows.append({
-            'pool_name':pool_name,
-            'final_rule_family':fam,
-            'recommended_template':top['best_template'],
-            'rule_count':int(top['rule_count']),
-            'mean_ret_mean_exited':round(float(top['best_ret_mean_exited']),5),
-            'mean_capture_ratio_mean':round(float(top['best_capture_ratio_mean']),4),
-            'mean_template_ret_spread':round(float(top['template_ret_spread']),5) if pd.notna(top['template_ret_spread']) else np.nan,
-        })
-    fam_df=pd.DataFrame(fam_rows)
-    return out if fam_df.empty else out.merge(fam_df, on=['pool_name','final_rule_family'], how='left')
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="mixed主买点家族 + S2/S3卖点对决实验脚本")
+    parser = argparse.ArgumentParser(description="买卖点质量研究脚本（缓存增强 + 单Excel导出）")
     parser.add_argument("--n-stocks", type=int, default=100)
     parser.add_argument("--bars", type=int, default=800)
     parser.add_argument("--freq", default="d")
@@ -2218,7 +2063,7 @@ def main() -> None:
     parser.add_argument("--excel-name", type=str, default="buy_sell_quality_report.xlsx", help="唯一导出的Excel文件名")
     args = parser.parse_args()
 
-    print("研究目标: 固定主策略事件池 + 买点事件/状态质量研究 + 卖点纯事件退出 + 固定持有期仅作评分观察 + 仅输出一个Excel")
+    print("研究目标: 三层事件池池内质量归因 + 纯结构主线/动量对照辅线 + 固定窗口仅作观察 + 仅输出一个Excel")
     cache_path = get_cache_path(args.cache_dir, args.n_stocks, args.bars, args.freq, args.seed)
 
     all_dfs: List[pd.DataFrame] = []
@@ -2431,299 +2276,10 @@ def main() -> None:
 # =========================
 
 ATTRIBUTION_TARGET_FEATURES = {
-    "trade_with_momo": TRADE_FEATURES,
     "trade_without_momo": TRADE_FEATURES_NO_MOMO,
+    "trade_with_momo": TRADE_FEATURES,
     "research": RESEARCH_FEATURES,
 }
-
-STRUCT_CORE_FEATURES = [
-    "dsa_trade_pos_01",
-    "bb_pos_01",
-    "dsa_trade_range_width_pct",
-    "bb_width_norm",
-    "trend_gap_10_20",
-    "score_trend_total",
-]
-
-LOW_ABSORB_FEATURES = [
-    "dsa_trade_pos_01",
-    "bb_pos_01",
-    "dsa_trade_range_width_pct",
-    "bb_width_norm",
-]
-
-TREND_HEAT_FEATURES = [
-    "trend_gap_10_20",
-    "score_trend_total",
-]
-
-STRUCT_EXPERIMENT_GROUPS = {
-    "mixed": STRUCT_CORE_FEATURES,
-}
-
-EXIT_TEMPLATES = {
-    "S2_early_protect": "peak_pullback_4",
-    "S3_profit_extend": "tp8_then_rope",
-}
-
-
-def _apply_rule_token(events: pd.DataFrame, token: str) -> pd.DataFrame:
-    if token.endswith("_high"):
-        feat = token[:-5]
-        return _apply_feature_directional_filter(events, feat, "high", q=0.4)
-    if token.endswith("_low40"):
-        feat = token[:-6]
-        return _apply_feature_directional_filter(events, feat, "low", q=0.4)
-    return events
-
-
-def _subset_by_combo_rule(events: pd.DataFrame, combo_rule: str) -> pd.DataFrame:
-    sub = events.copy()
-    for token in str(combo_rule).split(" & "):
-        sub = _apply_rule_token(sub, token)
-        if sub.empty:
-            break
-    return sub
-
-
-def build_struct_combo_scan(pools: Dict[str, pd.DataFrame]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    rows: List[Dict[str, object]] = []
-    top_event_rows: List[pd.DataFrame] = []
-    pool_order = ["pool_base", "pool_relaxed_soft", "pool_relaxed_wide"]
-
-    def _combo_allowed(group_name: str, combo: Tuple[str, ...]) -> bool:
-        cset = set(combo)
-        low_n = len(cset & set(LOW_ABSORB_FEATURES))
-        trend_n = len(cset & set(TREND_HEAT_FEATURES))
-        if group_name == "mixed":
-            return low_n >= 1 and trend_n >= 1
-        return False
-
-    for pool_name in pool_order:
-        pool = pools.get(pool_name, pd.DataFrame())
-        if pool.empty or len(pool) < 30:
-            continue
-        min_n = max(10, int(len(pool) * 0.03))
-        for group_name, feature_pool in STRUCT_EXPERIMENT_GROUPS.items():
-            available_feats = [f for f in feature_pool if f in pool.columns]
-            if len(available_feats) < 2 and group_name == "mixed":
-                continue
-            if len(available_feats) < 1:
-                continue
-            directions = {f: _infer_feature_direction(pool, f) for f in available_feats}
-            combos: List[Tuple[str, ...]] = []
-            for r in [2, 3]:
-                for combo in combinations(STRUCT_CORE_FEATURES, r):
-                    if all(feat in pool.columns for feat in combo) and _combo_allowed(group_name, combo):
-                        combos.append(combo)
-            for combo in combos:
-                sub = pool.copy()
-                rules = []
-                for feat in combo:
-                    direction = directions.get(feat, _infer_feature_direction(pool, feat))
-                    sub = _apply_feature_directional_filter(sub, feat, direction, q=0.4)
-                    rules.append(f"{feat}_{'high' if direction == 'high' else 'low40'}")
-                    if len(sub) < min_n:
-                        break
-                if len(sub) < min_n:
-                    continue
-                qstat = summarize_quality(sub)
-                cstat = summarize_coverage(sub)
-                quality_rank = round(float(event_quality_rank(qstat, len(sub))), 6)
-                sample_ratio = round(float(len(sub) / len(pool)), 5)
-                cscore = coverage_rank_score(len(sub), cstat.get("active_months", np.nan), cstat.get("avg_events_per_month", np.nan))
-                robust_score = round(0.65 * quality_rank + 0.35 * cscore, 6)
-                row = {
-                    "pool_name": pool_name,
-                    "feature_mode": group_name,
-                    "combo_size": len(combo),
-                    "combo_rule": " & ".join(rules),
-                    "sample_n": int(len(sub)),
-                    "sample_ratio": sample_ratio,
-                    "quality_rank_score": quality_rank,
-                    "coverage_rank_score": cscore,
-                    "robust_rank_score": robust_score,
-                }
-                row.update(qstat)
-                row.update(cstat)
-                row["candidate_tier"] = classify_candidate_tier(robust_score, int(len(sub)), cstat.get("active_months", np.nan), qstat.get("quality_trade_score", np.nan))
-                rows.append(row)
-
-    combo_df = pd.DataFrame(rows)
-    if combo_df.empty:
-        return combo_df, pd.DataFrame(), pd.DataFrame()
-    combo_df = combo_df.sort_values(
-        ["feature_mode", "pool_name", "candidate_tier", "robust_rank_score", "quality_rank_score", "quality_trade_score", "sample_n"],
-        ascending=[True, True, True, False, False, False, False],
-    ).reset_index(drop=True)
-
-    for (group_name, pool_name), g in combo_df.groupby(["feature_mode", "pool_name"], sort=False):
-        pool = pools.get(pool_name)
-        if pool is None or pool.empty:
-            continue
-        for _, rule_row in g.head(5).iterrows():
-            sub = _subset_by_combo_rule(pool, str(rule_row["combo_rule"]))
-            if sub.empty:
-                continue
-            sub = sub.copy()
-            if "asymmetry_score" not in sub.columns:
-                mfe_col = f"path_mfe_{PATH_QUALITY_HORIZON}"
-                mae_col = f"path_mae_{PATH_QUALITY_HORIZON}"
-                if mfe_col in sub.columns and mae_col in sub.columns:
-                    asym = safe_numeric(sub[mfe_col]) / safe_numeric(sub[mae_col]).abs().replace(0, np.nan)
-                    sub["asymmetry_score"] = asym.replace([np.inf, -np.inf], np.nan)
-                else:
-                    sub["asymmetry_score"] = np.nan
-            sort_cols = [c for c in ["quality_trade_score", "asymmetry_score", f"path_efficiency_{PATH_QUALITY_HORIZON}"] if c in sub.columns]
-            top_events = sub.sort_values(sort_cols, ascending=[False] * len(sort_cols)).head(20).copy() if sort_cols else sub.head(20).copy()
-            top_events["pool_name"] = pool_name
-            top_events["feature_mode"] = group_name
-            top_events["combo_rule"] = rule_row["combo_rule"]
-            top_event_rows.append(top_events)
-
-    stability_rows: List[Dict[str, object]] = []
-    for (group_name, combo_rule), g in combo_df.groupby(["feature_mode", "combo_rule"], sort=False):
-        base = g[g["pool_name"] == "pool_base"]
-        soft = g[g["pool_name"] == "pool_relaxed_soft"]
-        wide = g[g["pool_name"] == "pool_relaxed_wide"]
-        base_score = float(base["robust_rank_score"].iloc[0]) if not base.empty else np.nan
-        soft_score = float(soft["robust_rank_score"].iloc[0]) if not soft.empty else np.nan
-        wide_score = float(wide["robust_rank_score"].iloc[0]) if not wide.empty else np.nan
-        base_q = float(base["quality_trade_score"].iloc[0]) if not base.empty else np.nan
-        soft_q = float(soft["quality_trade_score"].iloc[0]) if not soft.empty else np.nan
-        wide_q = float(wide["quality_trade_score"].iloc[0]) if not wide.empty else np.nan
-        stability_rows.append({
-            "feature_mode": group_name,
-            "combo_rule": combo_rule,
-            "pool_count": int(g["pool_name"].nunique()),
-            "combo_size": int(g["combo_size"].max()),
-            "base_robust_rank_score": round(base_score, 6) if pd.notna(base_score) else np.nan,
-            "soft_robust_rank_score": round(soft_score, 6) if pd.notna(soft_score) else np.nan,
-            "wide_robust_rank_score": round(wide_score, 6) if pd.notna(wide_score) else np.nan,
-            "base_quality": round(base_q, 5) if pd.notna(base_q) else np.nan,
-            "soft_quality": round(soft_q, 5) if pd.notna(soft_q) else np.nan,
-            "wide_quality": round(wide_q, 5) if pd.notna(wide_q) else np.nan,
-            "stability_gap": round(abs(base_score - soft_score), 6) if pd.notna(base_score) and pd.notna(soft_score) else np.nan,
-            "pressure_decay": round(base_score - wide_score, 6) if pd.notna(base_score) and pd.notna(wide_score) else np.nan,
-            "mean_robust_rank_score": round(float(g["robust_rank_score"].mean()), 6),
-            "mean_quality_rank_score": round(float(g["quality_rank_score"].mean()), 6),
-            "mean_coverage_rank_score": round(float(g["coverage_rank_score"].mean()), 6),
-        })
-    stability_df = pd.DataFrame(stability_rows)
-    if not stability_df.empty:
-        stability_df = stability_df.sort_values(
-            ["feature_mode", "pool_count", "stability_gap", "mean_robust_rank_score", "pressure_decay"],
-            ascending=[True, False, True, False, True],
-            na_position="last",
-        ).reset_index(drop=True)
-    top_events_df = pd.concat(top_event_rows, ignore_index=True) if top_event_rows else pd.DataFrame()
-    return combo_df, top_events_df, stability_df
-
-
-def build_candidate_tier_summary(struct_combo_df: pd.DataFrame) -> pd.DataFrame:
-    if struct_combo_df.empty:
-        return pd.DataFrame()
-    rows = []
-    for (feature_mode, candidate_tier), g in struct_combo_df.groupby(["feature_mode", "candidate_tier"], sort=False):
-        rows.append({
-            "feature_mode": feature_mode,
-            "candidate_tier": candidate_tier,
-            "combo_count": int(len(g)),
-            "mean_robust_rank_score": round(float(g["robust_rank_score"].mean()), 6),
-            "mean_quality_rank_score": round(float(g["quality_rank_score"].mean()), 6),
-            "mean_coverage_rank_score": round(float(g["coverage_rank_score"].mean()), 6),
-            "mean_quality_trade_score": round(float(safe_numeric(g.get("quality_trade_score", pd.Series(dtype=float))).mean()), 5),
-            "mean_sample_n": round(float(safe_numeric(g["sample_n"]).mean()), 2),
-            "mean_active_months": round(float(safe_numeric(g["active_months"]).mean()), 2),
-            "mean_avg_events_per_month": round(float(safe_numeric(g["avg_events_per_month"]).mean()), 4),
-        })
-    return pd.DataFrame(rows).sort_values(["feature_mode", "candidate_tier"]).reset_index(drop=True)
-
-
-def build_entry_exit_matrix_for_top_combos(full_df: pd.DataFrame, pools: Dict[str, pd.DataFrame], struct_combo_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    if full_df.empty or struct_combo_df.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    keep_cols = [c for c in ["symbol", "datetime", "open", "high", "low", "close", "rope", "rope_dir", "rope_slope_atr_5", "bb_mid"] if c in full_df.columns]
-    work = full_df[keep_cols].copy()
-    work["datetime"] = pd.to_datetime(work["datetime"])
-    work = work.sort_values(["symbol", "datetime"]).reset_index(drop=True)
-    grouped = {sym: g.reset_index(drop=True) for sym, g in work.groupby("symbol", sort=False)}
-
-    matrix_rows: List[Dict[str, object]] = []
-    detail_rows: List[Dict[str, object]] = []
-
-    for pool_name in ["pool_base", "pool_relaxed_soft"]:
-        pool = pools.get(pool_name)
-        if pool is None or pool.empty:
-            continue
-        top_rules = struct_combo_df[(struct_combo_df["pool_name"] == pool_name) & (struct_combo_df["feature_mode"] == "mixed") & (struct_combo_df["candidate_tier"].isin(["A", "B"]))].copy()
-        if top_rules.empty:
-            top_rules = struct_combo_df[(struct_combo_df["pool_name"] == pool_name) & (struct_combo_df["feature_mode"] == "mixed")].copy()
-        top_rules = top_rules.sort_values(["robust_rank_score", "quality_trade_score", "sample_n"], ascending=[False, False, False]).head(5)
-        for _, rule_row in top_rules.iterrows():
-            combo_rule = str(rule_row["combo_rule"])
-            sub = _subset_by_combo_rule(pool, combo_rule)
-            if sub.empty:
-                continue
-            for template_name, strategy in EXIT_TEMPLATES.items():
-                per_event: List[Dict[str, object]] = []
-                for _, ev in sub.iterrows():
-                    sym = str(ev["symbol"])
-                    dt = pd.Timestamp(ev["datetime"])
-                    path = grouped.get(sym)
-                    if path is None:
-                        continue
-                    hit = path.index[path["datetime"] == dt]
-                    if len(hit) == 0:
-                        continue
-                    entry_idx = int(hit[0])
-                    res = _evaluate_event_exit_on_path(path, entry_idx, strategy=strategy, max_bars=EVENT_EXIT_MAX_BARS)
-                    per_event.append({
-                        "pool_name": pool_name,
-                        "combo_rule": combo_rule,
-                        "template": template_name,
-                        "strategy": strategy,
-                        "symbol": sym,
-                        "datetime": dt,
-                        "ret": res.get("ret"),
-                        "bars_to_exit": res.get("bars_to_exit"),
-                        "exit_reason": res.get("exit_reason"),
-                        "mfe": res.get("mfe"),
-                        "mae": res.get("mae"),
-                        "capture_ratio": res.get("capture_ratio"),
-                        "giveback_ratio": res.get("giveback_ratio"),
-                        "exited": res.get("exited"),
-                    })
-                if not per_event:
-                    continue
-                det = pd.DataFrame(per_event)
-                detail_rows.extend(det.to_dict("records"))
-                exited = det[det["exited"] == 1].copy()
-                matrix_rows.append({
-                    "pool_name": pool_name,
-                    "combo_rule": combo_rule,
-                    "template": template_name,
-                    "strategy": strategy,
-                    "sample_n": int(len(det)),
-                    "exit_rate": round(float(det["exited"].mean()), 4),
-                    "ret_mean_exited": round(float(exited["ret"].mean()), 5) if not exited.empty else np.nan,
-                    "ret_median_exited": round(float(exited["ret"].median()), 5) if not exited.empty else np.nan,
-                    "capture_ratio_mean": round(float(exited["capture_ratio"].mean()), 4) if not exited.empty else np.nan,
-                    "giveback_ratio_mean": round(float(exited["giveback_ratio"].mean()), 4) if not exited.empty else np.nan,
-                    "bars_to_exit_mean": round(float(exited["bars_to_exit"].mean()), 2) if not exited.empty else np.nan,
-                    "mae_mean_all": round(float(det["mae"].mean()), 5),
-                    "mfe_mean_all": round(float(det["mfe"].mean()), 5),
-                })
-    matrix_df = pd.DataFrame(matrix_rows)
-    if not matrix_df.empty:
-        matrix_df = matrix_df.sort_values(
-            ["pool_name", "combo_rule", "ret_mean_exited", "capture_ratio_mean"],
-            ascending=[True, True, False, False],
-            na_position="last",
-        ).reset_index(drop=True)
-    detail_df = pd.DataFrame(detail_rows)
-    return matrix_df, detail_df
-
 
 
 def build_pool_variants(df: pd.DataFrame, base_spec: NeighborSpec) -> Dict[str, pd.DataFrame]:
@@ -2944,6 +2500,32 @@ def _apply_feature_directional_filter(events: pd.DataFrame, feature: str, direct
     return events[x <= thr].copy()
 
 
+def _select_combo_feature_pool(pool: pd.DataFrame, sub_imp: pd.DataFrame, mode_name: str, top_n: int = 8) -> List[str]:
+    ranked = [f for f in sub_imp.sort_values("rank_score", ascending=False)["feature"].tolist() if f in pool.columns]
+    if mode_name == "trade_without_momo":
+        ranked = [f for f in ranked if f in STRUCTURE_CORE_FEATURES]
+        ordered = ranked[:top_n]
+        fallback = [f for f in STRUCTURE_CORE_FEATURES if f in pool.columns and f not in ordered]
+        ordered.extend(fallback[:max(0, top_n - len(ordered))])
+        return ordered[:top_n]
+    return ranked[:top_n]
+
+
+def _build_combo_candidates(top_feats: List[str], mode_name: str) -> List[Tuple[str, ...]]:
+    if len(top_feats) < 2:
+        return []
+    combos: List[Tuple[str, ...]] = []
+    if mode_name == "trade_without_momo":
+        filtered = [f for f in top_feats if f in STRUCTURE_PAIR_FEATURES][:8]
+        for r in [1, 2, 3]:
+            combos.extend(list(combinations(filtered, r)))
+    else:
+        filtered = top_feats[:max(4, min(len(top_feats), 6))]
+        for r in [1, 2, 3]:
+            combos.extend(list(combinations(filtered, r)))
+    return combos
+
+
 def build_combo_scan_from_importance(pools: Dict[str, pd.DataFrame], imp_agg: pd.DataFrame, top_n: int = 6) -> Tuple[pd.DataFrame, pd.DataFrame]:
     rows: List[Dict[str, object]] = []
     top_event_rows: List[pd.DataFrame] = []
@@ -2962,13 +2544,11 @@ def build_combo_scan_from_importance(pools: Dict[str, pd.DataFrame], imp_agg: pd
             ].copy()
             if sub_imp.empty:
                 continue
-            top_feats = [f for f in sub_imp.sort_values("rank_score", ascending=False)["feature"].tolist() if f in pool.columns][:top_n]
+            top_feats = _select_combo_feature_pool(pool, sub_imp, mode_name, top_n=top_n)
             if len(top_feats) < 2:
                 continue
             directions = {f: _infer_feature_direction(pool, f) for f in top_feats}
-            combos = []
-            for r in [1, 2, 3]:
-                combos.extend(list(combinations(top_feats[:max(4, min(len(top_feats), 6))], r)))
+            combos = _build_combo_candidates(top_feats, mode_name)
             for combo in combos:
                 sub = pool.copy()
                 rules = []
@@ -2987,6 +2567,7 @@ def build_combo_scan_from_importance(pools: Dict[str, pd.DataFrame], imp_agg: pd
                 row = {
                     "pool_name": pool_name,
                     "feature_mode": mode_name,
+                    "combo_family": "structure" if mode_name == "trade_without_momo" else "all_features",
                     "combo_size": len(combo),
                     "combo_rule": " & ".join(rules),
                     "sample_n": int(len(sub)),
@@ -3033,6 +2614,43 @@ def build_combo_scan_from_importance(pools: Dict[str, pd.DataFrame], imp_agg: pd
     return combo_df, top_events_df
 
 
+def build_combo_stability_summary(combo_df: pd.DataFrame) -> pd.DataFrame:
+    if combo_df.empty:
+        return pd.DataFrame()
+    work = combo_df.copy()
+    keys = ["feature_mode", "combo_size", "combo_rule"]
+    focus = work[work["feature_mode"].astype(str).str.contains("without_momo", na=False)].copy()
+    if focus.empty:
+        focus = work.copy()
+    pivot = focus.pivot_table(
+        index=keys,
+        columns="pool_name",
+        values="rank_score",
+        aggfunc="mean",
+    ).reset_index()
+    for col in ["pool_base", "pool_relaxed_soft", "pool_relaxed_wide"]:
+        if col not in pivot.columns:
+            pivot[col] = np.nan
+    pivot["base_soft_gap"] = (safe_numeric(pivot["pool_base"]) - safe_numeric(pivot["pool_relaxed_soft"])).abs()
+    pivot["base_wide_decay"] = safe_numeric(pivot["pool_base"]) - safe_numeric(pivot["pool_relaxed_wide"])
+    pivot["stability_score"] = (
+        safe_numeric(pivot["pool_base"]).fillna(0) * 0.55
+        + safe_numeric(pivot["pool_relaxed_soft"]).fillna(0) * 0.35
+        + safe_numeric(pivot["pool_relaxed_wide"]).fillna(0) * 0.10
+        - safe_numeric(pivot["base_soft_gap"]).fillna(0) * 0.25
+        - safe_numeric(pivot["base_wide_decay"]).clip(lower=0).fillna(0) * 0.10
+    )
+    pivot["direction_consistency"] = np.where(
+        safe_numeric(pivot["pool_base"]).notna() & safe_numeric(pivot["pool_relaxed_soft"]).notna(),
+        1.0,
+        0.0,
+    )
+    return pivot.sort_values(
+        ["stability_score", "pool_base", "pool_relaxed_soft"],
+        ascending=[False, False, False],
+    ).reset_index(drop=True)
+
+
 def build_pool_bucket_profiles(pools: Dict[str, pd.DataFrame], features: Sequence[str]) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     for pool_name, pool in pools.items():
@@ -3062,139 +2680,8 @@ def build_pool_bucket_profiles(pools: Dict[str, pd.DataFrame], features: Sequenc
     return pd.DataFrame(rows).sort_values(["pool_name", "feature", "quality_trade_score"], ascending=[True, True, False])
 
 
-
-def _infer_mixed_rule_family(combo_rule: str) -> str:
-    rule = str(combo_rule)
-    has_pos = ("dsa_trade_pos_01" in rule) or ("bb_pos_01" in rule)
-    has_width = ("dsa_trade_range_width_pct" in rule) or ("bb_width_norm" in rule)
-    has_heat = ("trend_gap_10_20" in rule) or ("score_trend_total" in rule)
-    if has_width and has_heat and not has_pos:
-        return "A_width_trend"
-    if has_pos and has_heat and not has_width:
-        return "B_position_trend"
-    if has_pos and has_width and has_heat:
-        return "C_position_width_trend"
-    if has_width and has_heat:
-        return "A_width_trend"
-    if has_pos and has_heat:
-        return "B_position_trend"
-    return "Z_other"
-
-
-def build_final_mixed_rules(struct_combo_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
-    if struct_combo_df.empty:
-        return pd.DataFrame()
-    mixed = struct_combo_df[struct_combo_df.get("feature_mode", pd.Series(dtype=object)).astype(str) == "mixed"].copy()
-    if mixed.empty:
-        return pd.DataFrame()
-    mixed["final_rule_family"] = mixed["combo_rule"].astype(str).map(_infer_mixed_rule_family)
-    mixed = mixed[mixed["final_rule_family"] != "Z_other"].copy()
-    if mixed.empty:
-        return pd.DataFrame()
-
-    # 以 base 发现、soft 验证、wide 压测做家族级归并
-    grp = mixed.groupby(["final_rule_family", "pool_name"], as_index=False).agg({
-        "robust_rank_score": "mean",
-        "quality_trade_score": "mean",
-        "sample_n": "mean",
-        "active_months": "mean",
-        "avg_events_per_month": "mean",
-        "combo_rule": lambda s: " | ".join(pd.Series(s).astype(str).head(3).tolist()),
-    })
-    rows = []
-    for fam, g in grp.groupby("final_rule_family", as_index=False):
-        base = g[g["pool_name"] == "pool_base"]
-        soft = g[g["pool_name"] == "pool_relaxed_soft"]
-        wide = g[g["pool_name"] == "pool_relaxed_wide"]
-        base_r = float(base["robust_rank_score"].mean()) if not base.empty else np.nan
-        soft_r = float(soft["robust_rank_score"].mean()) if not soft.empty else np.nan
-        wide_r = float(wide["robust_rank_score"].mean()) if not wide.empty else np.nan
-        base_q = float(base["quality_trade_score"].mean()) if not base.empty else np.nan
-        soft_q = float(soft["quality_trade_score"].mean()) if not soft.empty else np.nan
-        wide_q = float(wide["quality_trade_score"].mean()) if not wide.empty else np.nan
-        base_n = float(base["sample_n"].mean()) if not base.empty else np.nan
-        soft_n = float(soft["sample_n"].mean()) if not soft.empty else np.nan
-        rep = mixed[mixed["final_rule_family"] == fam].sort_values(["pool_name","robust_rank_score","quality_trade_score"], ascending=[True,False,False]).head(3)
-        rows.append({
-            "final_rule_family": fam,
-            "final_rule_name": {
-                "A_width_trend": "final_rule_A_width_trend",
-                "B_position_trend": "final_rule_B_position_trend",
-                "C_position_width_trend": "final_rule_C_position_width_trend",
-            }.get(fam, fam),
-            "representative_rule_1": rep["combo_rule"].iloc[0] if len(rep) > 0 else np.nan,
-            "representative_rule_2": rep["combo_rule"].iloc[1] if len(rep) > 1 else np.nan,
-            "representative_rule_3": rep["combo_rule"].iloc[2] if len(rep) > 2 else np.nan,
-            "base_robust_rank_score": round(base_r, 6) if pd.notna(base_r) else np.nan,
-            "soft_robust_rank_score": round(soft_r, 6) if pd.notna(soft_r) else np.nan,
-            "wide_robust_rank_score": round(wide_r, 6) if pd.notna(wide_r) else np.nan,
-            "base_quality_trade_score": round(base_q, 5) if pd.notna(base_q) else np.nan,
-            "soft_quality_trade_score": round(soft_q, 5) if pd.notna(soft_q) else np.nan,
-            "wide_quality_trade_score": round(wide_q, 5) if pd.notna(wide_q) else np.nan,
-            "base_sample_n": round(base_n, 1) if pd.notna(base_n) else np.nan,
-            "soft_sample_n": round(soft_n, 1) if pd.notna(soft_n) else np.nan,
-            "stability_gap": round(abs(base_r - soft_r), 6) if pd.notna(base_r) and pd.notna(soft_r) else np.nan,
-            "pressure_decay": round(base_r - wide_r, 6) if pd.notna(base_r) and pd.notna(wide_r) else np.nan,
-            "family_rank_score": round(float(np.nanmean([base_r, soft_r])), 6) if pd.notna(base_r) or pd.notna(soft_r) else np.nan,
-        })
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-    out = out.sort_values(["family_rank_score", "base_quality_trade_score", "base_sample_n"], ascending=[False, False, False]).head(top_n).reset_index(drop=True)
-    out["final_rule_rank"] = np.arange(1, len(out) + 1)
-    return out
-
-
-def build_best_exit_template_by_combo(matrix_df: pd.DataFrame) -> pd.DataFrame:
-    if matrix_df.empty:
-        return pd.DataFrame()
-    rows = []
-    for (pool_name, combo_rule), g in matrix_df.groupby(["pool_name", "combo_rule"], sort=False):
-        gg = g.sort_values(["ret_mean_exited", "capture_ratio_mean", "bars_to_exit_mean"], ascending=[False, False, False], na_position="last").copy()
-        best = gg.iloc[0]
-        alt = gg.iloc[1] if len(gg) > 1 else None
-        rows.append({
-            "pool_name": pool_name,
-            "combo_rule": combo_rule,
-            "final_rule_family": _infer_mixed_rule_family(combo_rule),
-            "best_template": best.get("template"),
-            "best_strategy": best.get("strategy"),
-            "best_ret_mean_exited": best.get("ret_mean_exited"),
-            "best_capture_ratio_mean": best.get("capture_ratio_mean"),
-            "best_giveback_ratio_mean": best.get("giveback_ratio_mean"),
-            "best_bars_to_exit_mean": best.get("bars_to_exit_mean"),
-            "alt_template": alt.get("template") if alt is not None else np.nan,
-            "alt_ret_mean_exited": alt.get("ret_mean_exited") if alt is not None else np.nan,
-            "template_ret_spread": round(float(best.get("ret_mean_exited") - alt.get("ret_mean_exited")), 5) if alt is not None and pd.notna(best.get("ret_mean_exited")) and pd.notna(alt.get("ret_mean_exited")) else np.nan,
-        })
-    out = pd.DataFrame(rows)
-    out = out.sort_values(["pool_name", "best_ret_mean_exited", "best_capture_ratio_mean"], ascending=[True, False, False], na_position="last").reset_index(drop=True)
-    # 家族级最终模板建议
-    fam_rows=[]
-    for (pool_name, fam), g in out.groupby(["pool_name","final_rule_family"], sort=False):
-        if fam=='Z_other':
-            continue
-        tpl = g.groupby('best_template', as_index=False).agg({
-            'best_ret_mean_exited':'mean',
-            'best_capture_ratio_mean':'mean',
-            'template_ret_spread':'mean',
-            'combo_rule':'count'
-        }).rename(columns={'combo_rule':'rule_count'}).sort_values(['best_ret_mean_exited','best_capture_ratio_mean','rule_count'], ascending=[False,False,False])
-        top=tpl.iloc[0]
-        fam_rows.append({
-            'pool_name':pool_name,
-            'final_rule_family':fam,
-            'recommended_template':top['best_template'],
-            'rule_count':int(top['rule_count']),
-            'mean_ret_mean_exited':round(float(top['best_ret_mean_exited']),5),
-            'mean_capture_ratio_mean':round(float(top['best_capture_ratio_mean']),4),
-            'mean_template_ret_spread':round(float(top['template_ret_spread']),5) if pd.notna(top['template_ret_spread']) else np.nan,
-        })
-    fam_df=pd.DataFrame(fam_rows)
-    return out if fam_df.empty else out.merge(fam_df, on=['pool_name','final_rule_family'], how='left')
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="事件池内重要性归因实验脚本（放宽门槛 + 单Excel导出）")
+    parser = argparse.ArgumentParser(description="严格结构主线收敛实验脚本（池内归因 + 纯结构组合 + 单Excel导出）")
     parser.add_argument("--n-stocks", type=int, default=100)
     parser.add_argument("--bars", type=int, default=800)
     parser.add_argument("--freq", default="d")
@@ -3210,7 +2697,7 @@ def main() -> None:
     parser.add_argument("--excel-name", type=str, default="event_pool_attribution_report.xlsx", help="唯一导出的Excel文件名")
     args = parser.parse_args()
 
-    print("研究目标: 以500+事件池为母池，适度放宽门槛构建多个事件池，在池内做质量归因与组合探索；固定持有期只作观察，不作买卖依据。")
+    print("研究目标: 以三层事件池为框架，主归因切到无动量纯结构组合；pool_base负责发现，pool_relaxed_soft负责验证，pool_relaxed_wide负责压力测试；固定持有期只作观察，不作买卖依据。")
     cache_path = get_cache_path(args.cache_dir, args.n_stocks, args.bars, args.freq, args.seed)
 
     all_dfs: List[pd.DataFrame] = []
@@ -3280,36 +2767,31 @@ def main() -> None:
     result_tables["11_attr_fold_metrics"] = attribution_metrics
     result_tables["12_attr_importance"] = attribution_importance
 
-    bucket_features = STRUCT_CORE_FEATURES + ["w_dsa_trade_pos_01", "w_dsa_signed_vwap_dev_pct"]
+    bucket_features = list(STRUCTURE_CORE_FEATURES)
     result_tables["13_pool_bucket_profiles"] = build_pool_bucket_profiles(pools, bucket_features)
 
-    combo_df_all, combo_top_df_all = build_combo_scan_from_importance(pools, attribution_importance)
-    result_tables["21_with_momo_combo_scan"] = combo_df_all[combo_df_all.get("feature_mode", pd.Series(dtype=object)).astype(str).str.contains("with_momo", na=False)].copy() if not combo_df_all.empty else pd.DataFrame()
-    result_tables["21b_with_momo_combo_top_events"] = combo_top_df_all[combo_top_df_all.get("feature_mode", pd.Series(dtype=object)).astype(str).str.contains("with_momo", na=False)].copy() if not combo_top_df_all.empty else pd.DataFrame()
-    result_tables["22_combo_scan_all"] = combo_df_all
-
-    struct_combo_df, struct_top_df, struct_stability_df = build_struct_combo_scan(pools)
-    mixed_combo_df = struct_combo_df[struct_combo_df.get("feature_mode", pd.Series(dtype=object)).astype(str) == "mixed"].copy() if not struct_combo_df.empty else pd.DataFrame()
-    result_tables["20_mixed_main_combo_scan"] = mixed_combo_df
-    result_tables["20b_mixed_main_top_events"] = struct_top_df[struct_top_df.get("feature_mode", pd.Series(dtype=object)).astype(str) == "mixed"].copy() if not struct_top_df.empty else pd.DataFrame()
-    result_tables["20c_combo_stability_summary"] = struct_stability_df[struct_stability_df.get("feature_mode", pd.Series(dtype=object)).astype(str) == "mixed"].copy() if not struct_stability_df.empty else pd.DataFrame()
-    result_tables["20d_mixed_main_top_rules"] = build_final_mixed_rules(struct_combo_df)
-    result_tables["20g_candidate_tier_summary"] = build_candidate_tier_summary(mixed_combo_df) if not mixed_combo_df.empty else pd.DataFrame()
-
-    entry_exit_matrix, entry_exit_detail = build_entry_exit_matrix_for_top_combos(df, pools, struct_combo_df)
-    result_tables["40_entry_exit_matrix"] = entry_exit_matrix
-    result_tables["41_entry_exit_top_pairs"] = entry_exit_detail
-    result_tables["42_best_exit_template_by_combo"] = build_best_exit_template_by_combo(entry_exit_matrix)
+    combo_df, combo_top_df = build_combo_scan_from_importance(pools, attribution_importance)
+    combo_no_momo = combo_df[combo_df.get("feature_mode", pd.Series(dtype=object)).astype(str).str.contains("without_momo", na=False)].copy() if not combo_df.empty else pd.DataFrame()
+    combo_no_momo_top = combo_top_df[combo_top_df.get("feature_mode", pd.Series(dtype=object)).astype(str).str.contains("without_momo", na=False)].copy() if not combo_top_df.empty else pd.DataFrame()
+    combo_with_momo = combo_df[combo_df.get("feature_mode", pd.Series(dtype=object)).astype(str).str.contains("with_momo", na=False) & ~combo_df.get("feature_mode", pd.Series(dtype=object)).astype(str).str.contains("without_momo", na=False)].copy() if not combo_df.empty else pd.DataFrame()
+    combo_with_momo_top = combo_top_df[combo_top_df.get("feature_mode", pd.Series(dtype=object)).astype(str).str.contains("with_momo", na=False) & ~combo_top_df.get("feature_mode", pd.Series(dtype=object)).astype(str).str.contains("without_momo", na=False)].copy() if not combo_top_df.empty else pd.DataFrame()
+    combo_stability = build_combo_stability_summary(combo_df)
+    result_tables["20_no_momo_struct_combo_scan"] = combo_no_momo
+    result_tables["20b_no_momo_struct_top_events"] = combo_no_momo_top
+    result_tables["20c_combo_stability_summary"] = combo_stability
+    result_tables["21_with_momo_combo_scan"] = combo_with_momo
+    result_tables["21b_with_momo_combo_top_events"] = combo_with_momo_top
+    result_tables["22_combo_scan_all"] = combo_df
 
     if not attribution_summary.empty:
         print("\n[池内重要性归因摘要]")
         print(attribution_summary.head(20).to_string(index=False))
-    if not struct_combo_df.empty:
-        print("\n[纯结构组合 Top20]")
-        print(struct_combo_df.head(20).to_string(index=False))
-    if not struct_stability_df.empty:
-        print("\n[纯结构组合稳定性 Top10]")
-        print(struct_stability_df.head(10).to_string(index=False))
+    if not combo_no_momo.empty:
+        print("\n[纯结构组合探索 Top20]")
+        print(combo_no_momo.head(20).to_string(index=False))
+    elif not combo_df.empty:
+        print("\n[组合探索 Top20]")
+        print(combo_df.head(20).to_string(index=False))
 
     workbook_path = export_results_workbook(result_tables, OUT_DIR, args.excel_name)
     print(f"\n已导出Excel工作簿: {workbook_path}")
