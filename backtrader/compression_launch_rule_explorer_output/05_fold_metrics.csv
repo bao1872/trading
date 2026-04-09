@@ -1,3 +1,0 @@
-feature_mode,target,model_type,fold,train_n,test_n,pred_corr,mse
-trade,ret_20,reg,train_2022_2023__test_2024,187,171,0.563,0.023368
-trade,ret_20,reg,train_2022_2024__test_2025,358,165,0.3668,0.01677
