@@ -34,3 +34,4 @@ trading/
 
 # Trae IDE 配置文件夹
 .trae/
+data_cache/
