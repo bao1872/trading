@@ -43,7 +43,13 @@ data_cache/
 *.pickle
 *.feather
 *.xlsx
+# 虚拟环境
 venv/
+.venv/
+.venv*/
+env/
+ENV/
+
 __pycache__/
 *.pyc
 *.parquet
