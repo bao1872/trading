@@ -509,14 +509,14 @@ TAB_FIELD_CONFIGS = {
                          "主题": "主题", "财报日期": "财报日期"}
     },
     "全股池因子表": {
-        "fields": ["股票代码", "股票名称", "概念", "total_score",
+        "fields": ["股票代码", "股票名称", "公告日期", "概念", "total_score",
                    "规模与增长", "盈利能力", "利润质量", "现金创造能力", "资产效率", "边际变化"],
-        "types": {"股票代码": "string", "股票名称": "string", "概念": "string",
+        "types": {"股票代码": "string", "股票名称": "string", "公告日期": "string", "概念": "string",
                   "total_score": "numeric", "规模与增长": "numeric", "盈利能力": "numeric",
                   "利润质量": "numeric", "现金创造能力": "numeric",
                   "资产效率": "numeric", "边际变化": "numeric"},
-        "string_fields": ["股票代码", "股票名称", "概念"],
-        "display_names": {"股票代码": "股票代码", "股票名称": "股票名称", "概念": "概念",
+        "string_fields": ["股票代码", "股票名称", "公告日期", "概念"],
+        "display_names": {"股票代码": "股票代码", "股票名称": "股票名称", "公告日期": "公告日期", "概念": "概念",
                          "total_score": "总分", "规模与增长": "规模与增长", "盈利能力": "盈利能力",
                          "利润质量": "利润质量", "现金创造能力": "现金创造能力",
                          "资产效率": "资产效率", "边际变化": "边际变化"}
@@ -1891,7 +1891,7 @@ def render_pool_page(session):
     if concept_df is not None and not concept_df.empty:
         df = df.merge(concept_df, on="ts_code", how="left")
 
-    display_cols = ["ts_code", "stock_name", "report_date", "total_score"] + DIMENSION_COLS
+    display_cols = ["ts_code", "stock_name", "report_date", "ann_date", "total_score"] + DIMENSION_COLS
     display_cols = [c for c in display_cols if c in df.columns]
 
     key_factors = ["q_rev_yoy", "q_np_parent_yoy", "q_gross_margin", "q_cfo_to_np_parent", "roa_parent"]
@@ -1903,10 +1903,10 @@ def render_pool_page(session):
 
     display_df = df[display_cols].copy()
 
-    display_df.columns = [
-        "股票代码", "股票名称", "报告期", "总分",
-        "规模与增长", "盈利能力", "利润质量", "现金创造能力", "资产效率", "边际变化"
-    ] + [f for f in key_factors] + (["概念"] if "concepts" in df.columns else [])
+    col_names = ["股票代码", "股票名称", "报告期", "公告日期", "总分",
+                 "规模与增长", "盈利能力", "利润质量", "现金创造能力", "资产效率", "边际变化"]
+    col_names = col_names[:len(display_cols) - len(key_factors) - (1 if "concepts" in df.columns else 0)]
+    display_df.columns = col_names + [f for f in key_factors] + (["概念"] if "concepts" in df.columns else [])
 
     conditions = render_filter_bar(display_df, "全股池因子表")
     if conditions:
@@ -1917,11 +1917,21 @@ def render_pool_page(session):
         display_df = df.copy()
         display_df = apply_filters(display_df, loaded_conditions, TAB_FIELD_CONFIGS["全股池因子表"])
 
-    st.markdown(f"**股票数: {len(display_df)}** | **报告期: {format_report_date(selected_report)}**")
+    total_rows = len(display_df)
+    st.markdown(f"**股票数: {total_rows}** | **报告期: {format_report_date(selected_report)}**")
+
+    # 分页
+    page_size = 20
+    total_pages = max(1, (total_rows + page_size - 1) // page_size)
+    page = st.number_input("页码", min_value=1, max_value=total_pages, value=1, step=1, key="pool_page")
+    start_idx = (page - 1) * page_size
+    end_idx = min(start_idx + page_size, total_rows)
+    page_df = display_df.iloc[start_idx:end_idx].copy()
+    st.caption(f"第 {page}/{total_pages} 页，显示第 {start_idx + 1}-{end_idx} 条")
 
     color_cols = ["总分", "规模与增长", "盈利能力", "利润质量", "现金创造能力", "资产效率", "边际变化"]
     st.dataframe(
-        colorize_numeric_columns(display_df, color_cols),
+        colorize_numeric_columns(page_df, color_cols),
         use_container_width=True,
         hide_index=True,
         height=600,

@@ -555,6 +555,7 @@ def ensure_output_table_exists(engine):
                 'ts_code VARCHAR(20) NOT NULL',
                 'stock_name VARCHAR(50)',
                 'report_date VARCHAR(8) NOT NULL',
+                'ann_date VARCHAR(8)',
             ]
             for col in SCORE_COLS + FACTOR_COLS:
                 columns.append(f'"{col}" {float_type}')
@@ -568,7 +569,7 @@ def ensure_output_table_exists(engine):
             logger.info(f"表 {OUTPUT_TABLE} 创建完成")
         else:
             logger.info(f"表 {OUTPUT_TABLE} 已存在，检查并补充缺失列...")
-            all_cols = SCORE_COLS + FACTOR_COLS
+            all_cols = ["ann_date"] + SCORE_COLS + FACTOR_COLS
             if engine.dialect.name == "postgresql":
                 result = conn.execute(
                     text("SELECT column_name FROM information_schema.columns WHERE table_name = :name"),
@@ -581,8 +582,10 @@ def ensure_output_table_exists(engine):
             existing = {row[0] for row in result.fetchall()}
             missing = [c for c in all_cols if c not in existing]
             if missing:
+                varchar_cols = {"ann_date"}
                 for col in missing:
-                    conn.execute(text(f'ALTER TABLE "{OUTPUT_TABLE}" ADD COLUMN "{col}" {float_type}'))
+                    col_type = "VARCHAR(8)" if col in varchar_cols else float_type
+                    conn.execute(text(f'ALTER TABLE "{OUTPUT_TABLE}" ADD COLUMN "{col}" {col_type}'))
                 conn.commit()
                 logger.info(f"已补充 {len(missing)} 个缺失列: {missing}")
             else:
@@ -641,17 +644,32 @@ def compute_single_stock(
         return None
 
 
-def build_output_row(latest: pd.DataFrame, ts_code: str, name: str) -> dict:
-    row = {
-        "ts_code": ts_code,
-        "stock_name": name,
-        "report_date": latest["end_date"].iloc[0].strftime("%Y%m%d"),
-    }
-    for col in SCORE_COLS + FACTOR_COLS:
-        if col in latest.columns:
-            v = latest[col].iloc[0]
-            row[col] = None if pd.isna(v) else float(v)
-    return row
+def build_output_rows(scored: pd.DataFrame, ts_code: str, name: str) -> List[dict]:
+    """将评分DataFrame转为入库行列表，每个季度一行"""
+    rows = []
+    for _, row in scored.iterrows():
+        r = {
+            "ts_code": ts_code,
+            "stock_name": name,
+            "report_date": row["end_date"].strftime("%Y%m%d"),
+        }
+        if "f_ann_date" in row.index and pd.notna(row["f_ann_date"]):
+            try:
+                ts_val = row["f_ann_date"]
+                if isinstance(ts_val, (int, float)) and ts_val > 1e15:
+                    r["ann_date"] = pd.Timestamp(ts_val, unit="us").strftime("%Y%m%d")
+                else:
+                    r["ann_date"] = pd.Timestamp(ts_val).strftime("%Y%m%d")
+            except Exception:
+                r["ann_date"] = None
+        else:
+            r["ann_date"] = None
+        for col in SCORE_COLS + FACTOR_COLS:
+            if col in row.index:
+                v = row[col]
+                r[col] = None if pd.isna(v) else float(v)
+        rows.append(r)
+    return rows
 
 
 def upsert_rows(engine, rows: List[dict]) -> int:
@@ -692,9 +710,8 @@ def run_single_mode(args):
     if scored is None or scored.empty:
         raise ValueError(f"未取到 {args.ts_code} 的季频财务数据，请检查 ts_code、起始日期与数据源。")
 
-    latest = scored.iloc[[-1]].copy()
-    out_row = build_output_row(latest, args.ts_code, args.name or args.ts_code)
-    n = upsert_rows(engine, [out_row])
+    out_rows = build_output_rows(scored, args.ts_code, args.name or args.ts_code)
+    n = upsert_rows(engine, out_rows)
     logger.info(f"已写入 {n} 条评分记录到 {OUTPUT_TABLE}")
 
 
@@ -742,9 +759,8 @@ def run_batch_mode(args):
             time.sleep(0.1)
             continue
 
-        latest = scored.iloc[[-1]].copy()
-        out_row = build_output_row(latest, ts_code, name)
-        upsert_rows(engine, [out_row])
+        out_rows = build_output_rows(scored, ts_code, name)
+        upsert_rows(engine, out_rows)
         success += 1
         time.sleep(0.1)
 
