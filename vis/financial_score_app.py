@@ -270,19 +270,25 @@ def load_stock_list(session) -> pd.DataFrame:
 
 
 def load_score_data(session, ts_code: str) -> pd.DataFrame:
-    """从 stock_financial_score_pool 加载股票评分数据"""
+    """从 stock_financial_score_pool 加载股票评分数据，缺失季度前向填充保证趋势图连续"""
     sql = """
         SELECT ts_code, stock_name, report_date, total_score,
                规模与增长_score, 盈利能力_score, 利润质量_score,
                现金创造能力_score, 资产效率与资金占用_score, 边际变化与持续性_score
         FROM stock_financial_score_pool
         WHERE ts_code = :ts_code
-        ORDER BY report_date DESC
+        ORDER BY report_date ASC
     """
     try:
         df = query_sql(session, sql, {"ts_code": ts_code})
-        if not df.empty:
-            df = df.sort_values("report_date", ascending=True).reset_index(drop=True)
+        if df.empty:
+            return df
+        score_cols = [
+            "total_score", "规模与增长_score", "盈利能力_score", "利润质量_score",
+            "现金创造能力_score", "资产效率与资金占用_score", "边际变化与持续性_score"
+        ]
+        present_cols = [c for c in score_cols if c in df.columns]
+        df[present_cols] = df[present_cols].ffill()
         return df
     except Exception:
         return pd.DataFrame()

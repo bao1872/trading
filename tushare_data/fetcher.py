@@ -64,16 +64,53 @@ def get_pro(token: str = TS_TOKEN):
     return ts.pro_api(token)
 
 
+def _combine_report_types(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
+    """合并两种报表类型，type2 优先，type1 补空值；各自先去重，再对 end_date 做最终去重"""
+    df1 = dedup_latest(df1) if not df1.empty else df1
+    df2 = dedup_latest(df2) if not df2.empty else df2
+    if df1.empty and df2.empty:
+        return pd.DataFrame()
+    if df1.empty:
+        out = df2.copy()
+        out["report_type"] = 2
+        return out
+    if df2.empty:
+        out = df1.copy()
+        out["report_type"] = 1
+        return out
+    common_keys = ["ts_code", "end_date"]
+    out = df2.copy()
+    numeric_cols = out.select_dtypes(include="number").columns.tolist()
+    extra_cols = [c for c in df1.columns if c not in out.columns]
+    for col in extra_cols:
+        out[col] = np.nan
+    merged = out.merge(df1, on=common_keys, how="outer", suffixes=("", "_t1"))
+    for col in numeric_cols:
+        if col in merged.columns and f"{col}_t1" in merged.columns:
+            mask = merged[col].isna()
+            merged.loc[mask, col] = merged.loc[mask, f"{col}_t1"]
+    t1_extra = [c for c in df1.columns if c not in df2.columns and c not in common_keys]
+    for col in t1_extra:
+        if col in merged.columns:
+            merged[col] = merged[col].fillna(merged.get(f"{col}_t1", np.nan))
+        elif f"{col}_t1" in merged.columns:
+            merged[col] = merged[f"{col}_t1"]
+    merged = merged[[c for c in out.columns if c in merged.columns]]
+    merged["report_type"] = 2
+    merged = dedup_latest(merged)
+    return merged
+
+
 def fetch_income(pro, ts_code: str, start_date: str) -> pd.DataFrame:
     fields = [
         "ts_code", "end_date", "report_type", "ann_date", "f_ann_date",
         "total_revenue", "revenue", "oper_cost", "operate_profit",
         "ebit", "ebitda", "n_income", "n_income_attr_p", "rd_exp"
     ]
-    return pro.income(
-        ts_code=ts_code, start_date=start_date, report_type='2',
-        fields=",".join(fields)
-    )
+    flds = ",".join(fields)
+    df1 = pro.income(ts_code=ts_code, start_date=start_date, report_type="1", fields=flds)
+    df2 = pro.income(ts_code=ts_code, start_date=start_date, report_type="2", fields=flds)
+    return _combine_report_types(df1, df2)
 
 
 def fetch_cashflow(pro, ts_code: str, start_date: str) -> pd.DataFrame:
@@ -81,10 +118,10 @@ def fetch_cashflow(pro, ts_code: str, start_date: str) -> pd.DataFrame:
         "ts_code", "end_date", "report_type", "ann_date", "f_ann_date",
         "n_cashflow_act", "free_cashflow", "c_fr_sale_sg", "c_pay_acq_const_fiolta"
     ]
-    return pro.cashflow(
-        ts_code=ts_code, start_date=start_date, report_type='2',
-        fields=",".join(fields)
-    )
+    flds = ",".join(fields)
+    df1 = pro.cashflow(ts_code=ts_code, start_date=start_date, report_type="1", fields=flds)
+    df2 = pro.cashflow(ts_code=ts_code, start_date=start_date, report_type="2", fields=flds)
+    return _combine_report_types(df1, df2)
 
 
 def fetch_balancesheet(pro, ts_code: str, start_date: str) -> pd.DataFrame:
@@ -93,10 +130,10 @@ def fetch_balancesheet(pro, ts_code: str, start_date: str) -> pd.DataFrame:
         "total_assets", "accounts_receiv", "inventories", "accounts_pay",
         "contract_liab", "total_hldr_eqy_exc_min_int"
     ]
-    return pro.balancesheet(
-        ts_code=ts_code, start_date=start_date, report_type='1',
-        fields=",".join(fields)
-    )
+    flds = ",".join(fields)
+    df1 = pro.balancesheet(ts_code=ts_code, start_date=start_date, report_type="1", fields=flds)
+    df2 = pro.balancesheet(ts_code=ts_code, start_date=start_date, report_type="2", fields=flds)
+    return _combine_report_types(df1, df2)
 
 
 def fetch_top10_holders(pro, ts_code: str, start_date: str) -> pd.DataFrame:

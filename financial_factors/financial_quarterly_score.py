@@ -599,6 +599,19 @@ def clean_report_date(engine, report_date: str) -> int:
         return result.rowcount
 
 
+def fill_missing_quarters(df: pd.DataFrame) -> pd.DataFrame:
+    """对季度序列中的NaN做线性插值+前值填充，保证YoY/TTM计算有足够窗口"""
+    flow_cols = ["rev_q", "op_q", "np_parent_q", "cfo_q", "cost_q", "ebit_q", "fcf_q", "capex_q", "cash_sales_q"]
+    if df.empty:
+        return df
+    for col in flow_cols:
+        if col in df.columns:
+            df[col] = df.groupby("ts_code")[col].transform(
+                lambda s: s.interpolate(method="linear").ffill().bfill()
+            )
+    return df
+
+
 def compute_single_stock(
     ts_code: str,
     name: str,
@@ -619,6 +632,7 @@ def compute_single_stock(
         )
         if df.empty:
             return None
+        df = fill_missing_quarters(df)
         df = add_ytd_and_ttm(df)
         df = add_factors(df)
         return score_dataframe(df, lookback=lookback)
