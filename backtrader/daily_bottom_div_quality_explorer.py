@@ -50,6 +50,17 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+try:
+    from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+    from sklearn.impute import SimpleImputer
+    from sklearn.metrics import accuracy_score, roc_auc_score
+except Exception:  # pragma: no cover
+    GradientBoostingClassifier = None  # type: ignore[assignment]
+    GradientBoostingRegressor = None  # type: ignore[assignment]
+    SimpleImputer = None  # type: ignore[assignment]
+    accuracy_score = None  # type: ignore[assignment]
+    roc_auc_score = None  # type: ignore[assignment]
+
 OUT_DIR = "daily_bottom_div_quality_output"
 os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -58,6 +69,69 @@ ENTRY_LAG = 1
 ENTRY_PRICE_MODE = "next_open"
 DEFAULT_VOL_Z_WINDOWS = (5, 10, 20, 40)
 RANDOM_STATE = 42
+
+
+# =========================
+# Feature governance
+# =========================
+DROP_EVENT_FEATURES = {
+    "sentiment_code", "price_pivot_dir", "osc_pivot_dir", "pivot_price", "pivot_bar",
+    "trigger_px", "trigger_macd", "trigger_signal", "trigger_di_plus", "trigger_di_minus", "trigger_dx",
+    "bars_from_H1_to_trigger", "bars_from_L2_to_trigger", "trigger_position_in_pb",
+    "trigger_di_plus_gt_di_minus_flag", "event_idx",
+}
+
+DROP_STRUCTURE_FEATURES = {
+    "L1_px", "H1_px", "L2_px", "L1_idx", "H1_idx", "L2_idx",
+    "up_return_per_bar", "up_max_drawdown_inside_leg", "up_macd_mean", "up_hist_pos_area", "up_hist_pos_ratio",
+    "up_trend_pos_ratio", "up_vol_z_mean_10", "up_vol_z_mean_40", "up_vol_z_max_5", "up_vol_z_max_10",
+    "up_vol_z_max_20", "up_vol_z_max_40", "up_adx_max", "up_dx_mean", "up_di_plus_mean", "up_di_minus_mean",
+    "up_di_plus_dominance_ratio", "up_di_minus_dominance_ratio",
+    "pb_efficiency", "pb_macd_mean", "pb_hist_neg_ratio", "pb_hist_min", "pb_trend_pos_ratio",
+    "pb_trend_flip_count", "pb_trend_stable_flag", "pb_vol_z_mean_5", "pb_vol_z_mean_10", "pb_vol_z_mean_40",
+    "pb_vol_z_max_5", "pb_vol_z_max_10", "pb_vol_z_max_40", "pb_vol_z_min_5", "pb_vol_z_min_10",
+    "pb_vol_z_min_20", "pb_vol_z_min_40", "pb_low_bar_vol_z_5", "pb_low_bar_vol_z_10",
+    "pb_low_bar_vol_z_20", "pb_low_bar_vol_z_40", "pb_adx_max", "pb_dx_mean", "pb_di_plus_mean",
+    "pb_di_minus_mean", "pb_di_plus_dominance_ratio", "pb_di_minus_dominance_ratio",
+}
+
+KEEP_EVENT_FEATURES = [
+    "symbol", "structure_id", "event_id", "trigger_dt",
+    "divergence", "divergence_id", "bias", "supertrend_dir",
+    "trigger_ret_1d", "trigger_hist",
+    "trigger_vol_z_5", "trigger_vol_z_20",
+    "trigger_adx", "trigger_di_spread", "trigger_adx_above_20_flag",
+    "trend_preserved_during_pullback_flag", "pb_vol_z_mean_20_vs_up",
+]
+
+KEEP_STRUCTURE_FEATURES = [
+    "symbol", "structure_id", "L1_dt", "H1_dt", "L2_dt",
+    "up_return", "up_bars", "up_hist_mean",
+    "up_adx_mean", "up_di_spread_mean", "up_trend_flip_count", "up_trend_stable_flag",
+    "pb_return", "pb_bars", "pb_depth_vs_up", "pb_bars_vs_up",
+    "pb_hist_mean", "pb_hist_neg_area",
+    "pb_adx_mean", "pb_di_spread_mean",
+    "pb_trend_neg_ratio", "pb_vol_z_mean_20", "pb_vol_z_max_20",
+]
+
+KEEP_LABEL_FEATURES = [
+    "symbol", "event_id", "structure_id", "entry_dt",
+    "ret_3", "ret_5", "ret_10", "ret_20",
+    "mfe_10", "mae_10", "rr_10", "mfe_20", "mae_20", "rr_20",
+]
+
+# Core summary features used by bucket profiling and compact reporting.
+# Keep this as a single source of truth so later refactors do not leave stale names behind.
+CORE_FEATURES_FOR_SUMMARY = set(
+    KEEP_EVENT_FEATURES + KEEP_STRUCTURE_FEATURES
+) - {"symbol", "structure_id", "event_id", "trigger_dt", "L1_dt", "H1_dt", "L2_dt"}
+
+DEFAULT_BUCKET_FEATURES = [
+    "pb_depth_vs_up", "pb_bars_vs_up", "pb_vol_z_mean_20_vs_up",
+    "trigger_vol_z_5", "trigger_vol_z_20",
+    "trigger_adx", "trigger_di_spread", "trigger_adx_above_20_flag",
+    "up_adx_mean", "pb_adx_mean", "up_di_spread_mean", "pb_di_spread_mean",
+]
 
 
 # =========================
@@ -118,6 +192,111 @@ compute_zigzag_macd = _zigzag_module.compute_zigzag_macd
 
 
 # =========================
+# Financial Score Integration
+# =========================
+FINANCIAL_SCORE_TABLE = "stock_financial_score_pool"
+
+
+def get_financial_score_as_factor(
+    ts_code: str,
+    trade_date: pd.Timestamp,
+    engine
+) -> Dict[str, float]:
+    """
+    获取指定交易日有效的财务评分
+
+    逻辑:
+    1. 查询该股票所有已公告的季度评分
+    2. 筛选 report_date <= trade_date 的最新记录
+    3. 返回 total_score 和各维度评分
+
+    注意: 由于表中缺少 ann_date，使用 report_date 作为替代，
+          这可能导致一定的未来函数风险（实际公告通常晚于报告期）
+    """
+    from sqlalchemy import text
+
+    trade_date_str = pd.to_datetime(trade_date).strftime("%Y%m%d")
+
+    sql = """
+    SELECT report_date, total_score,
+           规模与增长_score, 盈利能力_score, 利润质量_score,
+           现金创造能力_score, 资产效率与资金占用_score, 边际变化与持续性_score
+    FROM stock_financial_score_pool
+    WHERE ts_code = :ts_code
+      AND report_date <= :trade_date
+    ORDER BY report_date DESC
+    LIMIT 1
+    """
+    try:
+        result = pd.read_sql(
+            text(sql),
+            engine,
+            params={"ts_code": ts_code, "trade_date": trade_date_str}
+        )
+    except Exception:
+        # 如果查询失败（如表不存在），返回空字典
+        return {}
+
+    if result.empty:
+        return {}
+
+    row = result.iloc[0]
+    return {
+        "fin_total_score": float(row["total_score"]) if pd.notna(row["total_score"]) else np.nan,
+        "fin_growth_score": float(row["规模与增长_score"]) if pd.notna(row["规模与增长_score"]) else np.nan,
+        "fin_profit_score": float(row["盈利能力_score"]) if pd.notna(row["盈利能力_score"]) else np.nan,
+        "fin_quality_score": float(row["利润质量_score"]) if pd.notna(row["利润质量_score"]) else np.nan,
+        "fin_cash_score": float(row["现金创造能力_score"]) if pd.notna(row["现金创造能力_score"]) else np.nan,
+        "fin_efficiency_score": float(row["资产效率与资金占用_score"]) if pd.notna(row["资产效率与资金占用_score"]) else np.nan,
+        "fin_momentum_score": float(row["边际变化与持续性_score"]) if pd.notna(row["边际变化与持续性_score"]) else np.nan,
+        "fin_report_date": str(row["report_date"]) if pd.notna(row["report_date"]) else None,
+    }
+
+
+def add_financial_score_factors(event_table: pd.DataFrame, engine=None) -> pd.DataFrame:
+    """
+    为底背离事件表添加财务评分因子
+
+    新增字段:
+    - fin_total_score: 综合财务评分
+    - fin_growth_score: 规模与增长评分
+    - fin_profit_score: 盈利能力评分
+    - fin_quality_score: 利润质量评分
+    - fin_cash_score: 现金创造能力评分
+    - fin_efficiency_score: 资产效率评分
+    - fin_momentum_score: 边际变化与持续性评分
+    - fin_report_date: 使用的报告期
+    """
+    if event_table.empty:
+        return event_table
+
+    if engine is None:
+        engine = get_engine()
+
+    if engine is None:
+        # 无法连接数据库，返回原表（添加空列）
+        for col in ["fin_total_score", "fin_growth_score", "fin_profit_score",
+                    "fin_quality_score", "fin_cash_score", "fin_efficiency_score",
+                    "fin_momentum_score", "fin_report_date"]:
+            event_table[col] = np.nan
+        return event_table
+
+    scores = []
+    for _, row in tqdm(event_table.iterrows(), total=len(event_table), desc="加载财务评分"):
+        score = get_financial_score_as_factor(
+            row['symbol'],
+            pd.to_datetime(row['trigger_dt']),
+            engine
+        )
+        scores.append(score)
+
+    # 合并到事件表
+    score_df = pd.DataFrame(scores)
+    result = pd.concat([event_table.reset_index(drop=True), score_df.reset_index(drop=True)], axis=1)
+    return result
+
+
+# =========================
 # Utilities
 # =========================
 def safe_numeric(s: pd.Series) -> pd.Series:
@@ -128,23 +307,6 @@ def rr_from_ret_dd(ret: float, dd: float) -> float:
     if pd.isna(ret) or pd.isna(dd) or dd == 0:
         return np.nan
     return float(ret / abs(dd))
-
-
-def clip_value(x: float, lower: float, upper: float) -> float:
-    if pd.isna(x):
-        return np.nan
-    return float(np.clip(float(x), lower, upper))
-
-
-def rank_pct_series(s: pd.Series) -> pd.Series:
-    s = safe_numeric(s)
-    mask = s.notna()
-    out = pd.Series(np.nan, index=s.index, dtype=float)
-    if mask.sum() == 0:
-        return out
-    ranked = s[mask].rank(method='average', pct=True) * 100.0
-    out.loc[mask] = ranked.astype(float)
-    return out
 
 
 def _sanitize_sheet_name(name: str, used: set[str]) -> str:
@@ -181,7 +343,7 @@ def build_readme_sheet() -> pd.DataFrame:
                 "信号确认后下一交易日开盘价。",
                 "同一结构内连续多个底背离全部保留，每个都作为独立买点样本。",
                 "围绕事件向前切出 L1->H1 上涨段与 H1->L2 回踩段。",
-                "README / dataset_summary / structure_table / event_table / label_table / event_quality_summary / bucket_profiles / feature_inventory",
+                "README / dataset_summary / event_quality_summary / yearly_summary / type_year_summary / bucket_profiles / feature_keep_drop_report / feature_inventory",
             ],
         }
     )
@@ -682,72 +844,470 @@ def add_event_labels(events_df: pd.DataFrame, full_df: pd.DataFrame, windows: Se
             out.at[ridx, f"mae_{w}"] = mae
             out.at[ridx, f"rr_{w}"] = rr_from_ret_dd(mfe, mae)
 
-    # === 3-5天短持仓质量评分器（服务后续GBDT标签工程） ===
-    ret_3 = safe_numeric(out.get("ret_3", pd.Series(index=out.index, dtype=float)))
-    ret_5 = safe_numeric(out.get("ret_5", pd.Series(index=out.index, dtype=float)))
-    mae_3 = safe_numeric(out.get("mae_3", pd.Series(index=out.index, dtype=float)))
-    mae_5 = safe_numeric(out.get("mae_5", pd.Series(index=out.index, dtype=float)))
-    rr_3 = safe_numeric(out.get("rr_3", pd.Series(index=out.index, dtype=float)))
-    rr_5 = safe_numeric(out.get("rr_5", pd.Series(index=out.index, dtype=float)))
-
-    out["reward_ret_raw_short"] = (
-        ret_3.apply(lambda x: clip_value(x, -0.12, 0.12)) * 0.40
-        + ret_5.apply(lambda x: clip_value(x, -0.18, 0.18)) * 0.60
-    )
-    out["penalty_dd_raw_short"] = (
-        mae_3.fillna(0.0).apply(lambda x: abs(min(float(x), 0.0))) * 0.40
-        + mae_5.fillna(0.0).apply(lambda x: abs(min(float(x), 0.0))) * 0.60
-    )
-    out["reward_rr_raw_short"] = (
-        rr_3.apply(lambda x: clip_value(x, -3.0, 3.0)) * 0.40
-        + rr_5.apply(lambda x: clip_value(x, -4.0, 4.0)) * 0.60
-    )
-    out["quality_raw_short"] = (
-        out["reward_ret_raw_short"] * 0.35
-        + out["reward_rr_raw_short"] * 0.15
-        - out["penalty_dd_raw_short"] * 0.50
-    )
-
-    # 短持仓回撤硬惩罚
-    hard_penalty = pd.Series(0.0, index=out.index, dtype=float)
-    hard_penalty += np.where(mae_3 <= -0.05, 0.03, 0.0)
-    hard_penalty += np.where(mae_5 <= -0.08, 0.05, 0.0)
-    hard_penalty += np.where(mae_5 <= -0.10, 0.08, 0.0)
-    out["quality_hard_penalty_short"] = hard_penalty
-    out["quality_raw_short"] = out["quality_raw_short"] - out["quality_hard_penalty_short"]
-    out["quality_score_short"] = rank_pct_series(out["quality_raw_short"])
-    out["quality_bucket_short"] = pd.cut(
-        out["quality_score_short"],
-        bins=[-np.inf, 40, 80, np.inf],
-        labels=["low", "mid", "high"],
-    ).astype(object)
-    out["high_quality_flag_short"] = (
-        (ret_5 > 0)
-        & (mae_5 > -0.06)
-        & (rr_5 > 0.5)
-    ).astype(float)
-
     return out
-
 
 
 # =========================
 # Summary / buckets
 # =========================
+def _round_numeric_frame(df: pd.DataFrame, digits: int = 6) -> pd.DataFrame:
+    if df.empty:
+        return df
+    out = df.copy()
+    num_cols = out.select_dtypes(include=[np.number]).columns
+    out[num_cols] = out[num_cols].round(digits)
+    return out
+
+
+def prune_feature_tables(structure_df: pd.DataFrame, event_df: pd.DataFrame, label_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def _apply(df: pd.DataFrame, keep: Sequence[str], drop: set[str]) -> pd.DataFrame:
+        if df.empty:
+            return df
+        cols = [c for c in keep if c in df.columns and c not in drop]
+        return _round_numeric_frame(df[cols].copy())
+
+    return (
+        _apply(structure_df, KEEP_STRUCTURE_FEATURES, DROP_STRUCTURE_FEATURES),
+        _apply(event_df, KEEP_EVENT_FEATURES, DROP_EVENT_FEATURES),
+        _apply(label_df, KEEP_LABEL_FEATURES, set()),
+    )
+
+
+def build_feature_keep_drop_report(structure_df: pd.DataFrame, event_df: pd.DataFrame, label_df: pd.DataFrame) -> pd.DataFrame:
+    rows: List[Dict] = []
+    for col in sorted(set(structure_df.columns) | set(event_df.columns) | set(label_df.columns)):
+        location = []
+        if col in structure_df.columns:
+            location.append('structure')
+        if col in event_df.columns:
+            location.append('event')
+        if col in label_df.columns:
+            location.append('label')
+        status = 'keep'
+        reason = 'core_feature'
+        if col in DROP_STRUCTURE_FEATURES or col in DROP_EVENT_FEATURES:
+            status = 'drop'
+            reason = 'redundant_or_low_value'
+        elif col in KEEP_STRUCTURE_FEATURES or col in KEEP_EVENT_FEATURES or col in KEEP_LABEL_FEATURES:
+            status = 'keep'
+            reason = 'selected_core_feature'
+        elif col.startswith('ret_') or col.startswith('mfe_') or col.startswith('mae_') or col.startswith('rr_') or col == 'entry_dt':
+            status = 'keep'
+            reason = 'label_or_analysis_key'
+        else:
+            status = 'drop'
+            reason = 'not_exported_to_keep_outputs_small'
+        rows.append({
+            'feature': col,
+            'location': ','.join(location),
+            'status': status,
+            'reason': reason,
+        })
+    return pd.DataFrame(rows)
+
+
+def build_yearly_summary(label_df: pd.DataFrame) -> pd.DataFrame:
+    if label_df.empty or 'entry_dt' not in label_df.columns:
+        return pd.DataFrame()
+    tmp = label_df.copy()
+    tmp['entry_dt'] = pd.to_datetime(tmp['entry_dt'], errors='coerce')
+    tmp['entry_year'] = tmp['entry_dt'].dt.year
+    tmp = tmp[tmp['entry_year'].notna()].copy()
+    if tmp.empty:
+        return pd.DataFrame()
+    out = tmp.groupby('entry_year', dropna=False).agg(
+        n=('event_id', 'count'),
+        ret_3_mean=('ret_3', 'mean'),
+        ret_5_mean=('ret_5', 'mean'),
+        ret_10_mean=('ret_10', 'mean'),
+        ret_20_mean=('ret_20', 'mean'),
+        mfe_10_mean=('mfe_10', 'mean'),
+        mae_10_mean=('mae_10', 'mean'),
+        rr_10_mean=('rr_10', 'mean'),
+    ).reset_index().rename(columns={'entry_year': 'year'})
+    return _round_numeric_frame(out)
+
+
+def build_type_year_summary(label_df: pd.DataFrame) -> pd.DataFrame:
+    need = {'entry_dt'}
+    if label_df.empty or not need.issubset(label_df.columns):
+        return pd.DataFrame()
+    tmp = label_df.copy()
+    tmp['entry_dt'] = pd.to_datetime(tmp['entry_dt'], errors='coerce')
+    tmp['entry_year'] = tmp['entry_dt'].dt.year
+    tmp = tmp[tmp['entry_year'].notna()].copy()
+    if tmp.empty:
+        return pd.DataFrame()
+    group_cols = ['entry_year'] + (["divergence_id"] if 'divergence_id' in tmp.columns else ["divergence"])
+    extra = [c for c in ['supertrend_dir', 'bias'] if c in tmp.columns]
+    group_cols.extend(extra)
+    out = tmp.groupby(group_cols, dropna=False).agg(
+        n=('event_id', 'count'),
+        ret_5_mean=('ret_5', 'mean'),
+        ret_10_mean=('ret_10', 'mean'),
+        ret_20_mean=('ret_20', 'mean'),
+        rr_10_mean=('rr_10', 'mean'),
+    ).reset_index().rename(columns={'entry_year': 'year'})
+    return _round_numeric_frame(out)
+
+
+def build_analysis_table(structure_df: pd.DataFrame, event_df: pd.DataFrame, label_df: pd.DataFrame) -> pd.DataFrame:
+    if label_df.empty:
+        return label_df.copy()
+    out = label_df.copy()
+    event_extra = [c for c in event_df.columns if c not in out.columns and c not in {"symbol"}]
+    if event_extra:
+        out = out.merge(event_df[["event_id", *event_extra]], on="event_id", how="left")
+    structure_extra = [c for c in structure_df.columns if c not in out.columns and c not in {"symbol"}]
+    if structure_extra:
+        merge_cols = ["structure_id", *structure_extra]
+        if "symbol" in structure_df.columns and "symbol" in out.columns and "symbol" not in merge_cols:
+            merge_cols = ["symbol", *merge_cols]
+            on_cols = ["symbol", "structure_id"]
+        else:
+            on_cols = ["structure_id"]
+        out = out.merge(structure_df[merge_cols], on=on_cols, how="left")
+    return _round_numeric_frame(out)
+
+
+def _safe_q(series: pd.Series, q: float, fallback: float = np.nan) -> float:
+    s = safe_numeric(series).dropna()
+    if s.empty:
+        return fallback
+    return float(s.quantile(q))
+
+
+def _resolve_divergence_label(df: pd.DataFrame) -> pd.Series:
+    n = len(df)
+    if "divergence_id" in df.columns:
+        s = df["divergence_id"].astype(str).replace({"nan": np.nan, "None": np.nan})
+        if s.notna().any():
+            return s.fillna("UNK")
+    div = safe_numeric(df.get("divergence", pd.Series(np.nan, index=df.index if len(df) else None)))
+    mapping = {1.0: "C", -1.0: "D", -2.0: "H", 0.0: "I"}
+    return div.map(mapping).fillna("UNK").astype(str)
+
+
+def build_rule_thresholds(df: pd.DataFrame) -> Dict[str, float]:
+    return {
+        "trigger_di_spread_lo": _safe_q(df.get("trigger_di_spread", pd.Series(dtype=float)), 0.45, 0.0),
+        "trigger_di_spread_md": _safe_q(df.get("trigger_di_spread", pd.Series(dtype=float)), 0.55, 0.0),
+        "trigger_di_spread_hi": _safe_q(df.get("trigger_di_spread", pd.Series(dtype=float)), 0.70, 0.0),
+        "trigger_adx_md": _safe_q(df.get("trigger_adx", pd.Series(dtype=float)), 0.50, 20.0),
+        "trigger_adx_hi": _safe_q(df.get("trigger_adx", pd.Series(dtype=float)), 0.65, 20.0),
+        "trigger_vol_z_20_md": _safe_q(df.get("trigger_vol_z_20", pd.Series(dtype=float)), 0.50, 0.0),
+        "trigger_vol_z_5_md": _safe_q(df.get("trigger_vol_z_5", pd.Series(dtype=float)), 0.50, 0.0),
+        "pb_depth_loose_max": _safe_q(df.get("pb_depth_vs_up", pd.Series(dtype=float)), 0.80, np.inf),
+        "pb_depth_mid_max": _safe_q(df.get("pb_depth_vs_up", pd.Series(dtype=float)), 0.68, np.inf),
+        "pb_depth_strict_max": _safe_q(df.get("pb_depth_vs_up", pd.Series(dtype=float)), 0.50, np.inf),
+        "pb_bars_mid_max": _safe_q(df.get("pb_bars_vs_up", pd.Series(dtype=float)), 0.68, np.inf),
+        "pb_bars_strict_max": _safe_q(df.get("pb_bars_vs_up", pd.Series(dtype=float)), 0.50, np.inf),
+        "pb_hist_neg_mid_max": _safe_q(df.get("pb_hist_neg_area", pd.Series(dtype=float)), 0.68, np.inf),
+        "pb_hist_neg_strict_max": _safe_q(df.get("pb_hist_neg_area", pd.Series(dtype=float)), 0.50, np.inf),
+        "pb_vol_ratio_mid_max": _safe_q(df.get("pb_vol_z_mean_20_vs_up", pd.Series(dtype=float)), 0.72, np.inf),
+        "pb_vol_ratio_strict_max": _safe_q(df.get("pb_vol_z_mean_20_vs_up", pd.Series(dtype=float)), 0.55, np.inf),
+        "pb_trend_neg_ratio_soft_max": _safe_q(df.get("pb_trend_neg_ratio", pd.Series(dtype=float)), 0.75, 1.0),
+        "pb_di_spread_mean_soft_min": _safe_q(df.get("pb_di_spread_mean", pd.Series(dtype=float)), 0.35, -np.inf),
+    }
+
+
+def build_rule_components(df: pd.DataFrame) -> Tuple[Dict[str, pd.Series], Dict[str, float]]:
+    t = build_rule_thresholds(df)
+    n = len(df)
+    idx = df.index
+    div_label = _resolve_divergence_label(df)
+    bias = safe_numeric(df.get("bias", pd.Series(np.nan, index=idx)))
+    st_dir = safe_numeric(df.get("supertrend_dir", pd.Series(np.nan, index=idx)))
+    strict_trend_ok = safe_numeric(df.get("trend_preserved_during_pullback_flag", pd.Series(np.nan, index=idx))) == 1
+    pb_trend_neg_ratio = safe_numeric(df.get("pb_trend_neg_ratio", pd.Series(np.nan, index=idx)))
+    pb_di_spread_mean = safe_numeric(df.get("pb_di_spread_mean", pd.Series(np.nan, index=idx)))
+    soft_trend_ok = strict_trend_ok | (pb_trend_neg_ratio <= t["pb_trend_neg_ratio_soft_max"]) | (pb_di_spread_mean >= t["pb_di_spread_mean_soft_min"])
+
+    di_spread = safe_numeric(df.get("trigger_di_spread", pd.Series(np.nan, index=idx)))
+    adx = safe_numeric(df.get("trigger_adx", pd.Series(np.nan, index=idx)))
+    adx20 = safe_numeric(df.get("trigger_adx_above_20_flag", pd.Series(np.nan, index=idx))) == 1
+    vol5 = safe_numeric(df.get("trigger_vol_z_5", pd.Series(np.nan, index=idx)))
+    vol20 = safe_numeric(df.get("trigger_vol_z_20", pd.Series(np.nan, index=idx)))
+    pb_depth = safe_numeric(df.get("pb_depth_vs_up", pd.Series(np.nan, index=idx)))
+    pb_bars = safe_numeric(df.get("pb_bars_vs_up", pd.Series(np.nan, index=idx)))
+    pb_hist_neg = safe_numeric(df.get("pb_hist_neg_area", pd.Series(np.nan, index=idx)))
+    pb_vol_ratio = safe_numeric(df.get("pb_vol_z_mean_20_vs_up", pd.Series(np.nan, index=idx)))
+
+    components = {
+        "type_D": div_label == "D",
+        "type_C": div_label == "C",
+        "type_D_or_C": div_label.isin(["D", "C"]),
+        "bias_positive": bias == 1,
+        "best_supertrend_state": st_dir == -1,
+        "pullback_trend_preserved_strict": strict_trend_ok,
+        "pullback_trend_preserved_soft": soft_trend_ok,
+        "trend_confirmation_loose": adx20 | (di_spread > t["trigger_di_spread_lo"]),
+        "di_spread_positive": di_spread > t["trigger_di_spread_md"],
+        "strong_adx": adx >= t["trigger_adx_hi"],
+        "strong_di_spread": di_spread >= t["trigger_di_spread_hi"],
+        "volume_confirmation_mid": (vol5 > 0) | (vol20 > t["trigger_vol_z_20_md"]),
+        "volume_confirmation_strict": (vol5 >= t["trigger_vol_z_5_md"]) & (vol20 >= t["trigger_vol_z_20_md"]),
+        "pullback_not_too_deep": pb_depth <= t["pb_depth_loose_max"],
+        "pullback_depth_ok": pb_depth <= t["pb_depth_mid_max"],
+        "shallow_pullback": pb_depth <= t["pb_depth_strict_max"],
+        "pullback_duration_ok": pb_bars <= t["pb_bars_mid_max"],
+        "short_pullback": pb_bars <= t["pb_bars_strict_max"],
+        "pullback_hist_ok": pb_hist_neg <= t["pb_hist_neg_mid_max"],
+        "pullback_hist_strong": pb_hist_neg <= t["pb_hist_neg_strict_max"],
+        "pullback_volume_ratio_ok": pb_vol_ratio <= t["pb_vol_ratio_mid_max"],
+        "pullback_volume_ratio_strong": pb_vol_ratio <= t["pb_vol_ratio_strict_max"],
+        # 财务评分条件
+        "financial_score_good": safe_numeric(df.get("fin_total_score", pd.Series(np.nan, index=idx))) >= 60,
+        "financial_growth_good": safe_numeric(df.get("fin_growth_score", pd.Series(np.nan, index=idx))) >= 60,
+        "financial_profit_good": safe_numeric(df.get("fin_profit_score", pd.Series(np.nan, index=idx))) >= 60,
+        "financial_quality_good": safe_numeric(df.get("fin_quality_score", pd.Series(np.nan, index=idx))) >= 60,
+        "financial_cash_good": safe_numeric(df.get("fin_cash_score", pd.Series(np.nan, index=idx))) >= 60,
+        "financial_efficiency_good": safe_numeric(df.get("fin_efficiency_score", pd.Series(np.nan, index=idx))) >= 60,
+        "financial_momentum_good": safe_numeric(df.get("fin_momentum_score", pd.Series(np.nan, index=idx))) >= 60,
+        "financial_any_good": safe_numeric(df.get("fin_total_score", pd.Series(np.nan, index=idx))) >= 50,
+    }
+    return components, t
+
+
+def build_rule_specs(df: pd.DataFrame) -> Dict[str, List[Tuple[str, pd.Series]]]:
+    c, _ = build_rule_components(df)
+    return {
+        "宽松总池": [
+            ("type_D_or_C", c["type_D_or_C"]),
+            ("pullback_trend_preserved_soft", c["pullback_trend_preserved_soft"]),
+            ("trend_confirmation_loose", c["trend_confirmation_loose"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+        ],
+        "D宽松_基线": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+        ],
+        "D宽松_深度增强": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+            ("pullback_depth_ok", c["pullback_depth_ok"]),
+        ],
+        "D宽松_时长增强": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+            ("pullback_duration_ok", c["pullback_duration_ok"]),
+        ],
+        "D宽松_量能增强": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+            ("volume_confirmation_mid", c["volume_confirmation_mid"]),
+        ],
+        "D宽松_动量增强": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+            ("di_spread_positive", c["di_spread_positive"]),
+        ],
+        "C宽松_观察池": [
+            ("type_C", c["type_C"]),
+            ("pullback_trend_preserved_soft", c["pullback_trend_preserved_soft"]),
+            ("trend_confirmation_loose", c["trend_confirmation_loose"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+        ],
+        # 财务增强版规则
+        "D宽松_财务增强": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+            ("financial_score_good", c["financial_score_good"]),
+        ],
+        "D宽松_财务增长": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+            ("financial_growth_good", c["financial_growth_good"]),
+        ],
+        "D宽松_财务盈利": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+            ("financial_profit_good", c["financial_profit_good"]),
+        ],
+        "D宽松_财务质量": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+            ("financial_quality_good", c["financial_quality_good"]),
+        ],
+        "D宽松_财务现金": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+            ("financial_cash_good", c["financial_cash_good"]),
+        ],
+        "D宽松_财务综合": [
+            ("type_D", c["type_D"]),
+            ("pullback_not_too_deep", c["pullback_not_too_deep"]),
+            ("financial_any_good", c["financial_any_good"]),
+        ],
+    }
+
+def apply_rule_specs(df: pd.DataFrame, rule_specs: Dict[str, List[Tuple[str, pd.Series]]]) -> pd.DataFrame:
+    out = df.copy()
+    for rule_name, steps in rule_specs.items():
+        mask = pd.Series(True, index=out.index)
+        for _, step_mask in steps:
+            mask &= step_mask.fillna(False)
+        out[f"rule_{rule_name}"] = mask.astype(int)
+    return out
+
+
+def _calc_basic_metrics(df: pd.DataFrame) -> Dict[str, float]:
+    def _winrate(col: str) -> float:
+        s = safe_numeric(df[col])
+        s = s.dropna()
+        return float((s > 0).mean()) if not s.empty else np.nan
+    return {
+        "ret_3_mean": float(safe_numeric(df.get("ret_3", pd.Series(dtype=float))).mean()),
+        "ret_5_mean": float(safe_numeric(df.get("ret_5", pd.Series(dtype=float))).mean()),
+        "ret_10_mean": float(safe_numeric(df.get("ret_10", pd.Series(dtype=float))).mean()),
+        "ret_20_mean": float(safe_numeric(df.get("ret_20", pd.Series(dtype=float))).mean()),
+        "win_rate_3": _winrate("ret_3") if "ret_3" in df.columns else np.nan,
+        "win_rate_5": _winrate("ret_5") if "ret_5" in df.columns else np.nan,
+        "win_rate_10": _winrate("ret_10") if "ret_10" in df.columns else np.nan,
+        "mfe_10_mean": float(safe_numeric(df.get("mfe_10", pd.Series(dtype=float))).mean()),
+        "mae_10_mean": float(safe_numeric(df.get("mae_10", pd.Series(dtype=float))).mean()),
+        "rr_10_mean": float(safe_numeric(df.get("rr_10", pd.Series(dtype=float))).mean()),
+    }
+
+
+def build_rule_summary(df: pd.DataFrame, rule_specs: Dict[str, List[Tuple[str, pd.Series]]]) -> pd.DataFrame:
+    rows = []
+    total = len(df)
+    for rule_name in rule_specs:
+        col = f"rule_{rule_name}"
+        sub = df[df[col] == 1].copy()
+        row = {"rule_name": rule_name, "n": int(len(sub)), "coverage": float(len(sub) / total) if total else np.nan}
+        row.update(_calc_basic_metrics(sub))
+        rows.append(row)
+    return _round_numeric_frame(pd.DataFrame(rows))
+
+
+def build_rule_yearly_summary(df: pd.DataFrame, rule_specs: Dict[str, List[Tuple[str, pd.Series]]]) -> pd.DataFrame:
+    if df.empty or "entry_dt" not in df.columns:
+        return pd.DataFrame()
+    tmp = df.copy()
+    tmp["entry_dt"] = pd.to_datetime(tmp["entry_dt"], errors="coerce")
+    tmp["year"] = tmp["entry_dt"].dt.year
+    tmp = tmp[tmp["year"].notna()].copy()
+    rows = []
+    for rule_name in rule_specs:
+        col = f"rule_{rule_name}"
+        sub = tmp[tmp[col] == 1].copy()
+        if sub.empty:
+            continue
+        for year, grp in sub.groupby("year", dropna=True):
+            if pd.isna(year):
+                continue
+            row = {"rule_name": rule_name, "year": int(year), "n": int(len(grp))}
+            row.update(_calc_basic_metrics(grp))
+            rows.append(row)
+    return _round_numeric_frame(pd.DataFrame(rows))
+
+
+def build_rule_type_summary(df: pd.DataFrame, rule_specs: Dict[str, List[Tuple[str, pd.Series]]]) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    tmp = df.copy()
+    tmp["divergence_label"] = _resolve_divergence_label(tmp)
+    group_cols_base = [c for c in ["divergence_label", "supertrend_dir", "bias"] if c in tmp.columns]
+    if not group_cols_base:
+        return pd.DataFrame()
+    rows = []
+    for rule_name in rule_specs:
+        col = f"rule_{rule_name}"
+        sub = tmp[tmp[col] == 1].copy()
+        if sub.empty:
+            continue
+        grouped = sub.groupby(group_cols_base, dropna=False)
+        for keys, grp in grouped:
+            if not isinstance(keys, tuple):
+                keys = (keys,)
+            row = {"rule_name": rule_name}
+            row.update(dict(zip(group_cols_base, keys)))
+            row["n"] = int(len(grp))
+            row.update(_calc_basic_metrics(grp))
+            rows.append(row)
+    return _round_numeric_frame(pd.DataFrame(rows))
+
+
+def build_rule_debug_thresholds(df: pd.DataFrame) -> pd.DataFrame:
+    _, t = build_rule_components(df)
+    out = pd.DataFrame({"threshold": list(t.keys()), "value": list(t.values())})
+    return _round_numeric_frame(out)
+
+
+def build_rule_condition_diagnostics(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    c, _ = build_rule_components(df)
+    div_label = _resolve_divergence_label(df)
+    scopes = {
+        "all": pd.Series(True, index=df.index),
+        "D_only": div_label == "D",
+        "C_only": div_label == "C",
+        "H_only": div_label == "H",
+    }
+    rows = []
+    for scope_name, scope_mask in scopes.items():
+        denom = int(scope_mask.sum())
+        for cond_name, mask in c.items():
+            passed = int((scope_mask & mask.fillna(False)).sum())
+            rows.append({
+                "scope": scope_name,
+                "condition_name": cond_name,
+                "base_n": denom,
+                "pass_n": passed,
+                "pass_ratio": float(passed / denom) if denom else np.nan,
+            })
+    return _round_numeric_frame(pd.DataFrame(rows))
+
+def build_coverage_tradeoff(rule_summary: pd.DataFrame) -> pd.DataFrame:
+    if rule_summary.empty:
+        return pd.DataFrame()
+    out = rule_summary[[c for c in ["rule_name", "n", "coverage", "ret_5_mean", "ret_10_mean", "win_rate_5", "win_rate_10", "rr_10_mean"] if c in rule_summary.columns]].copy()
+    order = {"宽松总池": 1, "D宽松_基线": 2, "D宽松_深度增强": 3, "D宽松_时长增强": 4, "D宽松_量能增强": 5, "D宽松_动量增强": 6, "C宽松_观察池": 7}
+    out["rule_order"] = out["rule_name"].map(order)
+    out = out.sort_values(["rule_order", "coverage"], ascending=[True, False]).drop(columns=["rule_order"])
+    return _round_numeric_frame(out)
+
+
+def build_failed_filter_breakdown(df: pd.DataFrame, rule_specs: Dict[str, List[Tuple[str, pd.Series]]]) -> pd.DataFrame:
+    rows = []
+    total = len(df)
+    for rule_name, steps in rule_specs.items():
+        current = pd.Series(True, index=df.index)
+        prev_pass = int(current.sum())
+        rows.append({"rule_name": rule_name, "step_no": 0, "filter_name": "start", "remaining_n": prev_pass, "removed_n": 0, "remaining_ratio": float(prev_pass / total) if total else np.nan})
+        for i, (filter_name, step_mask) in enumerate(steps, start=1):
+            step_mask = step_mask.fillna(False)
+            before = current.copy()
+            current &= step_mask
+            remaining = int(current.sum())
+            removed = int((before & (~step_mask)).sum())
+            rows.append({"rule_name": rule_name, "step_no": i, "filter_name": filter_name, "remaining_n": remaining, "removed_n": removed, "remaining_ratio": float(remaining / total) if total else np.nan})
+    return _round_numeric_frame(pd.DataFrame(rows))
+
+
+def maybe_export_detail_parquets(base_name: str, out_dir: str, structure_table: pd.DataFrame, event_table: pd.DataFrame, label_table: pd.DataFrame, enabled: bool = False) -> List[str]:
+    if not enabled:
+        return []
+    stem = os.path.splitext(os.path.basename(base_name))[0]
+    paths: List[str] = []
+    for name, df in [('structure_table_pruned', structure_table), ('event_table_pruned', event_table), ('label_table_pruned', label_table)]:
+        if df is None or df.empty:
+            continue
+        path = os.path.join(out_dir, f'{stem}_{name}.parquet')
+        df.to_parquet(path, index=False, compression='zstd')
+        paths.append(path)
+    return paths
+
+
 def build_feature_inventory(structure_df: pd.DataFrame, event_df: pd.DataFrame, label_df: pd.DataFrame) -> pd.DataFrame:
     rows: List[Dict] = []
     structure_cols = set(structure_df.columns)
     event_cols = set(event_df.columns)
     label_cols = set(label_df.columns)
     all_cols = list(structure_cols | event_cols | label_cols)
-    id_like = {"symbol", "structure_id", "event_id"}
-    time_like = {"L1_dt", "H1_dt", "L2_dt", "trigger_dt", "entry_dt"}
-    label_prefixes = ("ret_", "mfe_", "mae_", "rr_")
-    derived_label_cols = {
-        "reward_ret_raw_short", "penalty_dd_raw_short", "reward_rr_raw_short",
-        "quality_hard_penalty_short", "quality_raw_short", "quality_score_short",
-        "quality_bucket_short", "high_quality_flag_short",
-    }
     for col in sorted(all_cols):
         group = "other"
         if col.startswith("up_"):
@@ -756,7 +1316,7 @@ def build_feature_inventory(structure_df: pd.DataFrame, event_df: pd.DataFrame, 
             group = "pullback"
         elif col.startswith("trigger_") or col in {"divergence", "divergence_id", "bias", "sentiment_code", "supertrend_dir", "price_pivot_dir", "osc_pivot_dir"}:
             group = "event"
-        elif col.startswith(label_prefixes) or col in derived_label_cols:
+        elif col.startswith("ret_") or col.startswith("mfe_") or col.startswith("mae_") or col.startswith("rr_"):
             group = "label"
         elif "trend" in col:
             group = "trend"
@@ -764,39 +1324,14 @@ def build_feature_inventory(structure_df: pd.DataFrame, event_df: pd.DataFrame, 
             group = "volume_z"
         elif col.startswith("L1_") or col.startswith("H1_") or col.startswith("L2_"):
             group = "structure_anchor"
-        is_label = col.startswith(label_prefixes) or col in derived_label_cols
-        is_id = col in id_like
-        is_time_key = col in time_like or col.endswith("_year") or col.endswith("_month") or col.endswith("_ym") or col.endswith("_weekday")
-        is_train_feature = (not is_label) and (not is_id) and (not is_time_key)
         rows.append({
             "feature": col,
             "group": group,
             "in_structure_table": col in structure_cols,
             "in_event_table": col in event_cols,
             "in_label_table": col in label_cols,
-            "is_label": is_label,
-            "is_id": is_id,
-            "is_time_key": is_time_key,
-            "is_train_feature_candidate": is_train_feature,
         })
     return pd.DataFrame(rows)
-
-
-def build_model_feature_manifest(structure_df: pd.DataFrame, event_df: pd.DataFrame, label_df: pd.DataFrame) -> pd.DataFrame:
-    inv = build_feature_inventory(structure_df, event_df, label_df).copy()
-    inv["source_table"] = np.select(
-        [inv["in_event_table"], inv["in_structure_table"], inv["in_label_table"]],
-        ["event_table", "structure_table", "label_table"],
-        default="other",
-    )
-    inv["notes"] = ""
-    inv.loc[inv["is_label"], "notes"] = "future label / derived label, 禁止作为训练特征"
-    inv.loc[inv["is_id"], "notes"] = "ID键，仅用于关联或分组"
-    inv.loc[inv["is_time_key"], "notes"] = "时间键，用于切分与分析，不直接喂模型"
-    return inv[[
-        "feature", "group", "source_table", "in_structure_table", "in_event_table", "in_label_table",
-        "is_label", "is_id", "is_time_key", "is_train_feature_candidate", "notes"
-    ]].sort_values(["is_train_feature_candidate", "group", "feature"], ascending=[False, True, True]).reset_index(drop=True)
 
 
 def summarize_dataset(structure_df: pd.DataFrame, event_df: pd.DataFrame, label_df: pd.DataFrame) -> pd.DataFrame:
@@ -819,37 +1354,29 @@ def summarize_dataset(structure_df: pd.DataFrame, event_df: pd.DataFrame, label_
                 {"metric": f"ret_{w}_mean", "value": float(label_df[f"ret_{w}"].mean()) if f"ret_{w}" in label_df.columns else np.nan},
                 {"metric": f"mfe_{w}_mean", "value": float(label_df[f"mfe_{w}"].mean()) if f"mfe_{w}" in label_df.columns else np.nan},
                 {"metric": f"mae_{w}_mean", "value": float(label_df[f"mae_{w}"].mean()) if f"mae_{w}" in label_df.columns else np.nan},
-                {"metric": f"rr_{w}_mean", "value": float(label_df[f"rr_{w}"].mean()) if f"rr_{w}" in label_df.columns else np.nan},
             ]
-        rows += [
-            {"metric": "quality_score_short_mean", "value": float(label_df["quality_score_short"].mean()) if "quality_score_short" in label_df.columns else np.nan},
-            {"metric": "quality_score_short_p80", "value": float(label_df["quality_score_short"].quantile(0.8)) if "quality_score_short" in label_df.columns else np.nan},
-            {"metric": "high_quality_flag_short_mean", "value": float(label_df["high_quality_flag_short"].mean()) if "high_quality_flag_short" in label_df.columns else np.nan},
-        ]
     return pd.DataFrame(rows)
 
 
 def build_event_quality_summary(label_df: pd.DataFrame) -> pd.DataFrame:
     if label_df.empty:
         return pd.DataFrame()
-    group_cols = [c for c in ["divergence_id", "supertrend_dir", "bias"] if c in label_df.columns]
+    group_cols = [c for c in (["divergence_id"] if "divergence_id" in label_df.columns else ["divergence"]) + ["supertrend_dir", "bias"] if c in label_df.columns]
     if not group_cols:
         return pd.DataFrame()
     agg = label_df.groupby(group_cols, dropna=False).agg(
         n=("event_id", "count"),
-        quality_score_short_mean=("quality_score_short", "mean"),
-        high_quality_flag_short_mean=("high_quality_flag_short", "mean"),
         ret_3_mean=("ret_3", "mean"),
         ret_5_mean=("ret_5", "mean"),
-        mae_3_mean=("mae_3", "mean"),
-        mae_5_mean=("mae_5", "mean"),
-        rr_3_mean=("rr_3", "mean"),
-        rr_5_mean=("rr_5", "mean"),
+        ret_10_mean=("ret_10", "mean"),
+        mfe_10_mean=("mfe_10", "mean"),
+        mae_10_mean=("mae_10", "mean"),
+        rr_10_mean=("rr_10", "mean"),
     ).reset_index()
-    return agg.sort_values(["quality_score_short_mean", "n"], ascending=[False, False])
+    return agg.sort_values(["n"], ascending=False)
 
 
-def build_bucket_profiles(label_df: pd.DataFrame, features: Sequence[str], target: str = "quality_score_short", q: int = 5) -> pd.DataFrame:
+def build_bucket_profiles(label_df: pd.DataFrame, features: Sequence[str], target: str = "ret_10", q: int = 5) -> pd.DataFrame:
     if label_df.empty:
         return pd.DataFrame()
     rows: List[Dict] = []
@@ -865,24 +1392,12 @@ def build_bucket_profiles(label_df: pd.DataFrame, features: Sequence[str], targe
             buckets = pd.qcut(s[mask], q=q, labels=False, duplicates="drop")
         except Exception:
             continue
-        tmp = pd.DataFrame({
-            "feature": feat,
-            "bucket": buckets,
-            target: y[mask],
-            "ret_3": label_df.loc[mask, "ret_3"] if "ret_3" in label_df.columns else np.nan,
-            "ret_5": label_df.loc[mask, "ret_5"] if "ret_5" in label_df.columns else np.nan,
-            "mae_3": label_df.loc[mask, "mae_3"] if "mae_3" in label_df.columns else np.nan,
-            "mae_5": label_df.loc[mask, "mae_5"] if "mae_5" in label_df.columns else np.nan,
-            "high_quality_flag_short": label_df.loc[mask, "high_quality_flag_short"] if "high_quality_flag_short" in label_df.columns else np.nan,
-        })
+        tmp = pd.DataFrame({"feature": feat, "bucket": buckets, target: y[mask], "mfe_10": label_df.loc[mask, "mfe_10"] if "mfe_10" in label_df.columns else np.nan, "mae_10": label_df.loc[mask, "mae_10"] if "mae_10" in label_df.columns else np.nan})
         prof = tmp.groupby("bucket", dropna=False).agg(
             n=(target, "count"),
             target_mean=(target, "mean"),
-            ret_3_mean=("ret_3", "mean"),
-            ret_5_mean=("ret_5", "mean"),
-            mae_3_mean=("mae_3", "mean"),
-            mae_5_mean=("mae_5", "mean"),
-            high_quality_flag_short_mean=("high_quality_flag_short", "mean"),
+            mfe_10_mean=("mfe_10", "mean"),
+            mae_10_mean=("mae_10", "mean"),
         ).reset_index()
         for _, r in prof.iterrows():
             rows.append({
@@ -890,11 +1405,8 @@ def build_bucket_profiles(label_df: pd.DataFrame, features: Sequence[str], targe
                 "bucket": int(r["bucket"]) if pd.notna(r["bucket"]) else np.nan,
                 "n": int(r["n"]),
                 f"{target}_mean": float(r["target_mean"]) if pd.notna(r["target_mean"]) else np.nan,
-                "ret_3_mean": float(r["ret_3_mean"]) if pd.notna(r["ret_3_mean"]) else np.nan,
-                "ret_5_mean": float(r["ret_5_mean"]) if pd.notna(r["ret_5_mean"]) else np.nan,
-                "mae_3_mean": float(r["mae_3_mean"]) if pd.notna(r["mae_3_mean"]) else np.nan,
-                "mae_5_mean": float(r["mae_5_mean"]) if pd.notna(r["mae_5_mean"]) else np.nan,
-                "high_quality_flag_short_mean": float(r["high_quality_flag_short_mean"]) if pd.notna(r["high_quality_flag_short_mean"]) else np.nan,
+                "mfe_10_mean": float(r["mfe_10_mean"]) if pd.notna(r["mfe_10_mean"]) else np.nan,
+                "mae_10_mean": float(r["mae_10_mean"]) if pd.notna(r["mae_10_mean"]) else np.nan,
             })
     return pd.DataFrame(rows)
 
@@ -903,120 +1415,14 @@ def compress_detail_sheet(df: pd.DataFrame, kind: str) -> pd.DataFrame:
     if df.empty:
         return df
     if kind == "structure":
-        keep = [
-            "symbol", "structure_id", "L1_dt", "H1_dt", "L2_dt", "L1_px", "H1_px", "L2_px",
-            "up_return", "up_bars", "up_efficiency", "up_trend_pos_ratio",
-            "up_vol_z_mean_5", "up_vol_z_mean_20", "up_adx_mean", "up_adx_above_20_ratio", "up_di_spread_mean",
-            "pb_return", "pb_bars", "pb_depth_vs_up", "pb_bars_vs_up", "pb_efficiency",
-            "pb_trend_pos_ratio", "pb_trend_neg_ratio", "pb_vol_z_mean_5", "pb_vol_z_mean_20",
-            "pb_adx_mean", "pb_adx_above_20_ratio", "pb_di_spread_mean",
-        ]
+        keep = [c for c in KEEP_STRUCTURE_FEATURES if c in df.columns]
     elif kind == "event":
-        keep = [
-            "symbol", "structure_id", "event_id", "event_idx", "trigger_dt", "trigger_px",
-            "divergence_id", "divergence", "bias", "supertrend_dir",
-            "trigger_ret_1d", "trigger_body_pct", "trigger_upper_shadow_pct", "trigger_lower_shadow_pct", "trigger_close_pos",
-            "trigger_macd", "trigger_signal", "trigger_hist",
-            "trigger_adx", "trigger_di_plus", "trigger_di_minus", "trigger_dx", "trigger_di_spread",
-            "trigger_adx_above_20_flag", "trigger_di_plus_gt_di_minus_flag",
-            "trigger_vol_z_5", "trigger_vol_z_20",
-            "bars_from_H1_to_trigger", "bars_from_L2_to_trigger", "trigger_position_in_pb",
-            "pb_hist_neg_area_vs_up_hist_pos_area", "pb_vol_z_mean_20_vs_up",
-            "trend_preserved_during_pullback_flag", "trigger_trend_same_as_up_flag",
-            # 事件上下文字段
-            "events_in_structure", "event_rank_in_structure",
-            "is_first_event_in_structure", "is_last_event_in_structure",
-            "bars_since_prev_event_in_structure", "event_count_same_day",
-            "symbol_event_rank_same_day", "trigger_year", "trigger_month", "trigger_ym", "trigger_weekday",
-        ]
+        keep = [c for c in KEEP_EVENT_FEATURES if c in df.columns]
     else:
-        keep = [
-            "symbol", "event_id", "structure_id", "entry_dt", "entry_price",
-            "ret_3", "ret_5", "mae_3", "mae_5", "rr_3", "rr_5",
-            "quality_raw_short", "quality_score_short", "quality_bucket_short", "high_quality_flag_short",
-            "ret_10", "ret_20", "mfe_10", "mae_10", "rr_10", "mfe_20", "mae_20", "rr_20",
-        ]
-    cols = [c for c in keep if c in df.columns]
-    out = df[cols].copy()
-    num_cols = out.select_dtypes(include=[np.number]).columns
-    out[num_cols] = out[num_cols].round(6)
-    return out
+        keep = [c for c in KEEP_LABEL_FEATURES if c in df.columns]
+    out = df[keep].copy()
+    return _round_numeric_frame(out)
 
-
-def export_full_detail_parquets(base_name: str, out_dir: str, structure_table: pd.DataFrame, event_table: pd.DataFrame, label_table: pd.DataFrame) -> List[str]:
-    stem = os.path.splitext(os.path.basename(base_name))[0]
-    paths: List[str] = []
-    for name, df in [("structure_table_full", structure_table), ("event_table_full", event_table), ("label_table_full", label_table)]:
-        if df is None or df.empty:
-            continue
-        path = os.path.join(out_dir, f"{stem}_{name}.parquet")
-        df.to_parquet(path, index=False, compression="zstd")
-        paths.append(path)
-    return paths
-
-
-def enrich_event_context(event_table: pd.DataFrame) -> pd.DataFrame:
-    if event_table.empty:
-        return event_table.copy()
-    out = event_table.copy()
-    if "trigger_dt" in out.columns:
-        trig = pd.to_datetime(out["trigger_dt"])
-        out["trigger_year"] = trig.dt.year
-        out["trigger_month"] = trig.dt.month
-        out["trigger_ym"] = trig.dt.strftime("%Y-%m")
-        out["trigger_weekday"] = trig.dt.weekday
-    group = out.groupby("structure_id", dropna=False)
-    out["events_in_structure"] = group["event_id"].transform("count")
-    out = out.sort_values([c for c in ["symbol", "structure_id", "event_idx", "event_id"] if c in out.columns]).reset_index(drop=True)
-    out["event_rank_in_structure"] = out.groupby("structure_id", dropna=False).cumcount() + 1
-    out["is_first_event_in_structure"] = (out["event_rank_in_structure"] == 1).astype(float)
-    out["is_last_event_in_structure"] = (out["event_rank_in_structure"] == out["events_in_structure"]).astype(float)
-    if "event_idx" in out.columns:
-        out["bars_since_prev_event_in_structure"] = out.groupby("structure_id", dropna=False)["event_idx"].diff()
-    else:
-        out["bars_since_prev_event_in_structure"] = np.nan
-    if "trigger_dt" in out.columns:
-        out["event_count_same_day"] = out.groupby(pd.to_datetime(out["trigger_dt"]), dropna=False)["event_id"].transform("count")
-        out["symbol_event_rank_same_day"] = out.groupby(["symbol", pd.to_datetime(out["trigger_dt"])], dropna=False).cumcount() + 1
-    else:
-        out["event_count_same_day"] = np.nan
-        out["symbol_event_rank_same_day"] = np.nan
-    return out
-
-
-def build_model_table(structure_table: pd.DataFrame, event_table: pd.DataFrame, label_table: pd.DataFrame) -> pd.DataFrame:
-    if event_table.empty:
-        return pd.DataFrame()
-    event_ctx = enrich_event_context(event_table)
-    merged = event_ctx.copy()
-    if not structure_table.empty:
-        structure_cols = [c for c in structure_table.columns if c not in merged.columns or c == "structure_id"]
-        merged = merged.merge(structure_table[structure_cols], on="structure_id", how="left")
-    if not label_table.empty:
-        label_cols = [c for c in label_table.columns if c not in merged.columns or c == "event_id"]
-        merged = merged.merge(label_table[label_cols], on="event_id", how="left")
-    key_feature_candidates = [
-        "pb_depth_vs_up", "pb_bars_vs_up", "trigger_vol_z_5", "trigger_vol_z_20",
-        "trigger_adx", "trigger_di_spread", "up_adx_mean", "pb_adx_mean",
-        "quality_score_short",
-    ]
-    key_features = [c for c in key_feature_candidates if c in merged.columns]
-    if key_features:
-        merged["feature_missing_count"] = merged[key_features].isna().sum(axis=1)
-        merged["has_missing_key_feature_flag"] = (merged["feature_missing_count"] > 0).astype(float)
-    else:
-        merged["feature_missing_count"] = 0.0
-        merged["has_missing_key_feature_flag"] = 0.0
-    return merged
-
-
-def export_model_table(base_name: str, out_dir: str, model_table: pd.DataFrame) -> Optional[str]:
-    if model_table is None or model_table.empty:
-        return None
-    stem = os.path.splitext(os.path.basename(base_name))[0]
-    path = os.path.join(out_dir, f"{stem}_model_table_short_quality.parquet")
-    model_table.to_parquet(path, index=False, compression="zstd")
-    return path
 
 
 def process_single_stock(code: str, idx: int, total: int, bars: int, freq: str, zigzag_cfg: ZigzagMacdConfig, vol_z_windows: Sequence[int]) -> Optional[pd.DataFrame]:
@@ -1144,6 +1550,278 @@ def prepare_dataset(
     return structure_table, event_table, label_table
 
 
+
+
+
+# =========================
+# GBDT auxiliary experiment (D宽松样本)
+# =========================
+GBDT_FEATURES = [
+    "trigger_vol_z_5", "trigger_vol_z_20", "trigger_adx", "trigger_di_spread",
+    "trigger_hist", "trigger_ret_1d",
+    "pb_depth_vs_up", "pb_bars_vs_up", "pb_hist_mean",
+    "pb_adx_mean", "pb_di_spread_mean", "pb_vol_z_mean_20_vs_up",
+    "up_return", "up_hist_mean",
+    # 财务评分因子
+    "fin_total_score", "fin_growth_score", "fin_profit_score",
+    "fin_quality_score", "fin_cash_score", "fin_efficiency_score", "fin_momentum_score",
+]
+
+
+def _require_sklearn() -> None:
+    if GradientBoostingClassifier is None or GradientBoostingRegressor is None or SimpleImputer is None:
+        raise RuntimeError(
+            "缺少 scikit-learn。请先安装: pip install scikit-learn"
+        )
+
+
+def build_gbdt_sample(df: pd.DataFrame, rule_col: str = "rule_D宽松_基线") -> pd.DataFrame:
+    if df.empty or rule_col not in df.columns:
+        return pd.DataFrame()
+    out = df[df[rule_col] == 1].copy()
+    if out.empty:
+        return out
+    out["entry_dt"] = pd.to_datetime(out.get("entry_dt"), errors="coerce")
+    out["year"] = out["entry_dt"].dt.year
+    out["y_cls_5"] = (safe_numeric(out["ret_5"]) > 0).astype(float)
+    if "high_quality_flag_short" in out.columns:
+        out["y_cls_hq"] = safe_numeric(out["high_quality_flag_short"]).fillna(0).astype(float)
+    else:
+        # 兜底：用5/10日收益与回撤的简单规则构造质量标签，避免旧结果表缺字段时报错
+        out["y_cls_hq"] = ((safe_numeric(out["ret_5"]) > 0) & (safe_numeric(out.get("rr_10", pd.Series(index=out.index, dtype=float))).fillna(0) > 0)).astype(float)
+    out["y_reg_10"] = safe_numeric(out["ret_10"])
+    keep = [c for c in ["symbol", "event_id", "structure_id", "entry_dt", "year"] + GBDT_FEATURES + ["y_cls_5", "y_cls_hq", "y_reg_10", "ret_5", "ret_10"] if c in out.columns]
+    return out[keep].copy()
+
+
+def build_gbdt_dataset_summary(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    rows = [{
+        "scope": "overall",
+        "n": int(len(df)),
+        "pos_rate_cls_5": float(safe_numeric(df["y_cls_5"]).mean()),
+        "pos_rate_cls_hq": float(safe_numeric(df["y_cls_hq"]).mean()),
+        "ret_5_mean": float(safe_numeric(df["ret_5"]).mean()),
+        "ret_10_mean": float(safe_numeric(df["ret_10"]).mean()),
+    }]
+    if "year" in df.columns and df["year"].notna().any():
+        for year, grp in df.groupby("year", dropna=True):
+            if pd.isna(year):
+                continue
+            rows.append({
+                "scope": f"year_{int(year)}",
+                "year": int(year),
+                "n": int(len(grp)),
+                "pos_rate_cls_5": float(safe_numeric(grp["y_cls_5"]).mean()),
+                "pos_rate_cls_hq": float(safe_numeric(grp["y_cls_hq"]).mean()),
+                "ret_5_mean": float(safe_numeric(grp["ret_5"]).mean()),
+                "ret_10_mean": float(safe_numeric(grp["ret_10"]).mean()),
+            })
+    return _round_numeric_frame(pd.DataFrame(rows))
+
+
+def _prepare_xy(train_df: pd.DataFrame, valid_df: pd.DataFrame, feature_cols: Sequence[str], target_col: str):
+    _require_sklearn()
+    feat_cols = [c for c in feature_cols if c in train_df.columns and c in valid_df.columns]
+    xtr = train_df[feat_cols].apply(pd.to_numeric, errors="coerce")
+    xva = valid_df[feat_cols].apply(pd.to_numeric, errors="coerce")
+    ytr = pd.to_numeric(train_df[target_col], errors="coerce")
+    yva = pd.to_numeric(valid_df[target_col], errors="coerce")
+    mask_tr = ytr.notna()
+    mask_va = yva.notna()
+    xtr = xtr.loc[mask_tr]
+    xva = xva.loc[mask_va]
+    ytr = ytr.loc[mask_tr]
+    yva = yva.loc[mask_va]
+    imp = SimpleImputer(strategy="median")
+    xtr_imp = imp.fit_transform(xtr)
+    xva_imp = imp.transform(xva)
+    return feat_cols, xtr_imp, xva_imp, ytr.to_numpy(), yva.to_numpy()
+
+
+def _build_year_splits(df: pd.DataFrame) -> List[Tuple[List[int], int]]:
+    years = sorted(int(y) for y in pd.Series(df.get("year")).dropna().unique())
+    splits: List[Tuple[List[int], int]] = []
+    for val_year in years:
+        train_years = [y for y in years if y < val_year]
+        if len(train_years) < 2:
+            continue
+        splits.append((train_years, val_year))
+    return splits
+
+
+def _fit_gbdt_classifier(train_df: pd.DataFrame, valid_df: pd.DataFrame, feature_cols: Sequence[str], target_col: str):
+    feat_cols, xtr, xva, ytr, yva = _prepare_xy(train_df, valid_df, feature_cols, target_col)
+    if len(np.unique(ytr)) < 2 or len(yva) == 0:
+        return None
+    model = GradientBoostingClassifier(random_state=RANDOM_STATE)
+    model.fit(xtr, ytr)
+    prob = model.predict_proba(xva)[:, 1]
+    pred = (prob >= 0.5).astype(int)
+    auc = np.nan
+    if len(np.unique(yva)) >= 2 and roc_auc_score is not None:
+        auc = float(roc_auc_score(yva, prob))
+    acc = float(accuracy_score(yva, pred)) if accuracy_score is not None else np.nan
+    return feat_cols, model, prob, yva, acc, auc
+
+
+def _fit_gbdt_regressor(train_df: pd.DataFrame, valid_df: pd.DataFrame, feature_cols: Sequence[str], target_col: str):
+    feat_cols, xtr, xva, ytr, yva = _prepare_xy(train_df, valid_df, feature_cols, target_col)
+    if len(ytr) < 50 or len(yva) == 0:
+        return None
+    model = GradientBoostingRegressor(random_state=RANDOM_STATE)
+    model.fit(xtr, ytr)
+    pred = model.predict(xva)
+    return feat_cols, model, pred, yva
+
+
+def _feature_importance_frame(feature_cols: Sequence[str], importances: Sequence[float], model_name: str, split_name: str) -> pd.DataFrame:
+    out = pd.DataFrame({
+        "feature": list(feature_cols),
+        "importance": list(importances),
+        "model_name": model_name,
+        "split_name": split_name,
+    }).sort_values(["importance", "feature"], ascending=[False, True]).reset_index(drop=True)
+    out["rank"] = np.arange(1, len(out) + 1)
+    return _round_numeric_frame(out)
+
+
+def build_gbdt_feature_importance_tables(df: pd.DataFrame, feature_cols: Sequence[str]):
+    if df.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    splits = _build_year_splits(df)
+    fi_cls5_parts: List[pd.DataFrame] = []
+    fi_hq_parts: List[pd.DataFrame] = []
+    fi_reg10_parts: List[pd.DataFrame] = []
+    val_rows: List[Dict[str, float]] = []
+
+    # 全样本重要性
+    whole = df.copy()
+    if len(whole) >= 100:
+        try:
+            imp = SimpleImputer(strategy="median")
+            X = imp.fit_transform(whole[list(feature_cols)].apply(pd.to_numeric, errors="coerce"))
+            y1 = pd.to_numeric(whole["y_cls_5"], errors="coerce").fillna(0).astype(int)
+            if len(np.unique(y1)) >= 2:
+                m1 = GradientBoostingClassifier(random_state=RANDOM_STATE)
+                m1.fit(X, y1)
+                fi_cls5_parts.append(_feature_importance_frame(feature_cols, m1.feature_importances_, "cls_ret5", "all_in_sample"))
+            y2 = pd.to_numeric(whole["y_cls_hq"], errors="coerce").fillna(0).astype(int)
+            if len(np.unique(y2)) >= 2:
+                m2 = GradientBoostingClassifier(random_state=RANDOM_STATE)
+                m2.fit(X, y2)
+                fi_hq_parts.append(_feature_importance_frame(feature_cols, m2.feature_importances_, "cls_hq", "all_in_sample"))
+            y3 = pd.to_numeric(whole["y_reg_10"], errors="coerce")
+            mask3 = y3.notna()
+            if int(mask3.sum()) >= 100:
+                mr = GradientBoostingRegressor(random_state=RANDOM_STATE)
+                mr.fit(X[mask3.values], y3.loc[mask3].to_numpy())
+                fi_reg10_parts.append(_feature_importance_frame(feature_cols, mr.feature_importances_, "reg_ret10", "all_in_sample"))
+        except Exception:
+            pass
+
+    for train_years, val_year in splits:
+        train_df = df[df["year"].isin(train_years)].copy()
+        valid_df = df[df["year"] == val_year].copy()
+        split_name = f"train_{min(train_years)}_{max(train_years)}_val_{val_year}"
+
+        cls5 = _fit_gbdt_classifier(train_df, valid_df, feature_cols, "y_cls_5")
+        if cls5 is not None:
+            feat_cols, model, prob, yva, acc, auc = cls5
+            fi_cls5_parts.append(_feature_importance_frame(feat_cols, model.feature_importances_, "cls_ret5", split_name))
+            valid_eval = valid_df.loc[pd.to_numeric(valid_df["y_cls_5"], errors="coerce").notna()].copy()
+            valid_eval = valid_eval.iloc[:len(prob)].copy()
+            valid_eval["score"] = prob
+            top_n = max(1, int(len(valid_eval) * 0.2))
+            top = valid_eval.sort_values("score", ascending=False).head(top_n)
+            val_rows.append({
+                "task": "cls_ret5", "split_name": split_name, "train_years": ",".join(map(str, train_years)),
+                "val_year": int(val_year), "train_n": int(len(train_df)), "valid_n": int(len(valid_df)),
+                "accuracy": acc, "auc": auc,
+                "top20_ret_5_mean": float(safe_numeric(top["ret_5"]).mean()),
+                "top20_ret_10_mean": float(safe_numeric(top["ret_10"]).mean()),
+            })
+
+        cls_hq = _fit_gbdt_classifier(train_df, valid_df, feature_cols, "y_cls_hq")
+        if cls_hq is not None:
+            feat_cols, model, prob, yva, acc, auc = cls_hq
+            fi_hq_parts.append(_feature_importance_frame(feat_cols, model.feature_importances_, "cls_hq", split_name))
+            valid_eval = valid_df.loc[pd.to_numeric(valid_df["y_cls_hq"], errors="coerce").notna()].copy()
+            valid_eval = valid_eval.iloc[:len(prob)].copy()
+            valid_eval["score"] = prob
+            top_n = max(1, int(len(valid_eval) * 0.2))
+            top = valid_eval.sort_values("score", ascending=False).head(top_n)
+            val_rows.append({
+                "task": "cls_hq", "split_name": split_name, "train_years": ",".join(map(str, train_years)),
+                "val_year": int(val_year), "train_n": int(len(train_df)), "valid_n": int(len(valid_df)),
+                "accuracy": acc, "auc": auc,
+                "top20_ret_5_mean": float(safe_numeric(top["ret_5"]).mean()),
+                "top20_ret_10_mean": float(safe_numeric(top["ret_10"]).mean()),
+            })
+
+        reg10 = _fit_gbdt_regressor(train_df, valid_df, feature_cols, "y_reg_10")
+        if reg10 is not None:
+            feat_cols, model, pred, yva = reg10
+            fi_reg10_parts.append(_feature_importance_frame(feat_cols, model.feature_importances_, "reg_ret10", split_name))
+            valid_eval = valid_df.loc[pd.to_numeric(valid_df["y_reg_10"], errors="coerce").notna()].copy()
+            valid_eval = valid_eval.iloc[:len(pred)].copy()
+            valid_eval["score"] = pred
+            top_n = max(1, int(len(valid_eval) * 0.2))
+            top = valid_eval.sort_values("score", ascending=False).head(top_n)
+            val_rows.append({
+                "task": "reg_ret10", "split_name": split_name, "train_years": ",".join(map(str, train_years)),
+                "val_year": int(val_year), "train_n": int(len(train_df)), "valid_n": int(len(valid_df)),
+                "accuracy": np.nan, "auc": np.nan,
+                "top20_ret_5_mean": float(safe_numeric(top["ret_5"]).mean()),
+                "top20_ret_10_mean": float(safe_numeric(top["ret_10"]).mean()),
+            })
+
+    fi_cls5 = pd.concat(fi_cls5_parts, ignore_index=True) if fi_cls5_parts else pd.DataFrame()
+    fi_hq = pd.concat(fi_hq_parts, ignore_index=True) if fi_hq_parts else pd.DataFrame()
+    fi_reg10 = pd.concat(fi_reg10_parts, ignore_index=True) if fi_reg10_parts else pd.DataFrame()
+    yearly_validation = _round_numeric_frame(pd.DataFrame(val_rows))
+
+    return fi_cls5, fi_hq, fi_reg10, yearly_validation, build_gbdt_rule_hint_summary(fi_cls5, fi_hq, fi_reg10)
+
+
+def build_gbdt_rule_hint_summary(fi_cls5: pd.DataFrame, fi_hq: pd.DataFrame, fi_reg10: pd.DataFrame) -> pd.DataFrame:
+    parts = []
+    for tag, df in [("cls_ret5", fi_cls5), ("cls_hq", fi_hq), ("reg_ret10", fi_reg10)]:
+        if df is None or df.empty:
+            continue
+        agg = df.groupby("feature", dropna=False).agg(
+            mean_importance=("importance", "mean"),
+            best_rank=("rank", "min"),
+            avg_rank=("rank", "mean"),
+            n_splits=("split_name", "nunique"),
+        ).reset_index()
+        agg["task"] = tag
+        parts.append(agg)
+    if not parts:
+        return pd.DataFrame()
+    merged = pd.concat(parts, ignore_index=True)
+    out = merged.groupby("feature", dropna=False).agg(
+        mean_importance=("mean_importance", "mean"),
+        best_rank=("best_rank", "min"),
+        avg_rank=("avg_rank", "mean"),
+        tasks_supported=("task", "nunique"),
+        n_splits=("n_splits", "max"),
+    ).reset_index()
+
+    def _recommend(row: pd.Series) -> str:
+        if row["tasks_supported"] >= 2 and row["avg_rank"] <= 6:
+            return "硬过滤候选"
+        if row["tasks_supported"] >= 2 and row["avg_rank"] <= 12:
+            return "软排序候选"
+        if row["best_rank"] <= 8:
+            return "观察项"
+        return "可降级/删除"
+
+    out["recommendation"] = out.apply(_recommend, axis=1)
+    out = out.sort_values(["tasks_supported", "avg_rank", "mean_importance"], ascending=[False, True, False]).reset_index(drop=True)
+    return _round_numeric_frame(out)
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="日线底背离买点质量研究脚本")
     parser.add_argument("--n-stocks", type=int, default=100)
@@ -1165,7 +1843,8 @@ def main() -> None:
     parser.add_argument("--max-workers", type=int, default=1, help="K线加载并行线程数，1表示关闭多线程")
     parser.add_argument("--prepare-workers", type=int, default=None, help="结构提取并行进程数，默认自动（最多8）")
     parser.add_argument("--no-parallel-prepare", action="store_true", help="禁用结构提取并行处理")
-    parser.add_argument("--excel-detail", type=str, default="compact", choices=["compact", "full"], help="Excel明细输出级别")
+    parser.add_argument("--excel-detail", type=str, default="stats_only", choices=["stats_only", "compact", "full"], help="Excel输出级别，默认仅统计结果")
+    parser.add_argument("--export-detail-parquet", action="store_true", help="额外导出裁剪后的明细parquet，默认关闭")
     args = parser.parse_args()
 
     if str(args.freq).lower() != "d":
@@ -1196,7 +1875,10 @@ def main() -> None:
 
     if not all_dfs:
         print("\n从数据库获取数据并计算底座特征...")
-        all_dfs = fetch_data_from_db(args.n_stocks, args.bars, args.freq, args.seed, zigzag_cfg, vol_z_windows, max_workers=max(1, int(args.max_workers)))
+        all_dfs = fetch_data_from_db(
+            args.n_stocks, args.bars, args.freq, args.seed,
+            zigzag_cfg, vol_z_windows, max_workers=max(1, int(args.max_workers))
+        )
         if not args.no_cache and all_dfs:
             metadata = {
                 "n_stocks": args.n_stocks,
@@ -1212,64 +1894,125 @@ def main() -> None:
     structure_table, event_table, label_table = prepare_dataset(
         all_dfs,
         use_parallel=not args.no_parallel_prepare,
-        n_workers=args.prepare_workers
+        n_workers=args.prepare_workers,
     )
 
-    event_table = enrich_event_context(event_table)
-    model_table = build_model_table(structure_table, event_table, label_table)
+    # 添加财务评分因子
+    print("\n添加财务评分因子...")
+    event_table = add_financial_score_factors(event_table)
+    print(f"财务评分因子已添加，字段: {[c for c in event_table.columns if c.startswith('fin_')]}")
 
-    # Merge labels back to events for analysis sheets
-    merged_event_label = event_table.merge(
-        label_table[[c for c in label_table.columns if c not in event_table.columns or c == "event_id"]],
-        on="event_id",
-        how="left",
-        suffixes=("", "_label"),
-    ) if not event_table.empty and not label_table.empty else event_table.copy()
-
-    dataset_summary = summarize_dataset(structure_table, event_table, label_table)
-    event_quality_summary = build_event_quality_summary(merged_event_label)
+    analysis_table = build_analysis_table(structure_table, event_table, label_table)
+    dataset_summary = summarize_dataset(structure_table, event_table, analysis_table)
+    event_quality_summary = build_event_quality_summary(analysis_table)
+    yearly_summary = build_yearly_summary(analysis_table)
+    type_year_summary = build_type_year_summary(analysis_table)
     bucket_features = [
-        "pb_depth_vs_up", "pb_bars_vs_up", "pb_hist_neg_area_vs_up_hist_pos_area",
-        "pb_trend_pos_ratio", "trigger_vol_z_5", "trigger_vol_z_20", "up_vol_z_mean_20", "pb_vol_z_mean_20",
-        "trigger_adx", "trigger_di_spread", "trigger_adx_above_20_flag",
-        "up_adx_mean", "up_adx_above_20_ratio", "pb_adx_mean", "pb_adx_above_20_ratio",
-        "up_di_spread_mean", "pb_di_spread_mean",
+        feat for feat in DEFAULT_BUCKET_FEATURES
+        if feat in CORE_FEATURES_FOR_SUMMARY and feat in analysis_table.columns
     ]
-    bucket_profiles = build_bucket_profiles(merged_event_label, bucket_features, target="quality_score_short", q=5)
-    feature_inventory = build_feature_inventory(structure_table, event_table, label_table)
-    model_feature_manifest = build_model_feature_manifest(structure_table, event_table, label_table)
+    bucket_profiles = build_bucket_profiles(analysis_table, bucket_features, target="ret_10", q=5)
+    feature_keep_drop_report = build_feature_keep_drop_report(structure_table, event_table, analysis_table)
+    feature_inventory = build_feature_inventory(structure_table, event_table, analysis_table)
+    rule_specs = build_rule_specs(analysis_table)
+    analysis_table = apply_rule_specs(analysis_table, rule_specs)
+    rule_summary = build_rule_summary(analysis_table, rule_specs)
+    rule_yearly_summary = build_rule_yearly_summary(analysis_table, rule_specs)
+    rule_type_summary = build_rule_type_summary(analysis_table, rule_specs)
+    coverage_tradeoff = build_coverage_tradeoff(rule_summary)
+    failed_filter_breakdown = build_failed_filter_breakdown(analysis_table, rule_specs)
+    rule_debug_thresholds = build_rule_debug_thresholds(analysis_table)
+    rule_condition_diagnostics = build_rule_condition_diagnostics(analysis_table)
 
-    structure_for_excel = structure_table if args.excel_detail == "full" else compress_detail_sheet(structure_table, "structure")
-    event_for_excel = event_table if args.excel_detail == "full" else compress_detail_sheet(event_table, "event")
-    label_for_excel = label_table if args.excel_detail == "full" else compress_detail_sheet(label_table, "label")
+    gbdt_sample = build_gbdt_sample(analysis_table, rule_col="rule_D宽松_基线")
+    gbdt_dataset_summary = build_gbdt_dataset_summary(gbdt_sample)
+    gbdt_feature_importance_cls_5 = pd.DataFrame()
+    gbdt_feature_importance_cls_hq = pd.DataFrame()
+    gbdt_feature_importance_reg_10 = pd.DataFrame()
+    gbdt_yearly_validation = pd.DataFrame()
+    gbdt_rule_hint_summary = pd.DataFrame()
+    if not gbdt_sample.empty:
+        try:
+            (
+                gbdt_feature_importance_cls_5,
+                gbdt_feature_importance_cls_hq,
+                gbdt_feature_importance_reg_10,
+                gbdt_yearly_validation,
+                gbdt_rule_hint_summary,
+            ) = build_gbdt_feature_importance_tables(gbdt_sample, [f for f in GBDT_FEATURES if f in gbdt_sample.columns])
+        except Exception as exc:
+            gbdt_dataset_summary = pd.concat([
+                gbdt_dataset_summary,
+                pd.DataFrame([{"scope": "error", "message": str(exc)}])
+            ], ignore_index=True)
 
-    # 准备model_table预览（前1000行）
-    model_table_preview = model_table.head(1000).copy() if model_table is not None and not model_table.empty else pd.DataFrame()
-    
-    result_tables = {
+    result_tables: Dict[str, pd.DataFrame] = {
         "dataset_summary": dataset_summary,
-        "structure_table": structure_for_excel,
-        "event_table": event_for_excel,
-        "label_table": label_for_excel,
         "event_quality_summary": event_quality_summary,
+        "yearly_summary": yearly_summary,
+        "type_year_summary": type_year_summary,
         "bucket_profiles": bucket_profiles,
+        "rule_summary": rule_summary,
+        "rule_yearly_summary": rule_yearly_summary,
+        "rule_type_summary": rule_type_summary,
+        "coverage_tradeoff": coverage_tradeoff,
+        "failed_filter_breakdown": failed_filter_breakdown,
+        "rule_debug_thresholds": rule_debug_thresholds,
+        "rule_condition_diagnostics": rule_condition_diagnostics,
+        "gbdt_dataset_summary": gbdt_dataset_summary,
+        "gbdt_feature_importance_cls_5": gbdt_feature_importance_cls_5,
+        "gbdt_feature_importance_cls_hq": gbdt_feature_importance_cls_hq,
+        "gbdt_feature_importance_reg_10": gbdt_feature_importance_reg_10,
+        "gbdt_yearly_validation": gbdt_yearly_validation,
+        "gbdt_rule_hint_summary": gbdt_rule_hint_summary,
+        "feature_keep_drop_report": feature_keep_drop_report,
         "feature_inventory": feature_inventory,
-        "model_feature_manifest": model_feature_manifest,
-        "model_table_preview": model_table_preview,
     }
+
+    if args.excel_detail in {"compact", "full"}:
+        structure_for_excel = structure_table if args.excel_detail == "full" else compress_detail_sheet(structure_table, "structure")
+        event_for_excel = event_table if args.excel_detail == "full" else compress_detail_sheet(event_table, "event")
+        label_for_excel = analysis_table if args.excel_detail == "full" else compress_detail_sheet(analysis_table, "label")
+        result_tables = {
+            "dataset_summary": dataset_summary,
+            "structure_table": structure_for_excel,
+            "event_table": event_for_excel,
+            "label_table": label_for_excel,
+            "event_quality_summary": event_quality_summary,
+            "yearly_summary": yearly_summary,
+            "type_year_summary": type_year_summary,
+            "bucket_profiles": bucket_profiles,
+            "rule_summary": rule_summary,
+            "rule_yearly_summary": rule_yearly_summary,
+            "rule_type_summary": rule_type_summary,
+            "coverage_tradeoff": coverage_tradeoff,
+            "failed_filter_breakdown": failed_filter_breakdown,
+            "rule_debug_thresholds": rule_debug_thresholds,
+            "rule_condition_diagnostics": rule_condition_diagnostics,
+            "gbdt_dataset_summary": gbdt_dataset_summary,
+            "gbdt_feature_importance_cls_5": gbdt_feature_importance_cls_5,
+            "gbdt_feature_importance_cls_hq": gbdt_feature_importance_cls_hq,
+            "gbdt_feature_importance_reg_10": gbdt_feature_importance_reg_10,
+            "gbdt_yearly_validation": gbdt_yearly_validation,
+            "gbdt_rule_hint_summary": gbdt_rule_hint_summary,
+            "feature_keep_drop_report": feature_keep_drop_report,
+            "feature_inventory": feature_inventory,
+        }
+
     workbook_path = export_results_workbook(result_tables, OUT_DIR, args.excel_name)
-    parquet_paths = export_full_detail_parquets(args.excel_name, OUT_DIR, structure_table, event_table, label_table)
-    
-    # 导出model_table用于GBDT训练
-    model_table_path = export_model_table(args.excel_name, OUT_DIR, model_table)
-    
+    parquet_paths = maybe_export_detail_parquets(
+        args.excel_name,
+        OUT_DIR,
+        structure_table,
+        event_table,
+        analysis_table,
+        enabled=bool(args.export_detail_parquet),
+    )
     print(f"\n完成，Excel 已导出: {workbook_path}")
     if parquet_paths:
-        print("完整明细 Parquet:")
+        print("裁剪明细 Parquet:")
         for p in parquet_paths:
             print(f"  - {p}")
-    if model_table_path:
-        print(f"Model table 已导出: {model_table_path}")
 
 
 if __name__ == "__main__":

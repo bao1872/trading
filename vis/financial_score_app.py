@@ -3,7 +3,7 @@
 个股财务评分可视化分析（Streamlit 应用）
 
 Purpose: 展示个股近期财务数据，基于6维度评分体系进行可视化分析
-Inputs: stock_financial_score_pool 表（由 batch_score.py 计算生成）
+Inputs: stock_financial_score_pool 表（由 financial_quarterly_score.py 批量计算生成）
 Outputs: Streamlit Web 界面
 How to Run: streamlit run vis/financial_score_app.py
 Examples:

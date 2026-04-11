@@ -11,13 +11,13 @@
 
 推荐用法：
 1) 单股分析：
-   python financial_quarterly_score_unified.py --mode single --ts-code 000426.SZ --name 兴业银锡 --start 20200101 --outdir ./out
+   python financial_quarterly_score.py --mode single --ts-code 000426.SZ --name 兴业银锡 --start 20200101 --outdir ./out
 
 2) 批量评分入库：
-   python financial_quarterly_score_unified.py --mode batch --start 20120101 --lookback 12 --recent-n 16
+   python financial_quarterly_score.py --mode batch --start 20120101 --lookback 12 --recent-n 16
 
 3) 用导出的 Excel 调试：
-   python financial_quarterly_score_unified.py --mode single --ts-code 001332.SZ --excel-path query_result.xlsx
+   python financial_quarterly_score.py --mode single --ts-code 001332.SZ --excel-path query_result.xlsx
 
 说明：
 - 该版本假设 financial_quarterly_data 中的收入、利润、现金流、资本开支等字段均为“单季度值”；
