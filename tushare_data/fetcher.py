@@ -102,10 +102,43 @@ def _combine_report_types(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_income(pro, ts_code: str, start_date: str) -> pd.DataFrame:
+    """获取利润表所有字段"""
     fields = [
-        "ts_code", "end_date", "report_type", "ann_date", "f_ann_date",
-        "total_revenue", "revenue", "oper_cost", "operate_profit",
-        "ebit", "ebitda", "n_income", "n_income_attr_p", "rd_exp"
+        # 基本信息
+        "ts_code", "ann_date", "f_ann_date", "end_date", "report_type", "comp_type", "end_type",
+        # 每股收益
+        "basic_eps", "diluted_eps",
+        # 营业收入
+        "total_revenue", "revenue", "int_income", "prem_earned", "comm_income",
+        "n_commis_income", "n_oth_income", "n_oth_b_income", "prem_income", "out_prem",
+        "une_prem_reser", "reins_income", "n_sec_tb_income", "n_sec_uw_income",
+        "n_asset_mg_income", "oth_b_income",
+        # 收益类
+        "fv_value_chg_gain", "invest_income", "ass_invest_income", "forex_gain",
+        # 营业成本
+        "total_cogs", "oper_cost", "int_exp", "comm_exp", "biz_tax_surchg",
+        "sell_exp", "admin_exp", "fin_exp", "assets_impair_loss", "prem_refund",
+        "compens_payout", "reser_insur_liab", "div_payt", "reins_exp", "oper_exp",
+        "compens_payout_refu", "insur_reser_refu", "reins_cost_refund", "other_bus_cost",
+        # 利润指标
+        "operate_profit", "non_oper_income", "non_oper_exp", "nca_disploss",
+        "total_profit", "income_tax", "n_income", "n_income_attr_p", "minority_gain",
+        "oth_compr_income", "t_compr_income", "compr_inc_attr_p", "compr_inc_attr_m_s",
+        # 其他指标
+        "ebit", "ebitda", "insurance_exp", "undist_profit", "distable_profit",
+        "rd_exp", "fin_exp_int_exp", "fin_exp_int_inc",
+        # 利润分配
+        "transfer_surplus_rese", "transfer_housing_imprest", "transfer_oth",
+        "adj_lossgain", "withdra_legal_surplus", "withdra_legal_pubfund",
+        "withdra_biz_devfund", "withdra_rese_fund", "withdra_oth_ersu",
+        "workers_welfare", "distr_profit_shrhder", "prfshare_payable_dvd",
+        "comshare_payable_dvd", "capit_comstock_div",
+        # 扣非净利
+        "net_after_nr_lp_correct",
+        # 补充字段
+        "credit_impa_loss", "net_expo_hedging_benefits", "oth_impair_loss_assets",
+        "total_opcost", "amodcost_fin_assets", "oth_income", "asset_disp_income",
+        "continued_net_profit", "end_net_profit", "update_flag",
     ]
     flds = ",".join(fields)
     df1 = pro.income(ts_code=ts_code, start_date=start_date, report_type="1", fields=flds)
@@ -352,10 +385,44 @@ def upsert_quarterly_to_db(income_df: pd.DataFrame, cash_df: pd.DataFrame,
         return 0
 
     db_columns = [
-        "ts_code", "end_date", "report_type", "ann_date", "f_ann_date",
-        "total_revenue", "revenue", "oper_cost", "operate_profit",
-        "ebit", "ebitda", "n_income", "n_income_attr_p", "rd_exp",
+        # 基本信息
+        "ts_code", "end_date", "report_type", "ann_date", "f_ann_date", "comp_type", "end_type",
+        # 每股收益
+        "basic_eps", "diluted_eps",
+        # 营业收入
+        "total_revenue", "revenue", "int_income", "prem_earned", "comm_income",
+        "n_commis_income", "n_oth_income", "n_oth_b_income", "prem_income", "out_prem",
+        "une_prem_reser", "reins_income", "n_sec_tb_income", "n_sec_uw_income",
+        "n_asset_mg_income", "oth_b_income",
+        # 收益类
+        "fv_value_chg_gain", "invest_income", "ass_invest_income", "forex_gain",
+        # 营业成本
+        "total_cogs", "oper_cost", "int_exp", "comm_exp", "biz_tax_surchg",
+        "sell_exp", "admin_exp", "fin_exp", "assets_impair_loss", "prem_refund",
+        "compens_payout", "reser_insur_liab", "div_payt", "reins_exp", "oper_exp",
+        "compens_payout_refu", "insur_reser_refu", "reins_cost_refund", "other_bus_cost",
+        # 利润指标
+        "operate_profit", "non_oper_income", "non_oper_exp", "nca_disploss",
+        "total_profit", "income_tax", "n_income", "n_income_attr_p", "minority_gain",
+        "oth_compr_income", "t_compr_income", "compr_inc_attr_p", "compr_inc_attr_m_s",
+        # 其他指标
+        "ebit", "ebitda", "insurance_exp", "undist_profit", "distable_profit",
+        "rd_exp", "fin_exp_int_exp", "fin_exp_int_inc",
+        # 利润分配
+        "transfer_surplus_rese", "transfer_housing_imprest", "transfer_oth",
+        "adj_lossgain", "withdra_legal_surplus", "withdra_legal_pubfund",
+        "withdra_biz_devfund", "withdra_rese_fund", "withdra_oth_ersu",
+        "workers_welfare", "distr_profit_shrhder", "prfshare_payable_dvd",
+        "comshare_payable_dvd", "capit_comstock_div",
+        # 扣非净利
+        "net_after_nr_lp_correct",
+        # 补充字段
+        "credit_impa_loss", "net_expo_hedging_benefits", "oth_impair_loss_assets",
+        "total_opcost", "amodcost_fin_assets", "oth_income", "asset_disp_income",
+        "continued_net_profit", "end_net_profit", "update_flag",
+        # 现金流量表字段
         "n_cashflow_act", "free_cashflow", "c_fr_sale_sg", "c_pay_acq_const_fiolta",
+        # 资产负债表字段
         "total_assets", "accounts_receiv", "inventories", "accounts_pay",
         "contract_liab", "total_hldr_eqy_exc_min_int",
     ]
@@ -449,6 +516,16 @@ def get_all_existing_report_counts(engine) -> dict:
     return df.groupby("ts_code")["end_date"].apply(set).to_dict()
 
 
+def get_latest_report_dates(engine) -> dict:
+    """返回 {ts_code: latest_end_date}，每只股票的最后报告期日期"""
+    sql = "SELECT ts_code, MAX(end_date) as latest_date FROM financial_quarterly_data GROUP BY ts_code"
+    with engine.connect() as conn:
+        df = pd.read_sql(text(sql), conn)
+    if df.empty:
+        return {}
+    return dict(zip(df["ts_code"], df["latest_date"]))
+
+
 def fetch_stock_pool(years: int = 5, incremental: bool = True,
                      batch_size: int = 100) -> dict:
     from dateutil.relativedelta import relativedelta
@@ -460,19 +537,15 @@ def fetch_stock_pool(years: int = 5, incremental: bool = True,
         logger.warning("股票池为空，请先更新 stock_pools 表")
         return {"success": 0, "skipped": 0, "failed": 0, "failed_stocks": []}
 
-    start_date = (datetime.now() - relativedelta(years=years)).strftime("%Y0101")
+    default_start_date = (datetime.now() - relativedelta(years=years)).strftime("%Y0101")
     logger.info(f"开始获取 {len(stock_pool)} 只股票最近 {years} 年财务数据")
-    logger.info(f"起始日期: {start_date}, 增量模式: {incremental}")
+    logger.info(f"默认起始日期: {default_start_date}, 增量模式: {incremental}")
+
+    # 获取每只股票的最后报告期日期
+    latest_dates = get_latest_report_dates(engine) if incremental else {}
+    logger.info(f"已有数据股票数: {len(latest_dates)}")
 
     all_existing = get_all_existing_report_counts(engine) if incremental else {}
-    logger.info(f"已有数据股票数: {len(all_existing)}")
-
-    if incremental:
-        stock_pool = [
-            (ts_code, name) for ts_code, name in stock_pool
-            if len(all_existing.get(ts_code, set())) < 20
-        ]
-        logger.info(f"需要获取的股票数: {len(stock_pool)}")
 
     results = {"success": 0, "skipped": 0, "failed": 0, "failed_stocks": []}
 
@@ -482,10 +555,24 @@ def fetch_stock_pool(years: int = 5, incremental: bool = True,
 
         existing_dates = all_existing.get(ts_code, set()) if incremental else set()
 
-        if incremental and len(existing_dates) >= 20:
-            results["skipped"] += 1
-            logger.debug(f"{ts_code} 已有 {len(existing_dates)} 个报告期，跳过")
-            continue
+        # 根据最后报告期日期决定start_date
+        if incremental and ts_code in latest_dates:
+            latest_date = latest_dates[ts_code]
+            # 从最后报告期的下一天开始获取（确保获取新季度数据）
+            from datetime import datetime as dt
+            latest_dt = dt.strptime(str(latest_date), "%Y%m%d")
+            # 计算下一个季度的起始日期
+            if latest_dt.month == 3:
+                next_quarter_start = latest_dt.replace(month=4, day=1)
+            elif latest_dt.month == 6:
+                next_quarter_start = latest_dt.replace(month=7, day=1)
+            elif latest_dt.month == 9:
+                next_quarter_start = latest_dt.replace(month=10, day=1)
+            else:  # month == 12
+                next_quarter_start = latest_dt.replace(year=latest_dt.year + 1, month=1, day=1)
+            start_date = next_quarter_start.strftime("%Y%m%d")
+        else:
+            start_date = default_start_date
 
         saved = False
         for attempt in range(5):

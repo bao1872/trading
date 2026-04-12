@@ -62,71 +62,51 @@ TARGET_TS_CODE = ""
 SOURCE_TABLE = "financial_quarterly_data"
 OUTPUT_TABLE = "stock_financial_score_pool"
 
-PRE_SCORED_FACTORS = {"profit_cash_sync", "margin_profit_sync"}
+PRE_SCORED_FACTORS: set = set()
 
 FACTOR_CONFIG: List[Dict] = [
-    {"dimension": "规模与增长", "factor_name": "q_rev_yoy", "label": "单季营业收入同比", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "规模与增长", "factor_name": "q_op_yoy", "label": "单季营业利润同比", "direction": "higher_better", "weight": 0.05, "is_core": True},
-    {"dimension": "规模与增长", "factor_name": "q_np_parent_yoy", "label": "单季归母净利润同比", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "规模与增长", "factor_name": "ytd_rev_yoy", "label": "累计营业收入同比", "direction": "higher_better", "weight": 0.03, "is_core": True},
-    {"dimension": "规模与增长", "factor_name": "ytd_np_parent_yoy", "label": "累计归母净利润同比", "direction": "higher_better", "weight": 0.03, "is_core": True},
-    {"dimension": "规模与增长", "factor_name": "q_ebit_yoy", "label": "单季EBIT同比", "direction": "higher_better", "weight": 0.02, "is_core": False},
-    {"dimension": "规模与增长", "factor_name": "q_rev_qoq", "label": "单季营业收入环比", "direction": "higher_better", "weight": 0.01, "is_core": False},
-    {"dimension": "规模与增长", "factor_name": "q_op_qoq", "label": "单季营业利润环比", "direction": "higher_better", "weight": 0.01, "is_core": False},
+    {"dimension": "边际改善", "factor_name": "q_np_parent_yoy_delta", "label": "归母净利同比变化", "direction": "higher_better", "weight": 0.10, "is_core": True},
+    {"dimension": "边际改善", "factor_name": "q_rev_yoy_delta", "label": "营收同比变化", "direction": "higher_better", "weight": 0.06, "is_core": True},
+    {"dimension": "边际改善", "factor_name": "trend_consistency", "label": "趋势连续性", "direction": "higher_better", "weight": 0.06, "is_core": True},
+    {"dimension": "边际改善", "factor_name": "profit_cash_sync", "label": "利润现金流同步改善度", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    {"dimension": "边际改善", "factor_name": "margin_profit_sync", "label": "毛利率利润率同步改善度", "direction": "higher_better", "weight": 0.04, "is_core": True},
 
-    {"dimension": "盈利能力", "factor_name": "q_gross_margin", "label": "单季毛利率", "direction": "higher_better", "weight": 0.05, "is_core": True},
-    {"dimension": "盈利能力", "factor_name": "q_gm_yoy_change", "label": "单季毛利率同比变化", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "盈利能力", "factor_name": "q_op_margin", "label": "单季营业利润率", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "盈利能力", "factor_name": "q_np_parent_margin", "label": "单季归母净利率", "direction": "higher_better", "weight": 0.02, "is_core": True},
-    {"dimension": "盈利能力", "factor_name": "q_gm_qoq_change", "label": "单季毛利率环比变化", "direction": "higher_better", "weight": 0.01, "is_core": False},
-    {"dimension": "盈利能力", "factor_name": "op_margin_change", "label": "单季营业利润率同比变化", "direction": "higher_better", "weight": 0.01, "is_core": False},
-    {"dimension": "盈利能力", "factor_name": "q_ebit_margin", "label": "单季EBIT利润率", "direction": "higher_better", "weight": 0.01, "is_core": False},
+    {"dimension": "盈利边际", "factor_name": "q_gm_yoy_change", "label": "毛利率同比变化", "direction": "higher_better", "weight": 0.06, "is_core": True},
+    {"dimension": "盈利边际", "factor_name": "op_margin_change", "label": "营业利润率同比变化", "direction": "higher_better", "weight": 0.06, "is_core": True},
+    {"dimension": "盈利边际", "factor_name": "q_gm_qoq_change", "label": "毛利率环比变化", "direction": "higher_better", "weight": 0.04, "is_core": False},
+    {"dimension": "盈利边际", "factor_name": "q_gross_margin", "label": "单季毛利率", "direction": "lower_better", "weight": 0.02, "is_core": False},
+    {"dimension": "盈利边际", "factor_name": "q_op_margin", "label": "单季营业利润率", "direction": "lower_better", "weight": 0.02, "is_core": False},
 
-    {"dimension": "利润质量", "factor_name": "q_cfo_to_np_parent", "label": "单季经营现金流/归母净利润", "direction": "higher_better", "weight": 0.06, "is_core": True},
-    {"dimension": "利润质量", "factor_name": "ttm_cfo_to_np_parent", "label": "TTM经营现金流/TTM归母净利润", "direction": "higher_better", "weight": 0.05, "is_core": True},
-    {"dimension": "利润质量", "factor_name": "q_accruals_to_assets", "label": "单季应计项/平均总资产", "direction": "lower_better", "weight": 0.05, "is_core": True},
-    {"dimension": "利润质量", "factor_name": "ttm_cfo_to_ebit", "label": "TTM经营现金流/TTM EBIT", "direction": "higher_better", "weight": 0.02, "is_core": False},
-    {"dimension": "利润质量", "factor_name": "q_np_parent_to_np", "label": "单季归母净利润/净利润", "direction": "higher_better", "weight": 0.01, "is_core": False},
+    {"dimension": "资产效率", "factor_name": "roa_parent", "label": "归母ROA", "direction": "lower_better", "weight": 0.06, "is_core": True},
+    {"dimension": "资产效率", "factor_name": "cfo_to_assets", "label": "经营现金流/总资产", "direction": "lower_better", "weight": 0.06, "is_core": True},
+    {"dimension": "资产效率", "factor_name": "contract_liab_to_rev", "label": "合同负债/收入", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    {"dimension": "资产效率", "factor_name": "asset_turnover", "label": "总资产周转率", "direction": "lower_better", "weight": 0.04, "is_core": False},
 
-    {"dimension": "现金创造能力", "factor_name": "q_cfo_to_rev", "label": "单季经营现金流/收入", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "现金创造能力", "factor_name": "q_cfo_yoy", "label": "单季经营现金流同比", "direction": "higher_better", "weight": 0.03, "is_core": True},
-    {"dimension": "现金创造能力", "factor_name": "ytd_cfo_yoy", "label": "累计经营现金流同比", "direction": "higher_better", "weight": 0.03, "is_core": True},
-    {"dimension": "现金创造能力", "factor_name": "ttm_fcf_to_np_parent", "label": "TTM自由现金流/TTM归母净利润", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "现金创造能力", "factor_name": "capex_to_cfo", "label": "TTM资本开支/TTM经营现金流", "direction": "lower_better", "weight": 0.02, "is_core": False},
-    {"dimension": "现金创造能力", "factor_name": "cash_sales_ratio", "label": "销售收现比", "direction": "higher_better", "weight": 0.02, "is_core": False},
-    {"dimension": "现金创造能力", "factor_name": "cash_sales_yoy", "label": "销售收现同比", "direction": "higher_better", "weight": 0.01, "is_core": False},
+    {"dimension": "增长动能", "factor_name": "q_rev_qoq", "label": "单季营收环比(季调)", "direction": "higher_better", "weight": 0.06, "is_core": True},
+    {"dimension": "增长动能", "factor_name": "q_op_qoq", "label": "单季营业利润环比", "direction": "higher_better", "weight": 0.04, "is_core": False},
+    {"dimension": "增长动能", "factor_name": "q_np_parent_yoy", "label": "单季归母净利润同比", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    {"dimension": "增长动能", "factor_name": "ytd_rev_yoy", "label": "累计营业收入同比", "direction": "lower_better", "weight": 0.04, "is_core": True},
 
-    {"dimension": "资产效率与资金占用", "factor_name": "roa_parent", "label": "归母ROA", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "资产效率与资金占用", "factor_name": "cfo_to_assets", "label": "经营现金流/总资产", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "资产效率与资金占用", "factor_name": "asset_turnover", "label": "总资产周转率", "direction": "higher_better", "weight": 0.02, "is_core": False},
-    {"dimension": "资产效率与资金占用", "factor_name": "ccc", "label": "现金转换周期", "direction": "lower_better", "weight": 0.02, "is_core": False},
-    {"dimension": "资产效率与资金占用", "factor_name": "contract_liab_to_rev", "label": "合同负债/收入", "direction": "higher_better", "weight": 0.01, "is_core": False},
-
-    {"dimension": "边际变化与持续性", "factor_name": "q_rev_yoy_delta", "label": "单季收入同比变化", "direction": "higher_better", "weight": 0.03, "is_core": True},
-    {"dimension": "边际变化与持续性", "factor_name": "q_np_parent_yoy_delta", "label": "单季归母净利润同比变化", "direction": "higher_better", "weight": 0.03, "is_core": True},
-    {"dimension": "边际变化与持续性", "factor_name": "trend_consistency", "label": "趋势连续性", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "边际变化与持续性", "factor_name": "profit_cash_sync", "label": "利润与现金流同步改善度", "direction": "higher_better", "weight": 0.01, "is_core": False},
-    {"dimension": "边际变化与持续性", "factor_name": "margin_profit_sync", "label": "毛利率与利润率同步改善度", "direction": "higher_better", "weight": 0.01, "is_core": False},
-    {"dimension": "边际变化与持续性", "factor_name": "cfo_to_np_change", "label": "经营现金流/归母净利润变化", "direction": "higher_better", "weight": 0.01, "is_core": False},
+    {"dimension": "现金质量", "factor_name": "q_accruals_to_assets", "label": "应计项/总资产", "direction": "lower_better", "weight": 0.04, "is_core": True},
+    {"dimension": "现金质量", "factor_name": "ttm_fcf_to_np_parent", "label": "TTM自由现金流/归母净利", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    {"dimension": "现金质量", "factor_name": "capex_to_cfo", "label": "资本开支/经营现金流", "direction": "lower_better", "weight": 0.04, "is_core": True},
 ]
 
 DIMENSION_WEIGHTS: Dict[str, float] = {
-    "规模与增长": 0.24,
-    "盈利能力": 0.18,
-    "利润质量": 0.18,
-    "现金创造能力": 0.18,
-    "资产效率与资金占用": 0.10,
-    "边际变化与持续性": 0.12,
+    "边际改善": 0.30,
+    "盈利边际": 0.20,
+    "资产效率": 0.20,
+    "增长动能": 0.18,
+    "现金质量": 0.12,
 }
 
 SCORE_COLS = [
     "total_score",
-    "规模与增长_score",
-    "盈利能力_score",
-    "利润质量_score",
-    "现金创造能力_score",
-    "资产效率与资金占用_score",
-    "边际变化与持续性_score",
+    "边际改善_score",
+    "盈利边际_score",
+    "资产效率_score",
+    "增长动能_score",
+    "现金质量_score",
 ]
 FACTOR_COLS = [cfg["factor_name"] for cfg in FACTOR_CONFIG]
 
@@ -250,8 +230,6 @@ def read_source_table(
 
     if ts_code:
         raw = raw[raw["ts_code"].astype(str) == str(ts_code)].copy()
-    if start_date:
-        raw = raw[pd.to_numeric(raw["end_date"], errors="coerce") >= int(start_date)].copy()
 
     if not pd.api.types.is_datetime64_any_dtype(raw["end_date"]):
         raw["end_date"] = pd.to_datetime(raw["end_date"].astype(str), format="%Y%m%d", errors="coerce")
@@ -407,72 +385,65 @@ def add_factors(df: pd.DataFrame) -> pd.DataFrame:
     out["q_rev_yoy"] = yoy(out["rev_q"])
     out["q_op_yoy"] = yoy(out["op_q"])
     out["q_np_parent_yoy"] = yoy(out["np_parent_q"])
-    out["q_ebit_yoy"] = yoy(out["ebit_q"])
 
-    out["q_rev_qoq"] = qoq(out["rev_q"])
+    out["q_rev_qoq_raw"] = qoq(out["rev_q"])
+    qoq_lag4 = qoq(out["rev_q"].shift(4))
+    qoq_lag8 = qoq(out["rev_q"].shift(8))
+    qoq_lag12 = qoq(out["rev_q"].shift(12))
+    seasonal_avg = pd.concat([qoq_lag4, qoq_lag8, qoq_lag12], axis=1).mean(axis=1)
+    out["q_rev_qoq"] = out["q_rev_qoq_raw"] - seasonal_avg
+
     out["q_op_qoq"] = qoq(out["op_q"])
 
     out["ytd_rev_yoy"] = safe_div(out["rev_ytd"] - out["rev_ytd_lag4"], out["rev_ytd_lag4"].abs())
-    out["ytd_np_parent_yoy"] = safe_div(out["np_parent_ytd"] - out["np_parent_ytd_lag4"], out["np_parent_ytd_lag4"].abs())
 
     out["q_gross_margin"] = 1 - safe_div(out["cost_q"], out["rev_q"])
     out["q_gm_yoy_change"] = out["q_gross_margin"] - out["q_gross_margin"].shift(4)
     out["q_gm_qoq_change"] = out["q_gross_margin"] - out["q_gross_margin"].shift(1)
-
     out["q_op_margin"] = safe_div(out["op_q"], out["rev_q"])
     out["op_margin_change"] = out["q_op_margin"] - out["q_op_margin"].shift(4)
-    out["q_np_parent_margin"] = safe_div(out["np_parent_q"], out["rev_q"])
-    out["q_ebit_margin"] = safe_div(out["ebit_q"], out["rev_q"])
-
-    out["q_cfo_to_np_parent"] = safe_div(out["cfo_q"], out["np_parent_q"])
-    out["ttm_cfo_to_np_parent"] = safe_div(out["cfo_ttm"], out["np_parent_ttm"])
-    out["q_accruals_to_assets"] = safe_div(out["np_parent_q"] - out["cfo_q"], out["avg_assets"])
-    out["ttm_cfo_to_ebit"] = safe_div(out["cfo_ttm"], out["ebit_ttm"])
-    out["q_np_parent_to_np"] = safe_div(out["np_parent_q"], out["np_q"])
-
-    out["q_cfo_to_rev"] = safe_div(out["cfo_q"], out["rev_q"])
-    out["q_cfo_yoy"] = yoy(out["cfo_q"])
-    out["ytd_cfo_yoy"] = safe_div(out["cfo_ytd"] - out["cfo_ytd_lag4"], out["cfo_ytd_lag4"].abs())
-    out["ttm_fcf_to_np_parent"] = safe_div(out["fcf_ttm"], out["np_parent_ttm"])
-    out["capex_to_cfo"] = safe_div(out["capex_ttm"], out["cfo_ttm"])
-    out["cash_sales_ratio"] = safe_div(out["cash_sales_q"], out["rev_q"])
-    out["cash_sales_yoy"] = yoy(out["cash_sales_q"])
 
     out["roa_parent"] = safe_div(out["np_parent_ttm"], out["avg_assets"])
     out["cfo_to_assets"] = safe_div(out["cfo_ttm"], out["avg_assets"])
     out["asset_turnover"] = safe_div(out["rev_ttm"], out["avg_assets"])
-
-    out["ar_days"] = safe_div(out["accounts_receiv"], out["rev_ttm"]) * 365
-    out["inv_days"] = safe_div(out["inventories"], out["cost_ttm"]) * 365
-    out["ap_days"] = safe_div(out["accounts_pay"], out["cost_ttm"]) * 365
-    out["ccc"] = out["ar_days"] + out["inv_days"] - out["ap_days"]
     out["contract_liab_to_rev"] = safe_div(out["contract_liab"], out["rev_ttm"])
+
+    out["q_accruals_to_assets"] = safe_div(out["np_parent_q"] - out["cfo_q"], out["avg_assets"])
+    out["ttm_fcf_to_np_parent"] = safe_div(out["fcf_ttm"], out["np_parent_ttm"])
+    out["capex_to_cfo"] = safe_div(out["capex_ttm"], out["cfo_ttm"])
 
     out["q_rev_yoy_delta"] = out["q_rev_yoy"] - out["q_rev_yoy"].shift(1)
     out["q_np_parent_yoy_delta"] = out["q_np_parent_yoy"] - out["q_np_parent_yoy"].shift(1)
 
-    out["cfo_to_rev_change"] = out["q_cfo_to_rev"] - out["q_cfo_to_rev"].shift(4)
-    out["cfo_to_np_change"] = out["q_cfo_to_np_parent"] - out["q_cfo_to_np_parent"].shift(4)
+    def _rolling_pct_rank(series: pd.Series, window: int = 4) -> pd.Series:
+        def _rank_in_window(x):
+            if len(x.dropna()) < 2:
+                return np.nan
+            return (x.iloc[-1] >= x).mean() * 100
+        return series.rolling(window, min_periods=2).apply(_rank_in_window, raw=False)
 
-    out["rev_improve"] = (out["q_rev_yoy"] > out["q_rev_yoy"].shift(1)).astype(float)
-    out["np_improve"] = (out["q_np_parent_yoy"] > out["q_np_parent_yoy"].shift(1)).astype(float)
-    out["gm_improve"] = (out["q_gm_yoy_change"] > out["q_gm_yoy_change"].shift(1)).astype(float)
-    raw_consistency = (
-        out["rev_improve"].rolling(4).sum()
-        + out["np_improve"].rolling(4).sum()
-        + out["gm_improve"].rolling(4).sum()
+    out["rev_delta_rank"] = _rolling_pct_rank(out["q_rev_yoy_delta"], 4)
+    out["np_delta_rank"] = _rolling_pct_rank(out["q_np_parent_yoy_delta"], 4)
+    out["gm_change_rank"] = _rolling_pct_rank(out["q_gm_yoy_change"], 4)
+    out["trend_consistency"] = (
+        out["rev_delta_rank"] * 0.33 + out["np_delta_rank"] * 0.33 + out["gm_change_rank"] * 0.34
     )
-    out["trend_consistency"] = raw_consistency / 12 * 100
 
-    out["profit_cash_sync"] = (
-        time_series_score(out["q_np_parent_yoy_delta"], "higher_better", 12).fillna(0)
-        + time_series_score(out["cfo_to_rev_change"], "higher_better", 12).fillna(0)
-    ) / 2
+    out["cfo_to_rev_change"] = (
+        safe_div(out["cfo_q"], out["rev_q"])
+        - safe_div(out["cfo_q"].shift(4), out["rev_q"].shift(4))
+    )
+    np_delta = out["q_np_parent_yoy_delta"]
+    cfo_change = out["cfo_to_rev_change"]
+    sync_sign = np.sign(np_delta) * np.sign(cfo_change)
+    sync_magnitude = (np_delta.abs() + cfo_change.abs()) / 2
+    out["profit_cash_sync"] = sync_sign * sync_magnitude
 
-    out["margin_profit_sync"] = (
-        time_series_score(out["q_gm_yoy_change"], "higher_better", 12).fillna(0)
-        + time_series_score(out["op_margin_change"], "higher_better", 12).fillna(0)
-    ) / 2
+    gm_change = out["q_gm_yoy_change"]
+    op_change = out["op_margin_change"]
+    sync_sign2 = np.sign(gm_change) * np.sign(op_change)
+    sync_magnitude2 = (gm_change.abs() + op_change.abs()) / 2
+    out["margin_profit_sync"] = sync_sign2 * sync_magnitude2
 
     return out
 
@@ -627,7 +598,7 @@ def compute_single_stock(
     try:
         df = prepare_base_dataframe(
             ts_code=ts_code,
-            start_date=start_date,
+            start_date=None,
             limit_n_quarters=limit_n_quarters,
             excel_path=excel_path,
             stock_name=name,
@@ -638,7 +609,10 @@ def compute_single_stock(
         df = fill_missing_quarters(df)
         df = add_ytd_and_ttm(df)
         df = add_factors(df)
-        return score_dataframe(df, lookback=lookback)
+        scored = score_dataframe(df, lookback=lookback)
+        if scored is not None and start_date and not scored.empty:
+            scored = scored[scored["end_date"] >= pd.Timestamp(start_date)].copy()
+        return scored
     except Exception as e:
         logger.warning(f"[{ts_code}] 计算异常: {e}")
         return None
@@ -728,7 +702,6 @@ def run_batch_mode(args):
 
     logger.info("一次性加载 financial_quarterly_data ...")
     preloaded_data = read_source_table(
-        start_date=args.start,
         limit_n_quarters=args.recent_n,
     )
     logger.info(f"已加载 {len(preloaded_data)} 行财务数据")
