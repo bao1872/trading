@@ -408,6 +408,77 @@ def colorize_numeric_columns(df: pd.DataFrame, numeric_cols: list, custom_format
     return styler
 
 
+def colorize_numeric_columns_simple(df: pd.DataFrame, numeric_cols: list) -> pd.DataFrame:
+    """对数值列应用颜色渐变渲染（每列单独取极值，简化版）
+    
+    Args:
+        df: DataFrame数据
+        numeric_cols: 需要渲染的数值列列表
+    
+    Returns:
+        带颜色样式的 Styler 对象
+    """
+    if df.empty or not numeric_cols:
+        return df
+    
+    available_cols = [c for c in numeric_cols if c in df.columns]
+    if not available_cols:
+        return df
+
+    # 为每列单独计算颜色（基于该列的极值）
+    def get_color_for_value(val, col_min, col_max):
+        """根据值在列中的位置返回颜色"""
+        if val is None or pd.isna(val):
+            return ''
+        if col_max == col_min:
+            return 'background-color: #f0f0f0'  # 灰色（所有值相同）
+        
+        # 归一化到 0-1
+        ratio = (val - col_min) / (col_max - col_min)
+        
+        # RdYlGn 颜色映射：红色(低) -> 黄色(中) -> 绿色(高)
+        if ratio < 0.5:
+            # 红色到黄色
+            r = 255
+            g = int(255 * ratio * 2)
+            b = 0
+        else:
+            # 黄色到绿色
+            r = int(255 * (1 - ratio) * 2)
+            g = 255
+            b = 0
+        
+        return f'background-color: rgba({r}, {g}, {b}, 0.6)'
+
+    # 为每列创建样式函数
+    def make_style_func(col_name):
+        col_data = df[col_name].dropna()
+        if len(col_data) == 0:
+            col_min, col_max = 0, 0
+        else:
+            col_min, col_max = col_data.min(), col_data.max()
+        
+        def style_func(val):
+            return get_color_for_value(val, col_min, col_max)
+        return style_func
+
+    # 应用样式
+    styler = df.style
+    for col in available_cols:
+        styler = styler.map(make_style_func(col), subset=[col])
+    
+    # 格式化数值显示
+    format_dict = {}
+    for col in available_cols:
+        if col == 'VWAP偏离%':
+            format_dict[col] = '{:.2f}%'
+        else:
+            format_dict[col] = '{:.2f}'
+    
+    styler = styler.format(format_dict, subset=available_cols)
+    return styler
+
+
 def render_paginated_dataframe(df: pd.DataFrame, numeric_cols: list = None, page_size: int = 100, key: str = "", custom_formatters: dict = None):
     """分页渲染DataFrame，支持颜色渲染"""
     if df.empty:
@@ -564,7 +635,7 @@ TAB_FIELD_CONFIGS = {
                          "weekly_reversal_buy": "周线反转", "weekly_breakout_buy": "周线突破",
                          "daily_bb_width_zscore": "日线Z分", "weekly_bb_width_zscore": "周线Z分",
                          "daily_vol_zscore": "日线VolZ", "weekly_vol_zscore": "周线VolZ",
-                         "weekly_vwap_deviation": "VWAP偏移"}
+                         "weekly_vwap_deviation": "VWAP偏移", "VWAP偏离%": "VWAP偏离%"}
     },
     "股东画像": {
         "fields": ["holder_name_std", "holder_type", "quality_grade",
@@ -829,6 +900,7 @@ def load_selection_results(session, selection_date: str = None) -> pd.DataFrame:
                 weekly_bb_width_zscore,
                 daily_vol_zscore,
                 weekly_vol_zscore,
+                weekly_vwap_deviation,
                 created_at
             FROM stock_selection_results
             WHERE selection_date = :selection_date
@@ -855,6 +927,7 @@ def load_selection_results(session, selection_date: str = None) -> pd.DataFrame:
             c.weekly_breakout_buy,
             c.daily_bb_width_zscore,
             c.daily_vol_zscore,
+            c.weekly_vwap_deviation,
             c.created_at,
             -- 如果当前日期没有周线数据，用最近一次周线买点的值填充
             COALESCE(c.weekly_bb_width_zscore, lw.weekly_bb_width_zscore) as weekly_bb_width_zscore,
@@ -997,6 +1070,89 @@ def remove_from_watchlist(session, ts_code: str) -> bool:
     except Exception:
         session.rollback()
         return False
+
+
+def get_kline_data_from_db(ts_code: str, freq: str = 'd', bars: int = 60) -> pd.DataFrame:
+    """从数据库获取K线数据
+
+    Args:
+        ts_code: 股票代码，如 "000001.SZ"
+        freq: 周期，'d'=日线, 'w'=周线
+        bars: 获取最近多少根K线
+
+    Returns:
+        DataFrame with columns: open, high, low, close, volume
+    """
+    try:
+        df = load_k_data(ts_code, freq=freq)
+        if df.empty:
+            return pd.DataFrame()
+
+        # 取最近 bars 根
+        df = df.tail(bars).copy()
+
+        # 确保列名正确
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        for col in required_cols:
+            if col not in df.columns:
+                # 尝试小写
+                col_lower = col.lower()
+                if col_lower in df.columns:
+                    df[col] = df[col_lower]
+
+        return df
+    except Exception as e:
+        print(f"获取K线数据失败 {ts_code} {freq}: {e}")
+        return pd.DataFrame()
+
+
+def pine_ema(series: pd.Series, length: int) -> pd.Series:
+    """Pine Script风格的EMA计算"""
+    alpha = 2 / (length + 1)
+    return series.ewm(span=length, adjust=False).mean()
+
+
+def cross_over(series1: pd.Series, series2: pd.Series) -> pd.Series:
+    """判断series1上穿series2"""
+    return (series1 > series2) & (series1.shift(1) <= series2.shift(1))
+
+
+def cross_under(series1: pd.Series, series2: pd.Series) -> pd.Series:
+    """判断series1下穿series2"""
+    return (series1 < series2) & (series1.shift(1) >= series2.shift(1))
+
+
+def calculate_bsm_indicators(df: pd.DataFrame, rapida: int = 8, lenta: int = 26,
+                              stdv: float = 0.8, signal_len: int = 9) -> pd.DataFrame:
+    """计算BSM指标（Bollinguer sobre Macd）
+
+    Args:
+        df: DataFrame with columns: open, high, low, close
+        rapida: 快线EMA周期，默认8
+        lenta: 慢线EMA周期，默认26
+        stdv: 标准差倍数，默认0.8
+        signal_len: 信号线周期，默认9
+
+    Returns:
+        DataFrame with added columns: bbmacd, banda_supe, banda_inf
+    """
+    if df.empty or 'close' not in df.columns:
+        return df
+
+    out = df.copy()
+
+    # 计算MACD
+    out["m_rapida"] = pine_ema(out["close"], rapida)
+    out["m_lenta"] = pine_ema(out["close"], lenta)
+    out["bbmacd"] = out["m_rapida"] - out["m_lenta"]
+
+    # 计算布林带
+    out["avg"] = pine_ema(out["bbmacd"], signal_len)
+    out["sdev"] = out["bbmacd"].rolling(signal_len, min_periods=signal_len).std(ddof=1)
+    out["banda_supe"] = out["avg"] + stdv * out["sdev"]
+    out["banda_inf"] = out["avg"] - stdv * out["sdev"]
+
+    return out
 
 
 DARK_THEME = {
@@ -1699,6 +1855,13 @@ def render_stock_picker_page(session, sidebar):
             else:
                 concepts_display = '-'
 
+            # VWAP偏离百分比（保持数值类型用于正确排序）
+            vwap_deviation = row.get('weekly_vwap_deviation')
+            if pd.notna(vwap_deviation) and vwap_deviation is not None:
+                vwap_pct_value = float(vwap_deviation) * 100  # 转为百分比数值
+            else:
+                vwap_pct_value = None
+
             display_data.append({
                 '代码': row['ts_code'],
                 '名称': row.get('stock_name', ''),
@@ -1708,19 +1871,65 @@ def render_stock_picker_page(session, sidebar):
                 '周线Z分': row.get('weekly_bb_width_zscore') if pd.notna(row.get('weekly_bb_width_zscore')) else None,
                 '日线VolZ': row.get('daily_vol_zscore') if pd.notna(row.get('daily_vol_zscore')) else None,
                 '周线VolZ': row.get('weekly_vol_zscore') if pd.notna(row.get('weekly_vol_zscore')) else None,
+                'VWAP偏离%': vwap_pct_value,
             })
 
         display_df = pd.DataFrame(display_data)
 
-        # 配置列格式：数值列保持数值类型用于正确排序，同时控制显示精度
-        column_config = {
-            '日线Z分': st.column_config.NumberColumn(format="%.2f"),
-            '周线Z分': st.column_config.NumberColumn(format="%.2f"),
-            '日线VolZ': st.column_config.NumberColumn(format="%.2f"),
-            '周线VolZ': st.column_config.NumberColumn(format="%.2f"),
-        }
+        # 定义需要颜色渲染的数值列（后5列）
+        color_cols = ['日线Z分', '周线Z分', '日线VolZ', '周线VolZ', 'VWAP偏离%']
 
-        st.dataframe(display_df, use_container_width=True, hide_index=True, column_config=column_config)
+        # 使用颜色渲染显示，并支持选中
+        selected_stock = None
+        if not display_df.empty:
+            styled_df = colorize_numeric_columns_simple(display_df, color_cols)
+            event = st.dataframe(
+                styled_df,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row"
+            )
+            # 获取选中行
+            if event.selection.rows:
+                selected_idx = event.selection.rows[0]
+                selected_stock = display_df.iloc[selected_idx]
+        else:
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+        # 显示选中股票的详情（周线/日线K线图）
+        if selected_stock is not None:
+            ts_code = selected_stock['代码']
+            stock_name = selected_stock['名称']
+
+            with st.expander(f"📊 {stock_name} ({ts_code}) 详情", expanded=True):
+                tab_weekly, tab_daily = st.tabs(["📈 周线", "📈 日线"])
+
+                with tab_weekly:
+                    with st.spinner("加载周线数据..."):
+                        weekly_df = get_kline_data_from_db(ts_code, 'w', bars=250)
+                        if not weekly_df.empty:
+                            weekly_df = calculate_bsm_indicators(weekly_df)
+                            fig_w = build_kline_chart_with_bsm(
+                                weekly_df, f"{stock_name} 周线",
+                                show_vwap=True, show_bsm=True
+                            )
+                            st.plotly_chart(fig_w, use_container_width=True, key=f"weekly_{ts_code}")
+                        else:
+                            st.warning("⚠️ 无周线数据")
+
+                with tab_daily:
+                    with st.spinner("加载日线数据..."):
+                        daily_df = get_kline_data_from_db(ts_code, 'd', bars=250)
+                        if not daily_df.empty:
+                            daily_df = calculate_bsm_indicators(daily_df)
+                            fig_d = build_kline_chart_with_bsm(
+                                daily_df, f"{stock_name} 日线",
+                                show_vwap=True, show_bsm=True
+                            )
+                            st.plotly_chart(fig_d, use_container_width=True, key=f"daily_{ts_code}")
+                        else:
+                            st.warning("⚠️ 无日线数据")
 
 
 # ==================== 原自选股功能（保留备用） ====================

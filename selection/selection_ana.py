@@ -16,11 +16,12 @@ Side Effects: 写入 stock_selection_results 表
 保存条件：任意BSM买点信号为True
   - 日线反转（日线一类）：BBMACD上穿下轨
   - 日线突破（日线二类）：BBMACD上穿上轨
-  - 周线反转（周线一类）：BBMACD上穿下轨
+  - 周线反转（周线一类）：BBMACD形成V型（局部低点后回升）+ DSA dir=1 + 收盘价<=VWAP*1.10
   - 周线突破（周线二类）：BBMACD上穿上轨
 
 必要条件：周线 bbmacd >= banda_inf
-  - 周线买点天然满足（因为上穿时下穿下轨时bbmacd必>=banda_inf）
+  - 周线突破天然满足（因为上穿上轨时bbmacd必>=banda_inf）
+  - 周线反转需单独检查（V型形态不要求上穿下轨）
   - 日线买点也需满足此条件（通过weekly_bbmacd判断）
   - 无论日线还是周线买点，都必须满足此必要条件
 
@@ -31,9 +32,10 @@ Side Effects: 写入 stock_selection_results 表
 选股日期只是标记，实际数据到"选股日期当天或之前最后一个交易日"：
   - 选股日期=2026-04-13(周一) → 数据到2026-04-13（当天是交易日）
 
-周线只在周五收盘后更新：
-  - 周一~周四：无周线数据 → 只计算日线买点（仍需满足必要条件）
-  - 周五：有周线数据 → 日线+周线买点都计算（都需满足必要条件）
+周线数据每天更新：
+  - 通过 python app/build_dataset.py --update --period w 每天更新本周数据
+  - 有周线数据时：日线+周线买点都计算（都需满足必要条件）
+  - 无周线数据时：只计算日线买点（仍需满足必要条件）
 
 【保存逻辑】
 
@@ -53,7 +55,14 @@ from sqlalchemy import create_engine, text
 import pandas as pd
 import numpy as np
 from datetime import datetime, date
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
+
+try:
+    from pytdx.hq import TdxHq_API
+    from pytdx.params import TDXParams
+except Exception:
+    TdxHq_API = None
+    TDXParams = None
 
 # 从 bbmacd_viewer 导入核心计算逻辑（SSOT原则）
 from features.bbmacd_viewer import compute_bbmacd
@@ -68,6 +77,197 @@ except ImportError:
 engine = create_engine(DATABASE_URL)
 
 SELECTION_TABLE = "stock_selection_results"
+
+# 为了与 merged_dsa_atr_rope_bb_factors.py 的 HTML 输出口径保持一致，
+# DSA 计算使用更长历史窗口，而不是仅取 120 根。
+# HTML 默认 fetch-bars=1200，因此这里也对齐为 1200。
+DSA_HISTORY_BARS = 1200
+DSA_HTML_CFG = DSAConfig(prd=50, base_apt=20.0, use_adapt=False, vol_bias=10.0, atr_len=50)
+
+
+
+MARKET_DATA_SOURCE = "db"
+PYTDX_SERVERS: List[Tuple[str, int]] = [
+    ("119.147.212.81", 7709),
+    ("119.147.164.60", 7709),
+    ("14.215.128.18", 7709),
+    ("14.215.128.116", 7709),
+    ("101.133.156.38", 7709),
+    ("114.80.149.19", 7709),
+    ("115.238.90.165", 7709),
+    ("123.125.108.23", 7709),
+    ("180.153.18.170", 7709),
+    ("202.108.253.131", 7709),
+]
+
+
+def normalize_ts_code(ts_code: str) -> str:
+    return str(ts_code).strip().upper().split('.')[0]
+
+
+def normalize_freq(freq: str) -> str:
+    """与 merged_dsa_atr_rope_bb_factors.py 保持一致"""
+    f = str(freq).strip().lower()
+    if f in {"d", "1d", "day", "daily", "101"}:
+        return "d"
+    if f in {"w", "1w", "week", "weekly"}:
+        return "w"
+    if f in {"m", "mo", "month", "monthly"}:
+        return "mo"
+    if f in {"60", "60m", "1h"}:
+        return "60m"
+    if f in {"30", "30m"}:
+        return "30m"
+    if f in {"15", "15m"}:
+        return "15m"
+    if f in {"5", "5m"}:
+        return "5m"
+    if f in {"1", "1m"}:
+        return "1m"
+    raise ValueError(f"不支持的频率: {freq}")
+
+
+def _category_from_freq(freq: str) -> int:
+    """与 merged_dsa_atr_rope_bb_factors.py 保持一致"""
+    if TDXParams is None:
+        raise RuntimeError("未安装 pytdx，无法使用 pytdx 行情源")
+    f = normalize_freq(freq)
+    return {
+        "d": TDXParams.KLINE_TYPE_RI_K,
+        "w": TDXParams.KLINE_TYPE_WEEKLY,
+        "mo": TDXParams.KLINE_TYPE_MONTHLY,
+        "60m": TDXParams.KLINE_TYPE_1HOUR,
+        "30m": TDXParams.KLINE_TYPE_30MIN,
+        "15m": TDXParams.KLINE_TYPE_15MIN,
+        "5m": TDXParams.KLINE_TYPE_5MIN,
+        "1m": TDXParams.KLINE_TYPE_1MIN,
+    }[f]
+
+
+def _market_from_symbol(symbol: str) -> int:
+    """与 merged_dsa_atr_rope_bb_factors.py 保持一致"""
+    symbol = normalize_ts_code(symbol)
+    return 1 if str(symbol).startswith(("5", "6", "9")) else 0
+
+
+def connect_pytdx() -> TdxHq_API:
+    """与 merged_dsa_atr_rope_bb_factors.py 保持一致"""
+    if TdxHq_API is None:
+        raise RuntimeError("未安装 pytdx，无法使用 pytdx 行情源")
+    errors: List[str] = []
+    for host, port in PYTDX_SERVERS:
+        try:
+            api = TdxHq_API(raise_exception=True, auto_retry=True)
+            if api.connect(host, port):
+                return api
+        except Exception as exc:
+            errors.append(f"{host}:{port} {exc}")
+    raise RuntimeError("pytdx 连接失败: " + "; ".join(errors[-5:]))
+
+
+def _fetch_kline_pytdx_raw(symbol: str, freq: str, count: int) -> pd.DataFrame:
+    """直接复用 merged_dsa_atr_rope_bb_factors.py 的抓数逻辑，不加任何额外口径。"""
+    api = connect_pytdx()
+    symbol = normalize_ts_code(symbol)
+    try:
+        cat = _category_from_freq(freq)
+        mkt = _market_from_symbol(symbol)
+        size = 800
+        frames: List[pd.DataFrame] = []
+        start = 0
+        target = max(int(count), 300)
+        while start < target + size:
+            recs = api.get_security_bars(cat, mkt, symbol, start, size)
+            if not recs:
+                break
+            d = pd.DataFrame(recs)
+            if "datetime" in d.columns:
+                d["datetime"] = pd.to_datetime(d["datetime"]).dt.tz_localize(None)
+            else:
+                d["datetime"] = pd.to_datetime(
+                    d[["year", "month", "day", "hour", "minute"]].astype(int)
+                )
+            if "vol" in d.columns:
+                d = d.rename(columns={"vol": "volume"})
+            if "amount" not in d.columns:
+                d["amount"] = np.nan
+            keep = ["datetime", "open", "high", "low", "close", "volume", "amount"]
+            frames.append(d[keep].sort_values("datetime"))
+            if len(recs) < size:
+                break
+            start += size
+        if not frames:
+            raise RuntimeError("pytdx 无数据")
+        out = (
+            pd.concat(frames)
+            .sort_values("datetime")
+            .drop_duplicates(subset=["datetime"], keep="last")
+            .tail(count)
+            .set_index("datetime")
+        )
+        return out.astype(float)
+    finally:
+        try:
+            api.disconnect()
+        except Exception:
+            pass
+
+
+def fetch_kline_pytdx(ts_code: str, freq: str, count: int, end_date: Optional[date] = None) -> pd.DataFrame:
+    """
+    先按 merged_dsa_atr_rope_bb_factors.py 的原始逻辑抓取，再在外层按 end_date 截断。
+    这样当 end_date 为空时，结果与指标脚本保持完全一致。
+    """
+    raw = _fetch_kline_pytdx_raw(ts_code, freq, count if end_date is None else max(int(count), 3000))
+    if end_date is not None:
+        raw = raw[raw.index.date <= end_date]
+    raw = raw.tail(count).copy()
+    raw.index.name = "bar_time"
+    if "amount" in raw.columns:
+        raw = raw.drop(columns=["amount"])
+    return raw
+
+
+def get_kline_data_db(ts_code: str, freq: str, bars: int = 120, end_date: Optional[date] = None) -> pd.DataFrame:
+    """从数据库获取K线数据（默认120根）"""
+    symbol = normalize_ts_code(ts_code)
+    if end_date is not None:
+        sql = """
+            SELECT bar_time, open, high, low, close, volume
+            FROM stock_k_data
+            WHERE (ts_code = :ts_code OR ts_code = :ts_code_sh OR ts_code = :ts_code_sz) AND freq = :freq
+            AND DATE(bar_time) <= :end_date
+            ORDER BY bar_time DESC
+            LIMIT :bars
+        """
+        params = {
+            'ts_code': symbol,
+            'ts_code_sh': f'{symbol}.SH',
+            'ts_code_sz': f'{symbol}.SZ',
+            'freq': freq,
+            'bars': bars,
+            'end_date': end_date.strftime('%Y-%m-%d')
+        }
+    else:
+        sql = """
+            SELECT bar_time, open, high, low, close, volume
+            FROM stock_k_data
+            WHERE (ts_code = :ts_code OR ts_code = :ts_code_sh OR ts_code = :ts_code_sz) AND freq = :freq
+            ORDER BY bar_time DESC
+            LIMIT :bars
+        """
+        params = {
+            'ts_code': symbol,
+            'ts_code_sh': f'{symbol}.SH',
+            'ts_code_sz': f'{symbol}.SZ',
+            'freq': freq,
+            'bars': bars
+        }
+
+    df = pd.read_sql(text(sql), engine, params=params)
+    if not df.empty:
+        df = df.sort_values('bar_time').set_index('bar_time')
+    return df
 
 
 def volume_zscore(vol: pd.Series, win: int = 20) -> float:
@@ -94,7 +294,7 @@ def get_stock_name(ts_code: str) -> str:
 
 
 def get_kline_data(ts_code: str, freq: str, bars: int = 120, end_date: Optional[date] = None) -> pd.DataFrame:
-    """从数据库获取K线数据（默认120根）
+    """获取K线数据（根据 MARKET_DATA_SOURCE 选择数据源）
 
     Args:
         ts_code: 股票代码
@@ -102,39 +302,10 @@ def get_kline_data(ts_code: str, freq: str, bars: int = 120, end_date: Optional[
         bars: 获取的K线数量
         end_date: 截止日期，只获取该日期及之前的K线
     """
-    if end_date is not None:
-        sql = """
-            SELECT bar_time, open, high, low, close, volume
-            FROM stock_k_data
-            WHERE ts_code = :ts_code AND freq = :freq
-            AND DATE(bar_time) <= :end_date
-            ORDER BY bar_time DESC
-            LIMIT :bars
-        """
-        params = {
-            'ts_code': ts_code,
-            'freq': freq,
-            'bars': bars,
-            'end_date': end_date.strftime('%Y-%m-%d')
-        }
+    if MARKET_DATA_SOURCE == "pytdx":
+        return fetch_kline_pytdx(ts_code, freq, bars, end_date)
     else:
-        sql = """
-            SELECT bar_time, open, high, low, close, volume
-            FROM stock_k_data
-            WHERE ts_code = :ts_code AND freq = :freq
-            ORDER BY bar_time DESC
-            LIMIT :bars
-        """
-        params = {
-            'ts_code': ts_code,
-            'freq': freq,
-            'bars': bars
-        }
-
-    df = pd.read_sql(text(sql), engine, params=params)
-    if not df.empty:
-        df = df.sort_values('bar_time').set_index('bar_time')
-    return df
+        return get_kline_data_db(ts_code, freq, bars, end_date)
 
 
 def has_weekly_data_for_date(target_date: date) -> bool:
@@ -195,6 +366,54 @@ def cross_over(a: pd.Series, b: pd.Series) -> pd.Series:
     """判断上穿：当日>基准且前一日<=基准"""
     return (a > b) & (a.shift(1) <= b.shift(1))
 
+def get_html_consistent_dsa_snapshot(
+    ts_code: str,
+    freq: str,
+    selection_date: Optional[date],
+    bars: int = DSA_HISTORY_BARS,
+    cfg: DSAConfig = DSA_HTML_CFG,
+) -> Dict[str, Optional[float]]:
+    """
+    按 HTML 指标脚本口径提取 DSA 最新快照。
+
+    对齐点：
+    1. 使用同一个 compute_dsa 核心函数；
+    2. 使用与 HTML 相同的默认 DSA 参数；
+    3. 使用更长历史窗口（默认 1200 根）以对齐 HTML 的 fetch-bars。
+
+    Returns:
+        {
+            'dir': int|None,
+            'vwap': float|None,
+            'bar_time': Timestamp|None,
+            'bars_used': int,
+        }
+    """
+    df = get_kline_data(ts_code, freq, bars=bars, end_date=selection_date)
+    if df.empty:
+        return {'dir': None, 'vwap': None, 'bar_time': None, 'bars_used': 0}
+
+    try:
+        dsa_df, _, _ = compute_dsa(df, cfg)
+    except Exception:
+        return {'dir': None, 'vwap': None, 'bar_time': df.index[-1], 'bars_used': len(df)}
+
+    if dsa_df.empty:
+        return {'dir': None, 'vwap': None, 'bar_time': df.index[-1], 'bars_used': len(df)}
+
+    latest = dsa_df.iloc[-1]
+    raw_dir = latest.get('DSA_DIR')
+    raw_vwap = latest.get('DSA_VWAP')
+
+    dir_value = None if pd.isna(raw_dir) else int(raw_dir)
+    vwap_value = None if pd.isna(raw_vwap) else float(raw_vwap)
+    return {
+        'dir': dir_value,
+        'vwap': vwap_value,
+        'bar_time': dsa_df.index[-1],
+        'bars_used': len(df),
+    }
+
 
 def process_stock_bsm(ts_code: str, selection_date: date, has_weekly: bool) -> Optional[Dict]:
     """
@@ -230,18 +449,36 @@ def process_stock_bsm(ts_code: str, selection_date: date, has_weekly: bool) -> O
             weekly_close = weekly_df['close'].iloc[-1]
 
             if weekly_bbmacd['bbmacd'].iloc[-1] >= weekly_bbmacd['banda_inf'].iloc[-1]:
-                weekly_reversal = cross_over(weekly_bbmacd['bbmacd'], weekly_bbmacd['banda_inf']).iloc[-1]
-                weekly_breakout = cross_over(weekly_bbmacd['bbmacd'], weekly_bbmacd['banda_supe']).iloc[-1]
+                # 计算周线DSA（按 HTML 指标脚本口径）
+                dsa_snapshot = get_html_consistent_dsa_snapshot(
+                    ts_code=ts_code,
+                    freq='w',
+                    selection_date=selection_date,
+                )
+                current_dir = dsa_snapshot['dir']
+                current_vwap = dsa_snapshot['vwap']
 
-                # 计算周线DSA（两个信号类型都可能用到）
-                # 使用 merged_dsa_atr_rope_bb_factors 中的 compute_dsa
-                try:
-                    dsa_df, pivot_labels, segments = compute_dsa(weekly_df, DSAConfig())
-                    current_dir = dsa_df['DSA_DIR'].iloc[-1]
-                    current_vwap = dsa_df['DSA_VWAP'].iloc[-1]
-                except Exception:
-                    current_dir = None
-                    current_vwap = None
+                # 周线反转：V型形态（局部低点后回升），不要求上穿下轨
+                bbmacd_vals = weekly_bbmacd['bbmacd'].values
+                has_v_shape = False
+                if len(bbmacd_vals) >= 3:
+                    t_2 = bbmacd_vals[-3]
+                    t_1 = bbmacd_vals[-2]
+                    t = bbmacd_vals[-1]
+                    # V型形态：前一周是最低点，本周回升
+                    has_v_shape = (t_2 > t_1) and (t > t_1)
+
+                # 周线反转额外条件：
+                # 1. DSA dir = 1
+                # 2. BBMACD形成V型（局部低点后回升）
+                # 3. 收盘价 <= DSA VWAP * 1.10
+                weekly_reversal = has_v_shape and (current_dir == 1)
+                if weekly_reversal and current_vwap is not None:
+                    if weekly_close > current_vwap * 1.10:
+                        weekly_reversal = False
+
+                # 周线突破：上穿上轨
+                weekly_breakout = cross_over(weekly_bbmacd['bbmacd'], weekly_bbmacd['banda_supe']).iloc[-1]
 
                 # 周线突破额外条件：
                 # 1. DSA dir = -1
@@ -251,31 +488,6 @@ def process_stock_bsm(ts_code: str, selection_date: date, has_weekly: bool) -> O
                         weekly_breakout = False
                     elif current_vwap is not None and weekly_close < current_vwap * 0.85:
                         weekly_breakout = False
-
-                # 周线反转额外条件：
-                # 1. DSA dir = 1
-                # 2. BBMACD形态 (t-2 > t-1 且 t > t-1)
-                # 3. 收盘价 <= DSA VWAP * 1.10
-                if weekly_reversal:
-                    # 条件1: DSA dir = 1
-                    if current_dir != 1:
-                        weekly_reversal = False
-                    else:
-                        # 条件2: BBMACD形态
-                        bbmacd_vals = weekly_bbmacd['bbmacd'].values
-                        if len(bbmacd_vals) >= 3:
-                            t_2 = bbmacd_vals[-3]
-                            t_1 = bbmacd_vals[-2]
-                            t = bbmacd_vals[-1]
-                            if not (t_2 > t_1 and t > t_1):
-                                weekly_reversal = False
-                        else:
-                            weekly_reversal = False
-
-                        # 条件3: 收盘价 <= DSA VWAP * 1.10
-                        if weekly_reversal and current_vwap is not None:
-                            if weekly_close > current_vwap * 1.10:
-                                weekly_reversal = False
 
                 # 计算周线VWAP偏移比率（仅当有周线信号时）
                 weekly_vwap_deviation = None
@@ -295,6 +507,9 @@ def process_stock_bsm(ts_code: str, selection_date: date, has_weekly: bool) -> O
                         'weekly_vol_zscore': volume_zscore(weekly_df['volume'], win=20),
                         'daily_bar_time': daily_bar_time,
                         'weekly_bar_time': weekly_bar_time,
+                        'weekly_dsa_dir': current_dir,
+                        'weekly_dsa_vwap': current_vwap,
+                        'weekly_dsa_bars_used': dsa_snapshot['bars_used'],
                         'weekly_vwap_deviation': weekly_vwap_deviation,
                     }
     else:
@@ -318,6 +533,9 @@ def process_stock_bsm(ts_code: str, selection_date: date, has_weekly: bool) -> O
                         'weekly_vol_zscore': None,
                         'daily_bar_time': daily_bar_time,
                         'weekly_bar_time': None,
+                        'weekly_dsa_dir': None,
+                        'weekly_dsa_vwap': None,
+                        'weekly_dsa_bars_used': 0,
                     }
 
     return None
@@ -325,7 +543,7 @@ def process_stock_bsm(ts_code: str, selection_date: date, has_weekly: bool) -> O
 
 def detect_bsm_signals(ts_code: str, selection_date: Optional[date] = None) -> Dict:
     """
-    检测BSM买点信号
+    检测BSM买点信号（与process_stock_bsm保持一致的逻辑）
     Args:
         ts_code: 股票代码
         selection_date: 选股日期，用于获取该日期之前的数据
@@ -363,11 +581,12 @@ def detect_bsm_signals(ts_code: str, selection_date: Optional[date] = None) -> D
         if breakout_signal.iloc[-1]:
             signals['daily_breakout_buy'] = True
 
-    # 周线信号（只有存在周线数据时才计算，周线只在周五收盘后更新）
+    # 周线信号（只有存在周线数据时才计算）
     if has_weekly_data_for_date(selection_date):
         weekly_df = get_kline_data(ts_code, 'w', bars=120, end_date=selection_date)
         if len(weekly_df) >= 26:
             weekly_bbmacd = compute_bbmacd(weekly_df)
+            weekly_close = weekly_df['close'].iloc[-1]
 
             # 记录实际使用的周线日期
             signals['weekly_bar_time'] = weekly_df.index[-1]
@@ -375,15 +594,44 @@ def detect_bsm_signals(ts_code: str, selection_date: Optional[date] = None) -> D
             # 周线布林带宽度Z-Score
             signals['weekly_bb_width_zscore'] = weekly_bbmacd['bb_width_zscore'].iloc[-1]
 
-            # 周线反转买点：上穿下轨
-            weekly_reversal_signal = cross_over(weekly_bbmacd['bbmacd'], weekly_bbmacd['banda_inf'])
-            if weekly_reversal_signal.iloc[-1]:
-                signals['weekly_reversal_buy'] = True
+            # 必要条件：周线bbmacd不在下轨以下
+            if weekly_bbmacd['bbmacd'].iloc[-1] >= weekly_bbmacd['banda_inf'].iloc[-1]:
+                # 获取DSA数据
+                dsa_snapshot = get_html_consistent_dsa_snapshot(
+                    ts_code=ts_code,
+                    freq='w',
+                    selection_date=selection_date,
+                )
+                current_dir = dsa_snapshot['dir']
+                current_vwap = dsa_snapshot['vwap']
 
-            # 周线突破买点：上穿上轨
-            weekly_breakout_signal = cross_over(weekly_bbmacd['bbmacd'], weekly_bbmacd['banda_supe'])
-            if weekly_breakout_signal.iloc[-1]:
-                signals['weekly_breakout_buy'] = True
+                # 周线反转：V型形态 + DSA dir=1 + 收盘价<=VWAP*1.10
+                bbmacd_vals = weekly_bbmacd['bbmacd'].values
+                has_v_shape = False
+                if len(bbmacd_vals) >= 3:
+                    t_2 = bbmacd_vals[-3]
+                    t_1 = bbmacd_vals[-2]
+                    t = bbmacd_vals[-1]
+                    has_v_shape = (t_2 > t_1) and (t > t_1)
+
+                weekly_reversal = has_v_shape and (current_dir == 1)
+                if weekly_reversal and current_vwap is not None:
+                    if weekly_close > current_vwap * 1.10:
+                        weekly_reversal = False
+
+                if weekly_reversal:
+                    signals['weekly_reversal_buy'] = True
+
+                # 周线突破：上穿上轨 + DSA dir=-1 + 收盘价>=VWAP*0.85
+                weekly_breakout = cross_over(weekly_bbmacd['bbmacd'], weekly_bbmacd['banda_supe']).iloc[-1]
+                if weekly_breakout:
+                    if current_dir != -1:
+                        weekly_breakout = False
+                    elif current_vwap is not None and weekly_close < current_vwap * 0.85:
+                        weekly_breakout = False
+
+                if weekly_breakout:
+                    signals['weekly_breakout_buy'] = True
 
     return signals
 
@@ -570,7 +818,7 @@ def select_high_margin_stocks(selection_date: Optional[date] = None, save_to_db:
     print("=" * 80)
     print("选股条件：")
     print(f"  选股日期: {selection_date.strftime('%Y-%m-%d')}")
-    print(f"  数据来源: stock_k_data 日线数据")
+    print(f"  行情数据源: {MARKET_DATA_SOURCE}")
     print(f"  必要条件: 周线BSM不在下轨以下 (bbmacd >= banda_inf)")
     print("=" * 80)
 
@@ -644,6 +892,42 @@ def select_high_margin_stocks(selection_date: Optional[date] = None, save_to_db:
         return pd.DataFrame()
 
 
+
+def test_dsa_last_bar(ts_code: str, selection_date: date, freq: str = 'w', bars: int = DSA_HISTORY_BARS) -> int:
+    """测试指定股票最后一个 bar 的 DSA 快照，便于与 HTML 对账。"""
+    df = get_kline_data(ts_code, freq, bars=bars, end_date=selection_date)
+    if df.empty:
+        print(f"未获取到行情数据: ts_code={ts_code}, freq={freq}, selection_date={selection_date}")
+        return 1
+
+    snapshot = get_html_consistent_dsa_snapshot(
+        ts_code=ts_code,
+        freq=freq,
+        selection_date=selection_date,
+        bars=bars,
+    )
+
+    latest_close = float(df['close'].iloc[-1]) if pd.notna(df['close'].iloc[-1]) else None
+    latest_bar_time = df.index[-1]
+
+    print("\n" + "=" * 80)
+    print("DSA 最后一个 bar 测试")
+    print("=" * 80)
+    print(f"ts_code           : {ts_code}")
+    print(f"freq              : {freq}")
+    print(f"market_data_source: {MARKET_DATA_SOURCE}")
+    print(f"selection_date    : {selection_date}")
+    print(f"latest_bar_time   : {latest_bar_time}")
+    print(f"bars_used         : {snapshot['bars_used']}")
+    print(f"latest_close      : {latest_close}")
+    print(f"latest_dsa_dir    : {snapshot['dir']}")
+    print(f"latest_dsa_vwap   : {snapshot['vwap']}")
+    if snapshot['vwap'] is not None and latest_close is not None and snapshot['vwap'] != 0:
+        deviation = (latest_close - snapshot['vwap']) / snapshot['vwap']
+        print(f"close_vs_vwap_pct : {deviation:.6%}")
+    print("=" * 80)
+    return 0
+
 def parse_date(date_str: str) -> date:
     """解析日期字符串"""
     for fmt in ['%Y-%m-%d', '%Y%m%d', '%Y/%m/%d']:
@@ -671,6 +955,33 @@ def main():
         nargs='?',
         help='选股日期 (格式: YYYY-MM-DD 或 YYYYMMDD)，默认为当天'
     )
+    parser.add_argument(
+        '--test-dsa-last-bar',
+        action='store_true',
+        help='测试指定股票最后一个 bar 的 DSA dir/vwap，便于和 HTML 对账'
+    )
+    parser.add_argument(
+        '--ts-code',
+        help='测试 DSA 最后一个 bar 时使用的股票代码，例如 605016'
+    )
+    parser.add_argument(
+        '--dsa-freq',
+        default='w',
+        choices=['d', 'w'],
+        help='测试 DSA 最后一个 bar 时使用的频率，默认 w'
+    )
+    parser.add_argument(
+        '--dsa-bars',
+        type=int,
+        default=DSA_HISTORY_BARS,
+        help=f'TEST 模式下 DSA 计算使用的 bars 数，默认 {DSA_HISTORY_BARS}'
+    )
+    parser.add_argument(
+        '--market-data-source',
+        default='pytdx',
+        choices=['pytdx', 'db'],
+        help='K线行情数据源，默认 pytdx；如需回退数据库可传 db'
+    )
     
     args = parser.parse_args()
     
@@ -688,8 +999,21 @@ def main():
     print("\n" + "=" * 80)
     print("财务评分选股工具（含BSM指标筛选）")
     print(f"选股日期: {selection_date.strftime('%Y-%m-%d')}")
+    print(f"行情数据源: {MARKET_DATA_SOURCE}")
     print("=" * 80)
-    
+
+    if args.test_dsa_last_bar:
+        if not args.ts_code:
+            print("错误: 使用 --test-dsa-last-bar 时必须同时提供 --ts-code")
+            sys.exit(1)
+        exit_code = test_dsa_last_bar(
+            ts_code=args.ts_code,
+            selection_date=selection_date,
+            freq=args.dsa_freq,
+            bars=args.dsa_bars,
+        )
+        sys.exit(exit_code)
+
     df = select_high_margin_stocks(selection_date=selection_date, save_to_db=True)
 
     print("\n" + "=" * 80)

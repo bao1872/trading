@@ -461,7 +461,7 @@ def daily_update_and_selection_task():
     selection_cmd = [
         sys.executable,
         str(PROJECT_ROOT / "selection" / "selection_ana.py"),
-        "--date", today_str,
+        today_str,
     ]
     
     try:

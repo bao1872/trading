@@ -7,7 +7,6 @@
 数据规格（在 PERIOD_CONFIG 中配置）：
     - 日线：1300 bar
     - 周线：500 bar
-    - 60分钟：2000 bar
 
 保存路径：
     PostgreSQL 远程数据库 (config.DATABASE_URL)
@@ -19,7 +18,7 @@
     # 增量更新日线数据到当天
     python app/build_dataset.py --update --period d
 
-    # 增量更新周线数据到当天
+    # 增量更新周线数据（每天可运行，自动删除本周之前的数据）
     python app/build_dataset.py --update --period w
 
     # 只回补日线数据（1300 bar）
@@ -30,6 +29,12 @@
 
     # 测试模式（只处理前10只股票）
     python app/build_dataset.py --period d --limit 10
+
+周线更新逻辑：
+    - 每天都可以运行更新
+    - 更新时先删除该股票本周开始日期（周一）之前的数据
+    - 然后插入本周及之后的最新数据
+    - 确保周线数据始终最新且不会重复
 
 注意：
     这是一个耗时操作，只需要运行一次
@@ -45,9 +50,13 @@ from typing import Dict
 import pandas as pd
 from tqdm import tqdm
 
+# 确保项目根目录在 Python 路径中（支持 systemd 服务运行）
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if base_dir not in sys.path:
     sys.path.insert(0, base_dir)
+
+# 切换到项目根目录（确保相对路径正确）
+os.chdir(base_dir)
 
 from datasource.pytdx_client import connect_pytdx, get_kline_data
 from datasource.database import get_session, bulk_upsert
@@ -88,7 +97,7 @@ def _code_to_symbol(code: str) -> str:
     return f"{code}.SZ"
 
 
-def save_to_database(session, data_cache: Dict[str, Dict], freq: str):
+def save_to_database(session, data_cache: Dict[str, Dict], freq: str, delete_before_week_start: bool = False):
     """
     将数据缓存保存到数据库
 
@@ -96,9 +105,42 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str):
         session: 数据库会话
         data_cache: 数据字典 {code: {'name': xxx, 'data': DataFrame}}
         freq: 周期 ('d', 'w', '60m')
+        delete_before_week_start: 是否删除本周开始日期之前的数据（仅对周线有效）
     """
+    from datetime import timedelta
+    from sqlalchemy import text
+
     db_freq_map = {'d': 'd', 'w': 'w', '60': '60m'}
     db_freq = db_freq_map.get(freq, freq)
+
+    # 周线更新：先删除本周的数据（用于重新插入本周最新数据）
+    if delete_before_week_start and db_freq == 'w':
+        today = pd.Timestamp.now().normalize()
+        week_start = today - timedelta(days=today.weekday())  # 本周一
+        week_end = week_start + timedelta(days=7)  # 下周一
+        week_start_str = week_start.strftime("%Y-%m-%d")
+        week_end_str = week_end.strftime("%Y-%m-%d")
+
+        for code in data_cache.keys():
+            ts_code = _code_to_symbol(code)
+            try:
+                # 只删除本周的数据（本周一到下周一之前）
+                delete_sql = text("""
+                    DELETE FROM stock_k_data 
+                    WHERE ts_code = :ts_code AND freq = 'w' 
+                    AND bar_time >= :week_start AND bar_time < :week_end
+                """)
+                result = session.execute(delete_sql, {
+                    "ts_code": ts_code, 
+                    "week_start": week_start_str,
+                    "week_end": week_end_str
+                })
+                if result.rowcount > 0:
+                    print(f"    删除 {ts_code} 本周数据: {result.rowcount} 条")
+                session.commit()
+            except Exception as e:
+                print(f"    删除 {ts_code} 本周数据失败: {e}")
+                session.rollback()
 
     all_dfs = []
     for code, stock_data in tqdm(data_cache.items(), desc=f"整理{freq}"):
@@ -120,13 +162,13 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str):
         df_for_db = df.reset_index(drop=True)
         df_for_db = df_for_db[["ts_code", "freq", "bar_time", "open", "high", "low", "close", "volume"]]
         df_for_db["bar_time"] = pd.to_datetime(df_for_db["bar_time"])
-        
+
         # 日线和周线只保存日期（不带时间）
         if db_freq in ('d', 'w'):
             df_for_db["bar_time"] = df_for_db["bar_time"].dt.strftime("%Y-%m-%d")
         else:
             df_for_db["bar_time"] = df_for_db["bar_time"].dt.strftime("%Y-%m-%d %H:%M:%S")
-        
+
         all_dfs.append(df_for_db)
 
     if not all_dfs:
@@ -219,14 +261,20 @@ def fetch_and_save_data(cache_df: pd.DataFrame, bar_type: str, bar_count: int, s
 def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int, force: bool = False):
     """
     增量更新数据集：拉取从数据库最新日期到今天的所有缺失数据
-    
-    周线更新逻辑（每周五15:10定时运行）：
-    - 不管是否是节假日，直接尝试获取数据
-    - 获取每只股票数据库中最后周线日期，回补到最新
-    - 如果pytdx没有新数据，跳过不保存
+
+    日线更新逻辑：
+    - 获取最近30根日线数据
+    - 只保留比数据库最新的数据
+    - 使用 upsert 保存
+
+    周线更新逻辑（每天可运行）：
+    - 获取最近20根周线数据
+    - 只保留本周开始日期（周一）及之后的数据
+    - 先删除该股票本周之前的数据，再插入新数据
+    - 确保周线数据始终最新
 
     参数：
-        bar_type: 'd'日线, 'w'周线, '60'60分钟
+        bar_type: 'd'日线, 'w'周线
         bar_count: K 线数量上限（仅用于首次获取）
         force: 是否强制更新，忽略时间限制
     """
@@ -261,15 +309,19 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int, force:
                         stock_max_time = pd.to_datetime(stock_max_time).tz_localize(None).normalize()
 
                 if bar_type == "w":
-                    # 周线：获取最近20根，然后过滤出比数据库最新的数据
+                    # 周线：获取最近20根数据，保留本周及之后的数据
                     df = get_kline_data(api, symbol, "w", 20)
                     if df.empty:
                         continue
                     df = df.set_index("datetime")
 
-                    # 只保留比数据库最新的数据（包括当天）
-                    if stock_max_time:
-                        df = df[df.index > stock_max_time]
+                    # 计算本周开始日期（周一）
+                    from datetime import timedelta
+                    today = pd.Timestamp.now().normalize()
+                    week_start = today - timedelta(days=today.weekday())  # 本周一
+
+                    # 只保留本周及之后的数据（删除本周之前的数据）
+                    df = df[df.index >= week_start]
 
                     if df.empty:
                         continue
@@ -303,7 +355,9 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int, force:
         print(f"\n获取到 {len(data_cache)} 只股票的新数据，共 {total_new_bars} 条K线")
         print(f"正在保存到数据库...")
         with get_session() as session:
-            save_to_database(session, data_cache, bar_type)
+            # 周线更新时，先删除本周之前的数据
+            delete_before_week = (bar_type == "w")
+            save_to_database(session, data_cache, bar_type, delete_before_week_start=delete_before_week)
         print(f"\n✅ 更新完成")
     else:
         print(f"\n⚠️  无新数据需要更新")
