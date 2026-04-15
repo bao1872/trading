@@ -425,6 +425,39 @@ CREATE INDEX IF NOT EXISTS idx_smc_pullback_timeframe ON stock_smc_pullback_resu
 TABLE_DEFINITIONS["stock_smc_pullback_results"] = SMC_PULLBACK_RESULTS_TABLE
 
 
+SELECTION_RESULTS_TABLE = """
+CREATE TABLE IF NOT EXISTS stock_selection_results (
+    id BIGSERIAL PRIMARY KEY,
+    batch_id VARCHAR(32) NOT NULL,
+    selection_name VARCHAR(50) NOT NULL,
+    selection_date DATE NOT NULL,
+    ts_code VARCHAR(20) NOT NULL,
+    stock_name VARCHAR(50),
+    report_date VARCHAR(8) NOT NULL,
+    total_score FLOAT,
+    margin_score FLOAT,
+    scale_growth_score FLOAT,
+    profitability_score FLOAT,
+    profit_quality_score FLOAT,
+    cash_creation_score FLOAT,
+    asset_efficiency_score FLOAT,
+    q_rev_yoy_delta FLOAT,
+    q_np_parent_yoy_delta FLOAT,
+    trend_consistency FLOAT,
+    ann_date VARCHAR(8),
+    filter_condition JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(batch_id, ts_code)
+);
+CREATE INDEX IF NOT EXISTS idx_selection_batch_id ON stock_selection_results(batch_id);
+CREATE INDEX IF NOT EXISTS idx_selection_date ON stock_selection_results(selection_date);
+CREATE INDEX IF NOT EXISTS idx_selection_ts_code ON stock_selection_results(ts_code);
+CREATE INDEX IF NOT EXISTS idx_selection_report_date ON stock_selection_results(report_date);
+CREATE INDEX IF NOT EXISTS idx_selection_margin_score ON stock_selection_results(margin_score);
+"""
+TABLE_DEFINITIONS["stock_selection_results"] = SELECTION_RESULTS_TABLE
+
+
 SMC_REVERSAL_RESULTS_TABLE = """
 CREATE TABLE IF NOT EXISTS stock_smc_reversal_results (
     id BIGSERIAL PRIMARY KEY,

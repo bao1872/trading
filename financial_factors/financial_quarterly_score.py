@@ -62,51 +62,68 @@ TARGET_TS_CODE = ""
 SOURCE_TABLE = "financial_quarterly_data"
 OUTPUT_TABLE = "stock_financial_score_pool"
 
-PRE_SCORED_FACTORS: set = set()
+PRE_SCORED_FACTORS = {"profit_cash_sync", "margin_profit_sync"}
 
 FACTOR_CONFIG: List[Dict] = [
-    {"dimension": "边际改善", "factor_name": "q_np_parent_yoy_delta", "label": "归母净利同比变化", "direction": "higher_better", "weight": 0.10, "is_core": True},
-    {"dimension": "边际改善", "factor_name": "q_rev_yoy_delta", "label": "营收同比变化", "direction": "higher_better", "weight": 0.06, "is_core": True},
-    {"dimension": "边际改善", "factor_name": "trend_consistency", "label": "趋势连续性", "direction": "higher_better", "weight": 0.06, "is_core": True},
-    {"dimension": "边际改善", "factor_name": "profit_cash_sync", "label": "利润现金流同步改善度", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "边际改善", "factor_name": "margin_profit_sync", "label": "毛利率利润率同步改善度", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    # 边际变化与持续性（权重30%，唯一正向维度，大幅提升）
+    {"dimension": "边际变化与持续性", "factor_name": "trend_consistency", "label": "趋势连续性", "direction": "higher_better", "weight": 0.15, "is_core": True},  # 从4%提升到15%
+    {"dimension": "边际变化与持续性", "factor_name": "q_rev_yoy_delta", "label": "单季收入同比变化", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    {"dimension": "边际变化与持续性", "factor_name": "q_np_parent_yoy_delta", "label": "单季归母净利润同比变化", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    {"dimension": "边际变化与持续性", "factor_name": "q_op_yoy_delta", "label": "单季营业利润同比变化", "direction": "higher_better", "weight": 0.03, "is_core": True},
+    {"dimension": "边际变化与持续性", "factor_name": "profit_cash_sync", "label": "利润与现金流同步改善度", "direction": "higher_better", "weight": 0.02, "is_core": False},
+    {"dimension": "边际变化与持续性", "factor_name": "margin_profit_sync", "label": "毛利率与利润率同步改善度", "direction": "higher_better", "weight": 0.02, "is_core": False},
 
-    {"dimension": "盈利边际", "factor_name": "q_gm_yoy_change", "label": "毛利率同比变化", "direction": "higher_better", "weight": 0.06, "is_core": True},
-    {"dimension": "盈利边际", "factor_name": "op_margin_change", "label": "营业利润率同比变化", "direction": "higher_better", "weight": 0.06, "is_core": True},
-    {"dimension": "盈利边际", "factor_name": "q_gm_qoq_change", "label": "毛利率环比变化", "direction": "higher_better", "weight": 0.04, "is_core": False},
-    {"dimension": "盈利边际", "factor_name": "q_gross_margin", "label": "单季毛利率", "direction": "lower_better", "weight": 0.02, "is_core": False},
-    {"dimension": "盈利边际", "factor_name": "q_op_margin", "label": "单季营业利润率", "direction": "lower_better", "weight": 0.02, "is_core": False},
+    # 利润质量（权重20%，应计项负向显著）
+    {"dimension": "利润质量", "factor_name": "q_accruals_to_assets", "label": "单季应计项/平均总资产", "direction": "lower_better", "weight": 0.08, "is_core": True},  # 提升权重
+    {"dimension": "利润质量", "factor_name": "q_cfo_to_np_parent", "label": "单季经营现金流/归母净利润", "direction": "higher_better", "weight": 0.05, "is_core": True},
+    {"dimension": "利润质量", "factor_name": "ttm_cfo_to_np_parent", "label": "TTM经营现金流/TTM归母净利润", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    {"dimension": "利润质量", "factor_name": "ttm_cfo_to_ebit", "label": "TTM经营现金流/TTM EBIT", "direction": "higher_better", "weight": 0.02, "is_core": False},
+    {"dimension": "利润质量", "factor_name": "q_np_parent_to_np", "label": "单季归母净利润/净利润", "direction": "higher_better", "weight": 0.01, "is_core": False},
 
-    {"dimension": "资产效率", "factor_name": "roa_parent", "label": "归母ROA", "direction": "lower_better", "weight": 0.06, "is_core": True},
-    {"dimension": "资产效率", "factor_name": "cfo_to_assets", "label": "经营现金流/总资产", "direction": "lower_better", "weight": 0.06, "is_core": True},
-    {"dimension": "资产效率", "factor_name": "contract_liab_to_rev", "label": "合同负债/收入", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "资产效率", "factor_name": "asset_turnover", "label": "总资产周转率", "direction": "lower_better", "weight": 0.04, "is_core": False},
+    # 现金创造能力（权重20%，相对稳定）
+    {"dimension": "现金创造能力", "factor_name": "q_cfo_to_rev", "label": "单季经营现金流/收入", "direction": "higher_better", "weight": 0.06, "is_core": True},
+    {"dimension": "现金创造能力", "factor_name": "q_cfo_yoy", "label": "单季经营现金流同比", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    {"dimension": "现金创造能力", "factor_name": "ytd_cfo_yoy", "label": "累计经营现金流同比", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    {"dimension": "现金创造能力", "factor_name": "ttm_fcf_to_np_parent", "label": "TTM自由现金流/TTM归母净利润", "direction": "higher_better", "weight": 0.04, "is_core": True},
+    {"dimension": "现金创造能力", "factor_name": "capex_to_cfo", "label": "TTM资本开支/TTM经营现金流", "direction": "lower_better", "weight": 0.02, "is_core": False},
 
-    {"dimension": "增长动能", "factor_name": "q_rev_qoq", "label": "单季营收环比(季调)", "direction": "higher_better", "weight": 0.06, "is_core": True},
-    {"dimension": "增长动能", "factor_name": "q_op_qoq", "label": "单季营业利润环比", "direction": "higher_better", "weight": 0.04, "is_core": False},
-    {"dimension": "增长动能", "factor_name": "q_np_parent_yoy", "label": "单季归母净利润同比", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "增长动能", "factor_name": "ytd_rev_yoy", "label": "累计营业收入同比", "direction": "lower_better", "weight": 0.04, "is_core": True},
+    # 资产效率与资金占用（权重15%，ROA负向但可反向使用）
+    {"dimension": "资产效率与资金占用", "factor_name": "roa_parent", "label": "归母ROA", "direction": "higher_better", "weight": 0.06, "is_core": True},
+    {"dimension": "资产效率与资金占用", "factor_name": "cfo_to_assets", "label": "经营现金流/总资产", "direction": "higher_better", "weight": 0.05, "is_core": True},
+    {"dimension": "资产效率与资金占用", "factor_name": "asset_turnover", "label": "总资产周转率", "direction": "higher_better", "weight": 0.02, "is_core": False},
+    {"dimension": "资产效率与资金占用", "factor_name": "ccc", "label": "现金转换周期", "direction": "lower_better", "weight": 0.02, "is_core": False},
 
-    {"dimension": "现金质量", "factor_name": "q_accruals_to_assets", "label": "应计项/总资产", "direction": "lower_better", "weight": 0.04, "is_core": True},
-    {"dimension": "现金质量", "factor_name": "ttm_fcf_to_np_parent", "label": "TTM自由现金流/归母净利", "direction": "higher_better", "weight": 0.04, "is_core": True},
-    {"dimension": "现金质量", "factor_name": "capex_to_cfo", "label": "资本开支/经营现金流", "direction": "lower_better", "weight": 0.04, "is_core": True},
+    # 规模与增长（权重10%，大幅降低，增长负向）
+    # 只保留边际变化，删除绝对增长
+    {"dimension": "规模与增长", "factor_name": "q_rev_qoq", "label": "单季营业收入环比", "direction": "higher_better", "weight": 0.03, "is_core": False},
+    {"dimension": "规模与增长", "factor_name": "q_op_qoq", "label": "单季营业利润环比", "direction": "higher_better", "weight": 0.03, "is_core": False},
+    {"dimension": "规模与增长", "factor_name": "q_np_parent_qoq", "label": "单季归母净利润环比", "direction": "higher_better", "weight": 0.02, "is_core": False},
+    {"dimension": "规模与增长", "factor_name": "q_ebit_yoy", "label": "单季EBIT同比", "direction": "higher_better", "weight": 0.02, "is_core": False},
+
+    # 盈利能力（权重5%，强烈负向，最小化权重）
+    # 只保留变化率，删除绝对值
+    {"dimension": "盈利能力", "factor_name": "q_gm_yoy_change", "label": "单季毛利率同比变化", "direction": "higher_better", "weight": 0.02, "is_core": True},
+    {"dimension": "盈利能力", "factor_name": "op_margin_change", "label": "单季营业利润率同比变化", "direction": "higher_better", "weight": 0.02, "is_core": False},
+    {"dimension": "盈利能力", "factor_name": "q_gm_qoq_change", "label": "单季毛利率环比变化", "direction": "higher_better", "weight": 0.01, "is_core": False},
 ]
 
 DIMENSION_WEIGHTS: Dict[str, float] = {
-    "边际改善": 0.30,
-    "盈利边际": 0.20,
-    "资产效率": 0.20,
-    "增长动能": 0.18,
-    "现金质量": 0.12,
+    "边际变化与持续性": 0.30,  # 从12%提升到30%（唯一正向）
+    "利润质量": 0.20,          # 保持20%（应计项负向显著）
+    "现金创造能力": 0.20,      # 保持20%（相对稳定）
+    "资产效率与资金占用": 0.15, # 从10%提升到15%（ROA负向但可反向使用）
+    "规模与增长": 0.10,        # 从24%降低到10%（增长负向）
+    "盈利能力": 0.05,          # 从18%降低到5%（强烈负向）
 }
 
 SCORE_COLS = [
     "total_score",
-    "边际改善_score",
-    "盈利边际_score",
-    "资产效率_score",
-    "增长动能_score",
-    "现金质量_score",
+    "规模与增长_score",
+    "盈利能力_score",
+    "利润质量_score",
+    "现金创造能力_score",
+    "资产效率与资金占用_score",
+    "边际变化与持续性_score",
 ]
 FACTOR_COLS = [cfg["factor_name"] for cfg in FACTOR_CONFIG]
 
@@ -166,11 +183,20 @@ def safe_div(a, b, eps=1e-8):
 
 
 def yoy(series: pd.Series, lag: int = 4) -> pd.Series:
-    return safe_div(series - series.shift(lag), series.shift(lag).abs())
+    """计算同比增长率
+    
+    正确处理亏损转盈利的情况：
+    - 去年同期-100，今年+50，改善幅度 = (50-(-100))/100 = +150%
+    - 使用 abs(上期值) 作为分母，确保改善时显示为正增长
+    """
+    prev = series.shift(lag)
+    return safe_div(series - prev, prev.abs())
 
 
 def qoq(series: pd.Series, lag: int = 1) -> pd.Series:
-    return safe_div(series - series.shift(lag), series.shift(lag).abs())
+    """计算环比增长率，逻辑同yoy"""
+    prev = series.shift(lag)
+    return safe_div(series - prev, prev.abs())
 
 
 def winsorize_series(s: pd.Series, lower=0.01, upper=0.99) -> pd.Series:
@@ -230,6 +256,8 @@ def read_source_table(
 
     if ts_code:
         raw = raw[raw["ts_code"].astype(str) == str(ts_code)].copy()
+    if start_date:
+        raw = raw[pd.to_numeric(raw["end_date"], errors="coerce") >= int(start_date)].copy()
 
     if not pd.api.types.is_datetime64_any_dtype(raw["end_date"]):
         raw["end_date"] = pd.to_datetime(raw["end_date"].astype(str), format="%Y%m%d", errors="coerce")
@@ -314,7 +342,7 @@ def prepare_base_dataframe(
     df["fiscal_year"] = df["end_date"].dt.year
     df["quarter"] = df["end_date"].dt.quarter
 
-    numeric_cols = [c for c in df.columns if c not in ["ts_code", "name", "stock_name", "end_date"]]
+    numeric_cols = [c for c in df.columns if c not in ["ts_code", "name", "stock_name", "end_date", "ann_date", "f_ann_date"]]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -385,65 +413,74 @@ def add_factors(df: pd.DataFrame) -> pd.DataFrame:
     out["q_rev_yoy"] = yoy(out["rev_q"])
     out["q_op_yoy"] = yoy(out["op_q"])
     out["q_np_parent_yoy"] = yoy(out["np_parent_q"])
+    out["q_ebit_yoy"] = yoy(out["ebit_q"])
 
-    out["q_rev_qoq_raw"] = qoq(out["rev_q"])
-    qoq_lag4 = qoq(out["rev_q"].shift(4))
-    qoq_lag8 = qoq(out["rev_q"].shift(8))
-    qoq_lag12 = qoq(out["rev_q"].shift(12))
-    seasonal_avg = pd.concat([qoq_lag4, qoq_lag8, qoq_lag12], axis=1).mean(axis=1)
-    out["q_rev_qoq"] = out["q_rev_qoq_raw"] - seasonal_avg
-
+    out["q_rev_qoq"] = qoq(out["rev_q"])
     out["q_op_qoq"] = qoq(out["op_q"])
 
     out["ytd_rev_yoy"] = safe_div(out["rev_ytd"] - out["rev_ytd_lag4"], out["rev_ytd_lag4"].abs())
+    out["ytd_np_parent_yoy"] = safe_div(out["np_parent_ytd"] - out["np_parent_ytd_lag4"], out["np_parent_ytd_lag4"].abs())
 
     out["q_gross_margin"] = 1 - safe_div(out["cost_q"], out["rev_q"])
     out["q_gm_yoy_change"] = out["q_gross_margin"] - out["q_gross_margin"].shift(4)
     out["q_gm_qoq_change"] = out["q_gross_margin"] - out["q_gross_margin"].shift(1)
+
     out["q_op_margin"] = safe_div(out["op_q"], out["rev_q"])
     out["op_margin_change"] = out["q_op_margin"] - out["q_op_margin"].shift(4)
+    out["q_np_parent_margin"] = safe_div(out["np_parent_q"], out["rev_q"])
+    out["q_ebit_margin"] = safe_div(out["ebit_q"], out["rev_q"])
+
+    out["q_cfo_to_np_parent"] = safe_div(out["cfo_q"], out["np_parent_q"])
+    out["ttm_cfo_to_np_parent"] = safe_div(out["cfo_ttm"], out["np_parent_ttm"])
+    out["q_accruals_to_assets"] = safe_div(out["np_parent_q"] - out["cfo_q"], out["avg_assets"])
+    out["ttm_cfo_to_ebit"] = safe_div(out["cfo_ttm"], out["ebit_ttm"])
+    out["q_np_parent_to_np"] = safe_div(out["np_parent_q"], out["np_q"])
+
+    out["q_cfo_to_rev"] = safe_div(out["cfo_q"], out["rev_q"])
+    out["q_cfo_yoy"] = yoy(out["cfo_q"])
+    out["ytd_cfo_yoy"] = safe_div(out["cfo_ytd"] - out["cfo_ytd_lag4"], out["cfo_ytd_lag4"].abs())
+    out["ttm_fcf_to_np_parent"] = safe_div(out["fcf_ttm"], out["np_parent_ttm"])
+    out["capex_to_cfo"] = safe_div(out["capex_ttm"], out["cfo_ttm"])
+    out["cash_sales_ratio"] = safe_div(out["cash_sales_q"], out["rev_q"])
+    out["cash_sales_yoy"] = yoy(out["cash_sales_q"])
 
     out["roa_parent"] = safe_div(out["np_parent_ttm"], out["avg_assets"])
     out["cfo_to_assets"] = safe_div(out["cfo_ttm"], out["avg_assets"])
     out["asset_turnover"] = safe_div(out["rev_ttm"], out["avg_assets"])
-    out["contract_liab_to_rev"] = safe_div(out["contract_liab"], out["rev_ttm"])
 
-    out["q_accruals_to_assets"] = safe_div(out["np_parent_q"] - out["cfo_q"], out["avg_assets"])
-    out["ttm_fcf_to_np_parent"] = safe_div(out["fcf_ttm"], out["np_parent_ttm"])
-    out["capex_to_cfo"] = safe_div(out["capex_ttm"], out["cfo_ttm"])
+    out["ar_days"] = safe_div(out["accounts_receiv"], out["rev_ttm"]) * 365
+    out["inv_days"] = safe_div(out["inventories"], out["cost_ttm"]) * 365
+    out["ap_days"] = safe_div(out["accounts_pay"], out["cost_ttm"]) * 365
+    out["ccc"] = out["ar_days"] + out["inv_days"] - out["ap_days"]
+    out["contract_liab_to_rev"] = safe_div(out["contract_liab"], out["rev_ttm"])
 
     out["q_rev_yoy_delta"] = out["q_rev_yoy"] - out["q_rev_yoy"].shift(1)
     out["q_np_parent_yoy_delta"] = out["q_np_parent_yoy"] - out["q_np_parent_yoy"].shift(1)
+    out["q_op_yoy_delta"] = out["q_op_yoy"] - out["q_op_yoy"].shift(1)
+    out["q_np_parent_qoq"] = qoq(out["np_parent_q"])
 
-    def _rolling_pct_rank(series: pd.Series, window: int = 4) -> pd.Series:
-        def _rank_in_window(x):
-            if len(x.dropna()) < 2:
-                return np.nan
-            return (x.iloc[-1] >= x).mean() * 100
-        return series.rolling(window, min_periods=2).apply(_rank_in_window, raw=False)
+    out["cfo_to_rev_change"] = out["q_cfo_to_rev"] - out["q_cfo_to_rev"].shift(4)
+    out["cfo_to_np_change"] = out["q_cfo_to_np_parent"] - out["q_cfo_to_np_parent"].shift(4)
 
-    out["rev_delta_rank"] = _rolling_pct_rank(out["q_rev_yoy_delta"], 4)
-    out["np_delta_rank"] = _rolling_pct_rank(out["q_np_parent_yoy_delta"], 4)
-    out["gm_change_rank"] = _rolling_pct_rank(out["q_gm_yoy_change"], 4)
-    out["trend_consistency"] = (
-        out["rev_delta_rank"] * 0.33 + out["np_delta_rank"] * 0.33 + out["gm_change_rank"] * 0.34
+    out["rev_improve"] = (out["q_rev_yoy"] > out["q_rev_yoy"].shift(1)).astype(float)
+    out["np_improve"] = (out["q_np_parent_yoy"] > out["q_np_parent_yoy"].shift(1)).astype(float)
+    out["gm_improve"] = (out["q_gm_yoy_change"] > out["q_gm_yoy_change"].shift(1)).astype(float)
+    raw_consistency = (
+        out["rev_improve"].rolling(4).sum()
+        + out["np_improve"].rolling(4).sum()
+        + out["gm_improve"].rolling(4).sum()
     )
+    out["trend_consistency"] = raw_consistency / 12 * 100
 
-    out["cfo_to_rev_change"] = (
-        safe_div(out["cfo_q"], out["rev_q"])
-        - safe_div(out["cfo_q"].shift(4), out["rev_q"].shift(4))
-    )
-    np_delta = out["q_np_parent_yoy_delta"]
-    cfo_change = out["cfo_to_rev_change"]
-    sync_sign = np.sign(np_delta) * np.sign(cfo_change)
-    sync_magnitude = (np_delta.abs() + cfo_change.abs()) / 2
-    out["profit_cash_sync"] = sync_sign * sync_magnitude
+    out["profit_cash_sync"] = (
+        time_series_score(out["q_np_parent_yoy_delta"], "higher_better", 12).fillna(0)
+        + time_series_score(out["cfo_to_rev_change"], "higher_better", 12).fillna(0)
+    ) / 2
 
-    gm_change = out["q_gm_yoy_change"]
-    op_change = out["op_margin_change"]
-    sync_sign2 = np.sign(gm_change) * np.sign(op_change)
-    sync_magnitude2 = (gm_change.abs() + op_change.abs()) / 2
-    out["margin_profit_sync"] = sync_sign2 * sync_magnitude2
+    out["margin_profit_sync"] = (
+        time_series_score(out["q_gm_yoy_change"], "higher_better", 12).fillna(0)
+        + time_series_score(out["op_margin_change"], "higher_better", 12).fillna(0)
+    ) / 2
 
     return out
 
@@ -526,7 +563,6 @@ def ensure_output_table_exists(engine):
                 'ts_code VARCHAR(20) NOT NULL',
                 'stock_name VARCHAR(50)',
                 'report_date VARCHAR(8) NOT NULL',
-                'ann_date VARCHAR(8)',
             ]
             for col in SCORE_COLS + FACTOR_COLS:
                 columns.append(f'"{col}" {float_type}')
@@ -540,7 +576,7 @@ def ensure_output_table_exists(engine):
             logger.info(f"表 {OUTPUT_TABLE} 创建完成")
         else:
             logger.info(f"表 {OUTPUT_TABLE} 已存在，检查并补充缺失列...")
-            all_cols = ["ann_date"] + SCORE_COLS + FACTOR_COLS
+            all_cols = SCORE_COLS + FACTOR_COLS
             if engine.dialect.name == "postgresql":
                 result = conn.execute(
                     text("SELECT column_name FROM information_schema.columns WHERE table_name = :name"),
@@ -553,10 +589,8 @@ def ensure_output_table_exists(engine):
             existing = {row[0] for row in result.fetchall()}
             missing = [c for c in all_cols if c not in existing]
             if missing:
-                varchar_cols = {"ann_date"}
                 for col in missing:
-                    col_type = "VARCHAR(8)" if col in varchar_cols else float_type
-                    conn.execute(text(f'ALTER TABLE "{OUTPUT_TABLE}" ADD COLUMN "{col}" {col_type}'))
+                    conn.execute(text(f'ALTER TABLE "{OUTPUT_TABLE}" ADD COLUMN "{col}" {float_type}'))
                 conn.commit()
                 logger.info(f"已补充 {len(missing)} 个缺失列: {missing}")
             else:
@@ -573,19 +607,6 @@ def clean_report_date(engine, report_date: str) -> int:
         return result.rowcount
 
 
-def fill_missing_quarters(df: pd.DataFrame) -> pd.DataFrame:
-    """对季度序列中的NaN做线性插值+前值填充，保证YoY/TTM计算有足够窗口"""
-    flow_cols = ["rev_q", "op_q", "np_parent_q", "cfo_q", "cost_q", "ebit_q", "fcf_q", "capex_q", "cash_sales_q"]
-    if df.empty:
-        return df
-    for col in flow_cols:
-        if col in df.columns:
-            df[col] = df.groupby("ts_code")[col].transform(
-                lambda s: s.interpolate(method="linear").ffill().bfill()
-            )
-    return df
-
-
 def compute_single_stock(
     ts_code: str,
     name: str,
@@ -598,7 +619,7 @@ def compute_single_stock(
     try:
         df = prepare_base_dataframe(
             ts_code=ts_code,
-            start_date=None,
+            start_date=start_date,
             limit_n_quarters=limit_n_quarters,
             excel_path=excel_path,
             stock_name=name,
@@ -606,44 +627,50 @@ def compute_single_stock(
         )
         if df.empty:
             return None
-        df = fill_missing_quarters(df)
         df = add_ytd_and_ttm(df)
         df = add_factors(df)
-        scored = score_dataframe(df, lookback=lookback)
-        if scored is not None and start_date and not scored.empty:
-            scored = scored[scored["end_date"] >= pd.Timestamp(start_date)].copy()
-        return scored
+        return score_dataframe(df, lookback=lookback)
     except Exception as e:
         logger.warning(f"[{ts_code}] 计算异常: {e}")
         return None
 
 
-def build_output_rows(scored: pd.DataFrame, ts_code: str, name: str) -> List[dict]:
-    """将评分DataFrame转为入库行列表，每个季度一行"""
-    rows = []
-    for _, row in scored.iterrows():
-        r = {
-            "ts_code": ts_code,
-            "stock_name": name,
-            "report_date": row["end_date"].strftime("%Y%m%d"),
-        }
-        if "f_ann_date" in row.index and pd.notna(row["f_ann_date"]):
-            try:
-                ts_val = row["f_ann_date"]
-                if isinstance(ts_val, (int, float)) and ts_val > 1e15:
-                    r["ann_date"] = pd.Timestamp(ts_val, unit="us").strftime("%Y%m%d")
-                else:
-                    r["ann_date"] = pd.Timestamp(ts_val).strftime("%Y%m%d")
-            except Exception:
-                r["ann_date"] = None
+def build_output_row(latest: pd.DataFrame, ts_code: str, name: str) -> dict:
+    row = {
+        "ts_code": ts_code,
+        "stock_name": name,
+        "report_date": latest["end_date"].iloc[0].strftime("%Y%m%d"),
+    }
+    # 添加公告日期（如果存在）
+    if "ann_date" in latest.columns:
+        ann_date_val = latest["ann_date"].iloc[0]
+        if pd.notna(ann_date_val):
+            if hasattr(ann_date_val, 'strftime'):
+                row["ann_date"] = ann_date_val.strftime("%Y%m%d")
+            elif isinstance(ann_date_val, (int, float)):
+                # 处理时间戳（纳秒、毫秒或秒）
+                ts = int(ann_date_val)
+                if ts > 1e15:  # 纳秒时间戳 (> 1千万亿)
+                    ts = ts // 1_000_000_000
+                elif ts > 1e12:  # 微秒时间戳 (> 1万亿)
+                    ts = ts // 1_000_000
+                elif ts > 1e9:  # 毫秒时间戳 (> 10亿)
+                    ts = ts // 1000
+                # 否则 ts 已经是秒级时间戳
+                from datetime import datetime
+                row["ann_date"] = datetime.fromtimestamp(ts).strftime("%Y%m%d")
+            else:
+                row["ann_date"] = str(ann_date_val)[:8]  # 取前8位
         else:
-            r["ann_date"] = None
-        for col in SCORE_COLS + FACTOR_COLS:
-            if col in row.index:
-                v = row[col]
-                r[col] = None if pd.isna(v) else float(v)
-        rows.append(r)
-    return rows
+            row["ann_date"] = None
+    else:
+        row["ann_date"] = None
+    
+    for col in SCORE_COLS + FACTOR_COLS:
+        if col in latest.columns:
+            v = latest[col].iloc[0]
+            row[col] = None if pd.isna(v) else float(v)
+    return row
 
 
 def upsert_rows(engine, rows: List[dict]) -> int:
@@ -684,8 +711,9 @@ def run_single_mode(args):
     if scored is None or scored.empty:
         raise ValueError(f"未取到 {args.ts_code} 的季频财务数据，请检查 ts_code、起始日期与数据源。")
 
-    out_rows = build_output_rows(scored, args.ts_code, args.name or args.ts_code)
-    n = upsert_rows(engine, out_rows)
+    latest = scored.iloc[[-1]].copy()
+    out_row = build_output_row(latest, args.ts_code, args.name or args.ts_code)
+    n = upsert_rows(engine, [out_row])
     logger.info(f"已写入 {n} 条评分记录到 {OUTPUT_TABLE}")
 
 
@@ -702,6 +730,7 @@ def run_batch_mode(args):
 
     logger.info("一次性加载 financial_quarterly_data ...")
     preloaded_data = read_source_table(
+        start_date=args.start,
         limit_n_quarters=args.recent_n,
     )
     logger.info(f"已加载 {len(preloaded_data)} 行财务数据")
@@ -732,8 +761,14 @@ def run_batch_mode(args):
             time.sleep(0.1)
             continue
 
-        out_rows = build_output_rows(scored, ts_code, name)
-        upsert_rows(engine, out_rows)
+        # 保存所有历史报告期的评分（而非仅最新期）
+        all_rows = []
+        for idx in range(len(scored)):
+            row_data = scored.iloc[[idx]].copy()
+            out_row = build_output_row(row_data, ts_code, name)
+            all_rows.append(out_row)
+        if all_rows:
+            upsert_rows(engine, all_rows)
         success += 1
         time.sleep(0.1)
 

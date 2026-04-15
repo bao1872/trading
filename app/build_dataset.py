@@ -16,17 +16,17 @@
     # 构建所有周期数据（首次运行）
     python app/build_dataset.py
 
-    # 增量更新所有周期到当天
-    python app/build_dataset.py --update
+    # 增量更新日线数据到当天
+    python app/build_dataset.py --update --period d
+
+    # 增量更新周线数据到当天
+    python app/build_dataset.py --update --period w
 
     # 只回补日线数据（1300 bar）
     python app/build_dataset.py --period d
 
     # 只回补周线数据（500 bar）
     python app/build_dataset.py --period w
-
-    # 只回补60分钟数据（2000 bar）
-    python app/build_dataset.py --period 60
 
     # 测试模式（只处理前10只股票）
     python app/build_dataset.py --period d --limit 10
@@ -56,7 +56,6 @@ from datasource.database import get_session, bulk_upsert
 PERIOD_CONFIG = {
     "d": {"bars": 1300, "desc": "日线"},
     "w": {"bars": 500, "desc": "周线"},
-    "60": {"bars": 2000, "desc": "60分钟"},
 }
 
 
@@ -120,7 +119,14 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str):
 
         df_for_db = df.reset_index(drop=True)
         df_for_db = df_for_db[["ts_code", "freq", "bar_time", "open", "high", "low", "close", "volume"]]
-        df_for_db["bar_time"] = pd.to_datetime(df_for_db["bar_time"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+        df_for_db["bar_time"] = pd.to_datetime(df_for_db["bar_time"])
+        
+        # 日线和周线只保存日期（不带时间）
+        if db_freq in ('d', 'w'):
+            df_for_db["bar_time"] = df_for_db["bar_time"].dt.strftime("%Y-%m-%d")
+        else:
+            df_for_db["bar_time"] = df_for_db["bar_time"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        
         all_dfs.append(df_for_db)
 
     if not all_dfs:
@@ -177,11 +183,6 @@ def fetch_and_save_data(cache_df: pd.DataFrame, bar_type: str, bar_count: int, s
                     if df.empty or len(df) < 100:
                         continue
                     df = df.set_index("datetime")
-                elif bar_type == '60':
-                    df = get_kline_data(api, symbol, "60m", bar_count)
-                    if df.empty or len(df) < 100:
-                        continue
-                    df = df.set_index("datetime")
                 else:
                     df = get_kline_data(api, symbol, bar_type, bar_count)
                     if df.empty or len(df) < 100:
@@ -215,43 +216,20 @@ def fetch_and_save_data(cache_df: pd.DataFrame, bar_type: str, bar_count: int, s
     return len(data_cache)
 
 
-def _is_market_close_for_weekly() -> bool:
-    """判断当前是否已到周五收盘后（可以更新周线）"""
-    now = datetime.now()
-    is_friday = now.weekday() == 4
-    is_after_3pm = now.hour > 15 or (now.hour == 15 and now.minute >= 5)
-    return is_friday and is_after_3pm
-
-
-def _cleanup_incomplete_week(df: pd.DataFrame) -> pd.DataFrame:
+def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int, force: bool = False):
     """
-    清理周线中未收盘的本周数据。
-    若最新周线的时间窗口起始日位于本周（且今天非周五15:00后），则删除该条，
-    后续更新时会从日线重新聚合出完整的本周周K。
-    """
-    if df.empty:
-        return df
-    latest = df.index.max()
-    latest_week_start = latest.date() - pd.Timedelta(days=latest.weekday())
-    today = datetime.today()
-    today_week_start = today.date() - pd.Timedelta(days=today.weekday())
-    if latest_week_start == today_week_start and today.weekday() < 4:
-        df = df[df.index < latest]
-    return df
-
-
-def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
-    """
-    增量更新数据集：只拉取当天的新数据
+    增量更新数据集：拉取从数据库最新日期到今天的所有缺失数据
+    
+    周线更新逻辑（每周五15:10定时运行）：
+    - 不管是否是节假日，直接尝试获取数据
+    - 获取每只股票数据库中最后周线日期，回补到最新
+    - 如果pytdx没有新数据，跳过不保存
 
     参数：
         bar_type: 'd'日线, 'w'周线, '60'60分钟
         bar_count: K 线数量上限（仅用于首次获取）
+        force: 是否强制更新，忽略时间限制
     """
-    if bar_type == "w" and not _is_market_close_for_weekly():
-        print(f"\n⏭️  周线更新跳过：仅在周五 15:00 后更新（当前 {datetime.now().strftime('%Y-%m-%d %H:%M')} 不满足条件）")
-        return
-
     from datasource.database import query_df
     from sqlalchemy import text
     import pandas as pd
@@ -260,31 +238,8 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
     db_freq = db_freq_map.get(bar_type, bar_type)
 
     print(f"\n{'='*70}")
-    print(f"🔄 增量更新 {bar_type} 数据（仅获取当天）")
+    print(f"🔄 增量更新 {bar_type} 数据")
     print(f"{'='*70}\n")
-
-    # 查询该周期最新的数据日期（不分股票，只查一条）
-    with get_session() as session:
-        result = session.execute(
-            text("SELECT MAX(bar_time) as max_time FROM stock_k_data WHERE freq = :freq"),
-            {"freq": db_freq}
-        ).fetchone()
-        db_latest_time = result[0] if result and result[0] else None
-        if db_latest_time:
-            db_latest_time = pd.to_datetime(db_latest_time).tz_localize(None).normalize()
-
-    today = pd.Timestamp.today().tz_localize(None).normalize()
-    need_full_update = (db_latest_time is None) or (db_latest_time < today)
-
-    print(f"数据库最新日期: {db_latest_time.strftime('%Y-%m-%d') if db_latest_time else '无数据'}")
-    print(f"目标日期: {today.strftime('%Y-%m-%d')}")
-    print(f"需要更新: {'是' if need_full_update else '否'}")
-
-    if not need_full_update:
-        print(f"\n✅ 数据已是最新，无需更新")
-        return
-
-    all_codes = set(cache_df['ts_code'].apply(lambda x: x.split('.')[0]))
 
     api = connect_pytdx()
     data_cache: Dict[str, Dict] = {}
@@ -294,29 +249,41 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
             symbol = row["ts_code"].split(".")[0]
             name = row["name"]
 
-            # 所有股票都只获取最近10条（足够覆盖当天）
-            fetch_count = 10
-
             try:
+                # 查询该股票最后的数据日期
+                with get_session() as session:
+                    result = session.execute(
+                        text("SELECT MAX(bar_time) as max_time FROM stock_k_data WHERE ts_code = :ts_code AND freq = :freq"),
+                        {"ts_code": row["ts_code"], "freq": db_freq}
+                    ).fetchone()
+                    stock_max_time = result[0] if result and result[0] else None
+                    if stock_max_time:
+                        stock_max_time = pd.to_datetime(stock_max_time).tz_localize(None).normalize()
+
                 if bar_type == "w":
-                    # 周线直接获取，不允许重采样
-                    df = get_kline_data(api, symbol, "w", fetch_count)
+                    # 周线：获取最近20根，然后过滤出比数据库最新的数据
+                    df = get_kline_data(api, symbol, "w", 20)
                     if df.empty:
                         continue
                     df = df.set_index("datetime")
-                    # 只保留当天的数据
-                    df = df[df.index >= today]
+
+                    # 只保留比数据库最新的数据（包括当天）
+                    if stock_max_time:
+                        df = df[df.index > stock_max_time]
+
                     if df.empty:
                         continue
-                else:
-                    period_map = {"60": "60m", "d": "d"}
-                    pytdx_period = period_map.get(bar_type, bar_type)
-                    df = get_kline_data(api, symbol, pytdx_period, fetch_count)
+
+                elif bar_type == "d":
+                    # 日线：获取最近30根
+                    df = get_kline_data(api, symbol, "d", 30)
                     if df.empty:
                         continue
                     df = df.set_index("datetime")
-                    # 只保留当天的数据
-                    df = df[df.index >= today]
+
+                    if stock_max_time:
+                        df = df[df.index > stock_max_time]
+
                     if df.empty:
                         continue
 
@@ -345,9 +312,10 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int):
 def main():
     parser = argparse.ArgumentParser(description="构建多周期数据集（保存到数据库）")
     parser.add_argument("--update", action="store_true", help="增量更新到当天")
+    parser.add_argument("--force", action="store_true", help="强制更新，忽略时间限制（如周五15:00限制）")
     parser.add_argument("--limit", type=int, default=None, help="限制处理的股票数量（用于测试）")
-    parser.add_argument("--period", type=str, choices=["d", "w", "60"], default=None,
-                        help="只回补指定周期: d=日线, w=周线, 60=60分钟")
+    parser.add_argument("--period", type=str, choices=["d", "w"], default=None,
+                        help="只回补指定周期: d=日线, w=周线")
     args = parser.parse_args()
 
     from datasource.database import query_df
@@ -364,23 +332,18 @@ def main():
     def do_daily():
         cfg = PERIOD_CONFIG["d"]
         if args.update:
-            update_dataset(cache_df, "d", cfg["bars"])
+            update_dataset(cache_df, "d", cfg["bars"], force=args.force)
         else:
             fetch_and_save_data(cache_df, "d", cfg["bars"])
 
     def do_weekly():
         cfg = PERIOD_CONFIG["w"]
         if args.update:
-            update_dataset(cache_df, "w", cfg["bars"])
+            update_dataset(cache_df, "w", cfg["bars"], force=args.force)
         else:
             fetch_and_save_data(cache_df, "w", cfg["bars"])
 
-    def do_min60():
-        cfg = PERIOD_CONFIG["60"]
-        if args.update:
-            update_dataset(cache_df, "60", cfg["bars"])
-        else:
-            fetch_and_save_data(cache_df, "60", cfg["bars"])
+
 
     # 如果只回补指定周期
     if args.period:
@@ -393,8 +356,6 @@ def main():
             do_daily()
         elif args.period == "w":
             do_weekly()
-        elif args.period == "60":
-            do_min60()
 
         print(f"\n{'='*70}")
         print(f"✅ {cfg['desc']} 回补完成")
@@ -403,22 +364,35 @@ def main():
 
     # 全量回补所有周期
     if args.update:
-        print(f"\n{'='*70}")
-        print(f"🔄 增量更新模式：将数据集更新到当天")
-        print(f"{'='*70}\n")
-        do_daily()
-        do_weekly()
-        do_min60()
-        print(f"\n{'='*70}")
-        print(f"✅ 增量更新完成")
-        print(f"{'='*70}\n")
+        # 增量更新模式：必须指定 --period 参数，日线和周线分开更新
+        if args.period == "d":
+            print(f"\n{'='*70}")
+            print(f"🔄 增量更新日线数据")
+            print(f"{'='*70}\n")
+            do_daily()
+            print(f"\n{'='*70}")
+            print(f"✅ 日线增量更新完成")
+            print(f"{'='*70}\n")
+        elif args.period == "w":
+            print(f"\n{'='*70}")
+            print(f"🔄 增量更新周线数据")
+            print(f"{'='*70}\n")
+            do_weekly()
+            print(f"\n{'='*70}")
+            print(f"✅ 周线增量更新完成")
+            print(f"{'='*70}\n")
+        else:
+            print("\n❌ 错误：--update 模式必须指定 --period 参数（d=日线 或 w=周线）")
+            print("示例：")
+            print("  python app/build_dataset.py --update --period d  # 更新日线")
+            print("  python app/build_dataset.py --update --period w  # 更新周线")
+            return
     else:
         print(f"\n{'='*70}")
         print(f"📊 构建多周期数据集（保存到数据库）")
         print(f"{'='*70}\n")
         do_daily()
         do_weekly()
-        do_min60()
         print(f"\n{'='*70}")
         print(f"✅ 数据集构建完成")
         print(f"保存位置: PostgreSQL 远程数据库 (config.DATABASE_URL)")

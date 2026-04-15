@@ -317,6 +317,7 @@ def query_sql(
         查询结果 DataFrame
     """
     from sqlalchemy import text
+    from sqlalchemy.orm import Session
 
     if params is None:
         params = {}
@@ -325,8 +326,22 @@ def query_sql(
     if isinstance(sql, str):
         sql = text(sql)
 
-    result = conn.execute(sql, params)
-    return _result_to_df(result)
+    # 如果是Session对象且处于失败的事务状态，尝试回滚
+    if isinstance(conn, Session):
+        try:
+            result = conn.execute(sql, params)
+            return _result_to_df(result)
+        except Exception as e:
+            # 检查是否是事务失败错误
+            if "current transaction is aborted" in str(e):
+                conn.rollback()
+                # 重试一次
+                result = conn.execute(sql, params)
+                return _result_to_df(result)
+            raise
+    else:
+        result = conn.execute(sql, params)
+        return _result_to_df(result)
 
 
 def table_exists(conn: Any, table_name: str) -> bool:
