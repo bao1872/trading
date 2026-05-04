@@ -9,17 +9,18 @@
 版本：v1.2.0
 
 ================================================================================
-当前任务列表（共 2 个任务）
+当前任务列表（共 3 类任务）
 ================================================================================
 
 1. 每日数据更新与选股任务 (task_每日数据更新与选股) - [已授权]
    - 函数：daily_update_and_selection_task()
-   - 触发器：Cron (每天 16:00)
-   - 执行时间：周一至周五 16:00（收盘后）
+   - 触发器：Cron (每天 15:10)
+   - 执行时间：周一至周五 15:10（收盘后）
    - 执行流程：
-     1. 日线数据增量更新（每天）
-     2. 周线数据增量更新（仅周五）
-     3. 执行选股任务（每天）
+        1. 日线数据增量更新（每天）
+        2. 周线数据增量更新（每天）
+        3. BSM指标选股任务（每天，基于周线数据）
+        4. 自选股BSM事件检测（每天）
    - 配置：ENABLE_DAILY_WORKFLOW=true
    - 日志：scheduler.log 中搜索 "每日数据更新与选股"
    - 状态：✅ 已授权并启用
@@ -30,6 +31,20 @@
    - 访问地址：http://localhost:8501
    - 配置：ENABLE_STREAMLIT=true
    - 状态：✅ 已授权并启用（脚本启动时自动启动）
+
+3. 盘中自选股监控任务 - [已授权]
+   - 函数：watchlist_monitor_task(freq)
+   - 触发器：Cron (交易时段内按周期执行)
+   - 执行时间：周一至周五 9:30-15:00
+   - 检测周期：
+     a. 15分钟：每15分钟整点执行（9:45, 10:00, 10:15... 14:45, 15:00）
+     b. 60分钟：每天4个固定时间点（10:30, 11:30, 14:00, 14:55）
+   - 检测对象：stock_watchlist 表中 is_monitored=TRUE 的自选股
+   - 检测内容：MACD/Hist 常规/隐藏顶底背离、PAVP价格穿越
+   - 推送方式：飞书消息
+   - 配置：ENABLE_DIV_MONITOR=true
+   - 日志：scheduler.log 中搜索 "自选股监控"
+   - 状态：✅ 已授权并启用
 
 ================================================================================
 系统服务管理（重要）
@@ -226,6 +241,14 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR
 from dotenv import load_dotenv
 
+# 导入飞书配置
+try:
+    from config import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_USER_ID
+except ImportError:
+    FEISHU_APP_ID = None
+    FEISHU_APP_SECRET = None
+    FEISHU_USER_ID = None
+
 # 加载环境变量
 dotenv_path = Path(__file__).parent / '.env'
 if dotenv_path.exists():
@@ -406,77 +429,238 @@ def run_subprocess(cmd: list, task_name: str, timeout: int = 3600) -> bool:
         raise
 
 
-def daily_update_and_selection_task():
-    """每日数据更新与选股任务 - 已授权（周一至周五16:00执行）
+def send_feishu_notification(title: str, content: str, is_error: bool = False):
+    """发送飞书通知
     
+    Args:
+        title: 通知标题
+        content: 通知内容
+        is_error: 是否为错误通知
+    """
+    if not all([FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_USER_ID]):
+        logger.warning("飞书配置不完整，跳过通知")
+        return
+    
+    try:
+        import requests
+        import json
+        
+        # 获取 access_token
+        token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        token_payload = {
+            "app_id": FEISHU_APP_ID,
+            "app_secret": FEISHU_APP_SECRET
+        }
+        
+        token_response = requests.post(token_url, json=token_payload, timeout=10)
+        token_result = token_response.json()
+        
+        if token_result.get("code") != 0:
+            logger.warning(f"获取飞书 access_token 失败：{token_result.get('msg')}")
+            return
+        
+        access_token = token_result.get("tenant_access_token")
+        
+        # 发送消息
+        emoji = "❌" if is_error else "✅"
+        message = f"{emoji} {title}\n\n{content}"
+        
+        msg_url = "https://open.feishu.cn/open-apis/im/v1/messages"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "receive_id": FEISHU_USER_ID,
+            "msg_type": "text",
+            "content": json.dumps({"text": message})
+        }
+        params = {"receive_id_type": "user_id"}
+        
+        msg_response = requests.post(msg_url, headers=headers, json=payload, params=params, timeout=10)
+        msg_result = msg_response.json()
+        
+        if msg_result.get("code") == 0:
+            logger.info(f"飞书通知发送成功：{title}")
+        else:
+            logger.warning(f"飞书通知发送失败：{msg_result.get('msg')}")
+    
+    except Exception as e:
+        logger.warning(f"飞书通知发送失败：{e}")
+
+
+def daily_update_and_selection_task():
+    """每日数据更新与选股任务 - 已授权（周一至周五15:10执行）
+
     执行流程：
     1. 日线数据增量更新（每天）
-    2. 周线数据增量更新（仅周五）
+    2. 周线数据增量更新（每天）
     3. 执行选股任务（每天）
     """
     today = datetime.now()
-    is_friday = today.weekday() == 4  # 周五
-    
+    today_str = today.strftime('%Y-%m-%d')
+
     logger.info("=" * 60)
     logger.info(f"开始执行每日数据更新与选股任务 - {today.strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"今天是：{['周一', '周二', '周三', '周四', '周五', '周六', '周日'][today.weekday()]}")
     logger.info("=" * 60)
-    
-    # ========== 步骤 1：日线数据增量更新（每天执行） ==========
-    logger.info("【步骤 1/3】日线数据增量更新...")
-    daily_cmd = [
-        sys.executable,
-        str(PROJECT_ROOT / "app" / "build_dataset.py"),
-        "--period", "d",
-        "--update",
-    ]
-    
+
+    # 发送任务开始通知
+    send_feishu_notification(
+        f"选股任务开始 - {today_str}",
+        f"任务开始时间：{today.strftime('%H:%M:%S')}\n今天是：{['周一', '周二', '周三', '周四', '周五', '周六', '周日'][today.weekday()]}"
+    )
+
     try:
-        run_subprocess(daily_cmd, "日线更新", timeout=3600)
-    except Exception as e:
-        logger.error(f"日线更新失败，停止后续步骤：{e}")
-        raise
-    
-    # ========== 步骤 2：周线数据增量更新（仅周五执行） ==========
-    if is_friday:
-        logger.info("【步骤 2/3】周线数据增量更新（今天是周五）...")
+        # ========== 步骤 1/3：日线数据增量更新（每天执行） ==========
+        logger.info("【步骤 1/3】日线数据增量更新...")
+        daily_cmd = [
+            sys.executable,
+            str(PROJECT_ROOT / "app" / "build_dataset.py"),
+            "--period", "d",
+            "--update",
+        ]
+
+        try:
+            run_subprocess(daily_cmd, "日线更新", timeout=3600)
+        except Exception as e:
+            logger.error(f"日线更新失败，停止后续步骤：{e}")
+            send_feishu_notification(
+                f"选股任务失败 - {today_str}",
+                f"日线更新失败：{str(e)}",
+                is_error=True
+            )
+            raise
+
+        # ========== 步骤 2/3：周线数据增量更新（每天执行） ==========
+        logger.info("【步骤 2/3】周线数据增量更新...")
         weekly_cmd = [
             sys.executable,
             str(PROJECT_ROOT / "app" / "build_dataset.py"),
             "--period", "w",
             "--update",
         ]
-        
+
         try:
             run_subprocess(weekly_cmd, "周线更新", timeout=3600)
         except Exception as e:
             logger.error(f"周线更新失败，继续执行选股任务：{e}")
-            # 周线更新失败不阻断选股任务
-    else:
-        logger.info("【步骤 2/3】跳过周线更新（今天不是周五）")
-    
-    # ========== 步骤 3：执行选股任务（每天执行） ==========
-    logger.info("【步骤 3/3】执行选股任务...")
-    today_str = today.strftime("%Y-%m-%d")
-    selection_cmd = [
-        sys.executable,
-        str(PROJECT_ROOT / "selection" / "selection_ana.py"),
-        today_str,
-    ]
-    
-    try:
-        run_subprocess(selection_cmd, "选股任务", timeout=7200)
+            # 周线更新失败不阻断选股任务，但发送警告
+            send_feishu_notification(
+                f"选股任务警告 - {today_str}",
+                f"周线更新失败，但继续执行选股任务：{str(e)}",
+                is_error=True
+            )
+
+        # ========== 步骤 3/4：BSM指标选股任务 ==========
+        logger.info("【步骤 3/4】BSM指标选股任务...")
+        selection_cmd = [
+            sys.executable,
+            str(PROJECT_ROOT / "selection" / "selection_ana.py"),
+        ]
+
+        try:
+            run_subprocess(selection_cmd, "BSM选股", timeout=3600)
+        except Exception as e:
+            logger.error(f"BSM选股任务失败：{e}")
+            # BSM选股失败不阻断后续任务，但发送警告
+            send_feishu_notification(
+                f"选股任务警告 - {today_str}",
+                f"BSM选股任务失败：{str(e)}",
+                is_error=True
+            )
+
+        # ========== 步骤 4/4：自选股BSM事件检测 ==========
+        logger.info("【步骤 4/4】自选股BSM事件检测...")
+        try:
+            from selection.watchlist_event_detection import detect_and_save_bsm_events
+            detect_and_save_bsm_events()
+            logger.info("✅ 自选股BSM事件检测完成")
+        except Exception as e:
+            logger.error(f"自选股BSM事件检测失败：{e}")
+            send_feishu_notification(
+                f"选股任务警告 - {today_str}",
+                f"自选股BSM事件检测失败：{str(e)}",
+                is_error=True
+            )
+
+        # 任务成功完成
+        end_time = datetime.now()
+        duration = (end_time - today).total_seconds() / 60  # 分钟
+
+        logger.info("=" * 60)
+        logger.info(f"✅ 每日数据更新与选股任务全部完成 - {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("=" * 60)
+
+        send_feishu_notification(
+            f"选股任务完成 - {today_str}",
+            f"任务完成时间：{end_time.strftime('%H:%M:%S')}\n执行时长：{duration:.1f}分钟\n所有步骤执行成功"
+        )
+
     except Exception as e:
-        logger.error(f"选股任务失败：{e}")
+        # 任务失败
+        end_time = datetime.now()
+        logger.error(f"❌ 每日数据更新与选股任务失败：{e}")
+
+        # 发送失败通知（如果前面没有发送过）
+        send_feishu_notification(
+            f"选股任务失败 - {today_str}",
+            f"任务失败时间：{end_time.strftime('%H:%M:%S')}\n错误信息：{str(e)}",
+            is_error=True
+        )
         raise
+
+
+def watchlist_monitor_task(freq: str):
+    """盘中自选股监控任务
+
+    Args:
+        freq: 检测周期（5m/15m/60m）
+    """
+    now = datetime.now()
+    now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+
+    logger.info(f"=" * 60)
+    logger.info(f"开始执行自选股监控任务 (周期: {freq}) - {now_str}")
+    logger.info(f"=" * 60)
+
+    try:
+        from app.monitoring import run_watchlist_monitor
+        run_watchlist_monitor(freq)
+
+        logger.info(f"✅ 自选股监控任务完成 (周期: {freq})")
+
+    except Exception as e:
+        logger.error(f"❌ 自选股监控任务失败 (周期: {freq})：{e}", exc_info=True)
+        send_feishu_notification(
+            f"自选股监控失败 - {freq}",
+            f"时间：{now.strftime('%H:%M:%S')}\n错误：{str(e)}",
+            is_error=True
+        )
+
+
+def _is_trading_day() -> bool:
+    """检查今天是否为交易日（周一至周五）"""
+    today = datetime.now()
+    return today.weekday() < 5
+
+
+def _is_trading_hours() -> bool:
+    """检查当前是否在交易时段内"""
+    now = datetime.now()
+    hour = now.hour
+    minute = now.minute
+    time_val = hour * 60 + minute
     
-    logger.info("=" * 60)
-    logger.info(f"✅ 每日数据更新与选股任务全部完成 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info("=" * 60)
+    morning_start = 9 * 60 + 30
+    morning_end = 11 * 60 + 30
+    afternoon_start = 13 * 60
+    afternoon_end = 15 * 60
+    
+    return (morning_start <= time_val <= morning_end) or (afternoon_start <= time_val <= afternoon_end)
 
 
 def start_streamlit():
-    """启动 Streamlit 可视化应用"""
     logger.info("=" * 60)
     logger.info("启动 Streamlit 可视化应用...")
     logger.info("=" * 60)
@@ -514,16 +698,26 @@ def start_streamlit():
 
 def main():
     """主函数"""
+    from datetime import datetime
+    
     logger.info("=" * 60)
     logger.info("统一任务调度器启动")
     logger.info("=" * 60)
     
+    # 发送服务启动通知
+    start_time = datetime.now()
+    
     # 启动 Streamlit 可视化应用（后台运行）
     ENABLE_STREAMLIT = os.getenv('ENABLE_STREAMLIT', 'true').lower() == 'true'
     streamlit_process = None
+    streamlit_status = "未启用"
     
     if ENABLE_STREAMLIT:
         streamlit_process = start_streamlit()
+        if streamlit_process:
+            streamlit_status = f"已启动 (PID: {streamlit_process.pid})"
+        else:
+            streamlit_status = "启动失败"
     else:
         logger.warning("Streamlit 可视化应用未启用（ENABLE_STREAMLIT=false）")
     
@@ -532,23 +726,83 @@ def main():
     
     # 从环境变量读取任务配置（仅支持已授权的任务）
     ENABLE_DAILY_WORKFLOW = os.getenv('ENABLE_DAILY_WORKFLOW', 'true').lower() == 'true'
+    ENABLE_DIV_MONITOR = os.getenv('ENABLE_DIV_MONITOR', 'true').lower() == 'true'
     
-    # 每日数据更新与选股任务 - 周一至周五 16:00 执行
+    # 每日数据更新与选股任务 - 周一至周五 15:10 执行
     if ENABLE_DAILY_WORKFLOW:
         scheduler.register_task(
             name='每日数据更新与选股',
             func=daily_update_and_selection_task,
             trigger='cron',
             job_id='task_每日数据更新与选股',
-            hour=16,
-            minute=0,
+            hour=15,
+            minute=10,
             day_of_week='mon-fri',
         )
     else:
         logger.warning("每日数据更新与选股任务未启用（ENABLE_DAILY_WORKFLOW=false）")
     
+    # 盘中自选股监控任务
+    if ENABLE_DIV_MONITOR:
+        # 15分钟周期：每15分钟整点执行（9:45-14:55）
+        for h in range(9, 15):
+            for m in [0, 15, 30, 45]:
+                if h == 9 and m < 45:
+                    continue
+                if h == 11 and m > 30:
+                    continue
+                if h == 12:
+                    continue
+                if h == 13 and m < 15:
+                    continue
+                scheduler.register_task(
+                    name=f'自选股监控15m_{h:02d}:{m:02d}',
+                    func=lambda h=h, m=m: watchlist_monitor_task('15m'),
+                    trigger='cron',
+                    job_id=f'task_watchlist_15m_{h:02d}{m:02d}',
+                    hour=h,
+                    minute=m,
+                    day_of_week='mon-fri',
+                )
+
+        # 15分钟周期：收盘前5分钟额外执行
+        scheduler.register_task(
+            name='自选股监控15m_14:55',
+            func=lambda: watchlist_monitor_task('15m'),
+            trigger='cron',
+            job_id='task_watchlist_15m_1455',
+            hour=14,
+            minute=55,
+            day_of_week='mon-fri',
+        )
+
+        # 60分钟周期：每天4个固定时间点（10:30, 11:30, 14:00, 14:55）
+        for h, m in [(10, 30), (11, 30), (14, 0), (14, 55)]:
+            scheduler.register_task(
+                name=f'自选股监控60m_{h:02d}:{m:02d}',
+                func=lambda h=h, m=m: watchlist_monitor_task('60m'),
+                trigger='cron',
+                job_id=f'task_watchlist_60m_{h:02d}{m:02d}',
+                hour=h,
+                minute=m,
+                day_of_week='mon-fri',
+            )
+    else:
+        logger.warning("自选股监控任务未启用（ENABLE_DIV_MONITOR=false）")
+    
     logger.info(f"已注册 {len(scheduler.tasks)} 个已授权任务")
     logger.info(f"任务列表：{list(scheduler.tasks.keys())}")
+    
+    # 发送服务启动成功通知
+    task_list = ", ".join(scheduler.tasks.keys()) if scheduler.tasks else "无"
+    send_feishu_notification(
+        "📊 选股调度服务已启动",
+        f"启动时间：{start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"Streamlit状态：{streamlit_status}\n"
+        f"已注册任务：{task_list}\n"
+        f"每日选股时间：15:10（周一至周五）",
+        is_error=False
+    )
     
     try:
         # 启动调度器

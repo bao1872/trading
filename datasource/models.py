@@ -837,6 +837,10 @@ CREATE TABLE IF NOT EXISTS stock_watchlist (
     ts_code VARCHAR(20) NOT NULL UNIQUE,
     stock_name VARCHAR(50),
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sort_order INTEGER DEFAULT 0,
+    bsm_event VARCHAR(100) DEFAULT '',
+    bsm_event_date DATE,
+    pavp_prices VARCHAR(100) DEFAULT '',
     notes TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_watchlist_ts_code ON stock_watchlist(ts_code);

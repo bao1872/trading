@@ -27,7 +27,7 @@ import base64
 import requests
 from typing import Optional
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_USER_ID
 
@@ -217,6 +217,43 @@ class FeishuNotifier:
         else:
             print(f"❌ 消息发送失败：{result.get('msg', 'Unknown error')}")
         
+        return result
+
+    def send_card(self, header_title: str, elements: list, header_template: str = "blue",
+                  receiver_id: str = None, user_id_type: str = "user_id") -> dict:
+        """
+        发送多元素飞书卡片消息
+
+        Args:
+            header_title: 卡片标题
+            elements: 卡片元素列表，每项为 dict，支持 tag: hr/markdown/column_set/div
+            header_template: 卡片头部颜色主题 (blue/green/red/orange/turquoise/violet/wathet/carmine/indigo)
+            receiver_id: 接收者 ID
+            user_id_type: 用户 ID 类型
+
+        Returns:
+            API 响应结果
+        """
+        content = {
+            "config": {
+                "wide_screen_mode": True
+            },
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": header_title
+                },
+                "template": header_template
+            },
+            "elements": elements
+        }
+        result = self._send_message("interactive", content, receiver_id, user_id_type)
+
+        if result.get("code") == 0:
+            print(f"✅ 卡片消息发送成功")
+        else:
+            print(f"❌ 消息发送失败：{result.get('msg', 'Unknown error')}")
+
         return result
     
     def send_post(self, title: str, content_list: list, receiver_id: str = None, 

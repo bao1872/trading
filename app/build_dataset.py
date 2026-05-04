@@ -32,9 +32,9 @@
 
 周线更新逻辑：
     - 每天都可以运行更新
-    - 更新时先删除该股票本周开始日期（周一）之前的数据
-    - 然后插入本周及之后的最新数据
-    - 确保周线数据始终最新且不会重复
+    - 更新时先删除该股票本周的数据（本周一到下周一之前）
+    - 然后从pytdx获取最新周线数据，只保留本周及之后的数据
+    - 插入最新的本周数据，确保周线数据始终最新且不会重复
 
 注意：
     这是一个耗时操作，只需要运行一次
@@ -50,13 +50,17 @@ from typing import Dict
 import pandas as pd
 from tqdm import tqdm
 
-# 确保项目根目录在 Python 路径中（支持 systemd 服务运行）
+# 确保项目根目录在 Python 路径最前面（确保导入根目录 config.py）
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if base_dir not in sys.path:
-    sys.path.insert(0, base_dir)
+if base_dir in sys.path:
+    sys.path.remove(base_dir)
+sys.path.insert(0, base_dir)
 
 # 切换到项目根目录（确保相对路径正确）
 os.chdir(base_dir)
+
+# 先导入根目录的 config，确保后续导入使用正确的配置
+import config
 
 from datasource.pytdx_client import connect_pytdx, get_kline_data
 from datasource.database import get_session, bulk_upsert
@@ -105,7 +109,7 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str, delete_bef
         session: 数据库会话
         data_cache: 数据字典 {code: {'name': xxx, 'data': DataFrame}}
         freq: 周期 ('d', 'w', '60m')
-        delete_before_week_start: 是否删除本周开始日期之前的数据（仅对周线有效）
+        delete_before_week_start: 是否删除本周的数据（本周一到下周一之前，仅对周线有效）
     """
     from datetime import timedelta
     from sqlalchemy import text
@@ -270,7 +274,8 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int, force:
     周线更新逻辑（每天可运行）：
     - 获取最近20根周线数据
     - 只保留本周开始日期（周一）及之后的数据
-    - 先删除该股票本周之前的数据，再插入新数据
+    - 先删除该股票本周的数据（本周一到下周一之前）
+    - 插入从pytdx获取的最新本周数据
     - 确保周线数据始终最新
 
     参数：

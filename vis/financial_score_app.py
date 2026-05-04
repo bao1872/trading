@@ -2,11 +2,12 @@
 """
 财务评分与选股结果可视化分析（Streamlit 应用）
 
-Purpose: 展示个股财务评分、选股结果、BSM指标等多维度数据
+Purpose: 展示个股财务评分、选股结果、ATR Rope指标等多维度数据
 Inputs:
-    - stock_financial_score_pool 表（财务评分）
-    - stock_selection_results 表（选股结果：BSM买点信号、Z-Score指标）
-    - stock_k_data 表（K线数据，用于BSM指标计算）
+    - financial_scores 表（新财务评分系统 - 5维度14指标）
+    - stock_financial_score_pool 表（旧财务评分系统 - 6维度，用于其他页面）
+    - stock_selection_results 表（选股结果：ATR Rope震荡上轨信号、POC斜率、Z-Score指标）
+    - stock_k_data 表（K线数据，用于ATR Rope和BSM指标计算）
     - stock_pools 表（股票名称、概念）
 Outputs: Streamlit Web 界面
 How to Run: streamlit run vis/financial_score_app.py
@@ -19,12 +20,14 @@ Side Effects:
 import os
 import sys
 import importlib.util
+import datetime
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from decimal import Decimal, ROUND_HALF_UP
 from plotly.subplots import make_subplots
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -189,8 +192,6 @@ def get_cached_kline(ts_code: str, period: str, count: int = 250) -> pd.DataFram
     return df
 
 
-from financial_factors.financial_quarterly_score import FACTOR_CONFIG, DIMENSION_WEIGHTS
-
 DARK_THEME = {
     "bg_color": "#131722",
     "paper_bgcolor": "#131722",
@@ -213,23 +214,50 @@ INDICATOR_CONFIG = {
     },
 }
 
-DIMENSION_COLORS = {
-    "边际变化与持续性": "#2962ff",
-    "利润质量": "#26a69a",
-    "现金创造能力": "#ff9800",
-    "资产效率与资金占用": "#e91e63",
-    "规模与增长": "#9c27b0",
-    "盈利能力": "#00bcd4",
+# 新财务评分系统维度配置 (financial_statement_scorecard.py)
+# 五大维度，满分100分
+DIMENSION_CONFIG = {
+    "main_profit_score": {"name": "主业盈利改善", "weight": 45, "color": "#2962ff"},
+    "revenue_expense_efficiency_score": {"name": "收入与费用效率", "weight": 20, "color": "#26a69a"},
+    "cashflow_validation_score": {"name": "现金流验证", "weight": 15, "color": "#ff9800"},
+    "working_capital_quality_score": {"name": "营运资本质量", "weight": 15, "color": "#e91e63"},
+    "investment_asset_efficiency_score": {"name": "投入与资产效率", "weight": 5, "color": "#9c27b0"},
 }
 
-DIMENSION_COLS = [
-    "边际变化与持续性_score",
-    "利润质量_score",
-    "现金创造能力_score",
-    "资产效率与资金占用_score",
-    "规模与增长_score",
-    "盈利能力_score",
-]
+DIMENSION_COLS = list(DIMENSION_CONFIG.keys())
+
+DIMENSION_COLORS = {v["name"]: v["color"] for k, v in DIMENSION_CONFIG.items()}
+
+# 14项核心指标配置
+METRIC_CONFIG = {
+    # 主业盈利改善 (45分)
+    "F1_core_profit_improve_strength": {"name": "主业经营利润改善强度", "weight": 20, "dimension": "main_profit_score"},
+    "F2_core_profit_acceleration": {"name": "主业经营利润加速度", "weight": 15, "dimension": "main_profit_score"},
+    "F3_parent_np_improve_strength": {"name": "归母净利润改善强度", "weight": 10, "dimension": "main_profit_score"},
+    # 收入与费用效率 (20分)
+    "F4_revenue_momentum": {"name": "收入动量", "weight": 8, "dimension": "revenue_expense_efficiency_score"},
+    "F5_gross_margin_expansion": {"name": "毛利率扩张", "weight": 7, "dimension": "revenue_expense_efficiency_score"},
+    "F6_expense_ratio_improvement": {"name": "期间费用率改善", "weight": 5, "dimension": "revenue_expense_efficiency_score"},
+    # 现金流验证 (15分)
+    "F7_sales_cash_collection_improvement": {"name": "销售收现率改善", "weight": 5, "dimension": "cashflow_validation_score"},
+    "F8_ocf_improve_strength": {"name": "经营现金流改善强度", "weight": 5, "dimension": "cashflow_validation_score"},
+    "F9_profit_cash_gap_improvement": {"name": "利润现金背离改善", "weight": 5, "dimension": "cashflow_validation_score"},
+    # 营运资本质量 (15分)
+    "F10_ar_pressure_improvement": {"name": "应收压力改善", "weight": 5, "dimension": "working_capital_quality_score"},
+    "F11_inventory_pressure_improvement": {"name": "存货压力改善", "weight": 5, "dimension": "working_capital_quality_score"},
+    "F12_contract_liab_improvement": {"name": "合同负债改善", "weight": 5, "dimension": "working_capital_quality_score"},
+    # 投入与资产效率 (5分)
+    "F13_capex_efficiency_improvement": {"name": "资本开支效率改善", "weight": 2, "dimension": "investment_asset_efficiency_score"},
+    "F14_asset_turnover_improvement": {"name": "资产周转率改善", "weight": 3, "dimension": "investment_asset_efficiency_score"},
+}
+
+# 风险标记配置
+RISK_FLAG_CONFIG = {
+    "cashflow_red_flag": {"name": "现金流红灯", "desc": "利润正但现金流负", "color": "#ef5350"},
+    "ar_pressure_worsen_flag": {"name": "应收压力恶化", "desc": "应收账款压力上升", "color": "#ff9800"},
+    "inventory_pressure_worsen_flag": {"name": "存货压力恶化", "desc": "存货压力上升", "color": "#ff9800"},
+    "core_profit_worsen_flag": {"name": "核心利润恶化", "desc": "核心利润下滑", "color": "#ef5350"},
+}
 
 
 def match_stocks_by_pinyin(pinyin_input: str, stock_list: pd.DataFrame) -> pd.DataFrame:
@@ -276,35 +304,53 @@ def load_stock_list(session) -> pd.DataFrame:
 
 
 def load_score_data(session, ts_code: str) -> pd.DataFrame:
-    """从 stock_financial_score_pool 加载股票评分数据，缺失季度前向填充保证趋势图连续"""
+    """从 financial_scores 加载股票评分数据，缺失季度前向填充保证趋势图连续"""
     sql = """
-        SELECT ts_code, stock_name, report_date, ann_date, total_score,
-               "边际变化与持续性_score", "利润质量_score", "现金创造能力_score",
-               "资产效率与资金占用_score", "规模与增长_score", "盈利能力_score"
-        FROM stock_financial_score_pool
+        SELECT ts_code, end_date as report_date, ann_date, total_score,
+               main_profit_score, revenue_expense_efficiency_score, cashflow_validation_score,
+               working_capital_quality_score, investment_asset_efficiency_score,
+               cashflow_red_flag, ar_pressure_worsen_flag, inventory_pressure_worsen_flag, core_profit_worsen_flag,
+               F1_core_profit_improve_strength, F2_core_profit_acceleration, F3_parent_np_improve_strength,
+               F4_revenue_momentum, F5_gross_margin_expansion, F6_expense_ratio_improvement,
+               F7_sales_cash_collection_improvement, F8_ocf_improve_strength, F9_profit_cash_gap_improvement,
+               F10_ar_pressure_improvement, F11_inventory_pressure_improvement, F12_contract_liab_improvement,
+               F13_capex_efficiency_improvement, F14_asset_turnover_improvement,
+               F1_score, F2_score, F3_score, F4_score, F5_score, F6_score, F7_score, F8_score,
+               F9_score, F10_score, F11_score, F12_score, F13_score, F14_score
+        FROM financial_scores
         WHERE ts_code = :ts_code
-        ORDER BY report_date ASC
+        ORDER BY end_date ASC
     """
     try:
         df = query_sql(session, sql, {"ts_code": ts_code})
         if df.empty:
             return df
-        score_cols = [
-            "total_score", "边际变化与持续性_score", "利润质量_score", "现金创造能力_score",
-            "资产效率与资金占用_score", "规模与增长_score", "盈利能力_score"
-        ]
+        # 前向填充评分数据保证趋势图连续
+        score_cols = ["total_score"] + DIMENSION_COLS
         present_cols = [c for c in score_cols if c in df.columns]
-        df[present_cols] = df[present_cols].ffill()
+        if present_cols:
+            df[present_cols] = df[present_cols].ffill()
         return df
     except Exception:
         return pd.DataFrame()
 
 
 def load_factor_scores(session, ts_code: str, report_date: str) -> pd.DataFrame:
-    """加载指定报告期的因子分数"""
-    sql = f"""
-        SELECT * FROM stock_financial_score_pool
-        WHERE ts_code = :ts_code AND report_date = :report_date
+    """加载指定报告期的因子分数（从 financial_scores 表）"""
+    sql = """
+        SELECT ts_code, end_date as report_date, ann_date, total_score,
+               main_profit_score, revenue_expense_efficiency_score, cashflow_validation_score,
+               working_capital_quality_score, investment_asset_efficiency_score,
+               cashflow_red_flag, ar_pressure_worsen_flag, inventory_pressure_worsen_flag, core_profit_worsen_flag,
+               F1_core_profit_improve_strength, F2_core_profit_acceleration, F3_parent_np_improve_strength,
+               F4_revenue_momentum, F5_gross_margin_expansion, F6_expense_ratio_improvement,
+               F7_sales_cash_collection_improvement, F8_ocf_improve_strength, F9_profit_cash_gap_improvement,
+               F10_ar_pressure_improvement, F11_inventory_pressure_improvement, F12_contract_liab_improvement,
+               F13_capex_efficiency_improvement, F14_asset_turnover_improvement,
+               F1_score, F2_score, F3_score, F4_score, F5_score, F6_score, F7_score, F8_score,
+               F9_score, F10_score, F11_score, F12_score, F13_score, F14_score
+        FROM financial_scores
+        WHERE ts_code = :ts_code AND end_date = :report_date
     """
     try:
         df = query_sql(session, sql, {"ts_code": ts_code, "report_date": report_date})
@@ -314,19 +360,27 @@ def load_factor_scores(session, ts_code: str, report_date: str) -> pd.DataFrame:
 
 
 def load_all_scores(session, report_date: Optional[str] = None) -> pd.DataFrame:
-    """加载全股池评分数据"""
+    """加载全股池评分数据（从 financial_scores 表）"""
     try:
         if report_date:
             sql = """
-                SELECT * FROM stock_financial_score_pool
-                WHERE report_date = :report_date
-                ORDER BY CASE WHEN total_score = 'NaN' THEN 1 ELSE 0 END, total_score DESC
+                SELECT ts_code, end_date as report_date, ann_date, total_score,
+                       main_profit_score, revenue_expense_efficiency_score, cashflow_validation_score,
+                       working_capital_quality_score, investment_asset_efficiency_score,
+                       cashflow_red_flag, ar_pressure_worsen_flag, inventory_pressure_worsen_flag, core_profit_worsen_flag
+                FROM financial_scores
+                WHERE end_date = :report_date
+                ORDER BY CASE WHEN total_score IS NULL THEN 1 ELSE 0 END, total_score DESC
             """
             df = query_sql(session, sql, {"report_date": report_date})
         else:
             sql = """
-                SELECT * FROM stock_financial_score_pool
-                ORDER BY ts_code, report_date DESC
+                SELECT ts_code, end_date as report_date, ann_date, total_score,
+                       main_profit_score, revenue_expense_efficiency_score, cashflow_validation_score,
+                       working_capital_quality_score, investment_asset_efficiency_score,
+                       cashflow_red_flag, ar_pressure_worsen_flag, inventory_pressure_worsen_flag, core_profit_worsen_flag
+                FROM financial_scores
+                ORDER BY ts_code, end_date DESC
             """
             df = query_sql(session, sql, {})
             df = df.groupby("ts_code").first().reset_index()
@@ -336,9 +390,52 @@ def load_all_scores(session, report_date: Optional[str] = None) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def load_financial_score_overview(session) -> pd.DataFrame:
+    """加载财务评分总览数据（关联 stock_pools 获取股票名称和概念）
+    
+    显示股票池中所有股票，每只股票取最近一期的评分数据
+    """
+    try:
+        sql = """
+            SELECT 
+                f.ts_code,
+                COALESCE(p.name, '') as stock_name,
+                COALESCE(p.concepts, '') as concept,
+                f.end_date as report_date,
+                f.ann_date,
+                f.total_score,
+                f.main_profit_score,
+                f.revenue_expense_efficiency_score,
+                f.cashflow_validation_score,
+                f.working_capital_quality_score,
+                f.investment_asset_efficiency_score
+            FROM (
+                SELECT DISTINCT ON (ts_code) 
+                    ts_code,
+                    end_date,
+                    ann_date,
+                    total_score,
+                    main_profit_score,
+                    revenue_expense_efficiency_score,
+                    cashflow_validation_score,
+                    working_capital_quality_score,
+                    investment_asset_efficiency_score
+                FROM financial_scores
+                ORDER BY ts_code, end_date DESC
+            ) f
+            INNER JOIN stock_pools p ON f.ts_code = p.ts_code
+            ORDER BY CASE WHEN f.total_score IS NULL THEN 1 ELSE 0 END, f.total_score DESC
+        """
+        df = query_sql(session, sql, {})
+        return df
+    except Exception as e:
+        print(f"加载财务评分总览数据失败: {e}")
+        return pd.DataFrame()
+
+
 def get_available_report_dates(session) -> List[str]:
-    """获取所有可用的报告期"""
-    sql = "SELECT DISTINCT report_date FROM stock_financial_score_pool ORDER BY report_date DESC"
+    """获取所有可用的报告期（从 financial_scores 表）"""
+    sql = "SELECT DISTINCT end_date as report_date FROM financial_scores ORDER BY end_date DESC"
     try:
         df = query_sql(session, sql, {})
         return df["report_date"].tolist()
@@ -381,12 +478,10 @@ def load_limit_up_signals(session, snapshot_date: str) -> pd.DataFrame:
 
 
 def colorize_numeric_columns(df: pd.DataFrame, numeric_cols: list, custom_formatters: dict = None) -> pd.DataFrame:
-    """对数值列应用颜色渐变渲染（基于每列的极值）"""
+    """对数值列应用颜色渐变渲染（基于每列的极值），始终返回 Styler 对象"""
     if df.empty or not numeric_cols:
-        return df
+        return df.style
     available_cols = [c for c in numeric_cols if c in df.columns]
-    if not available_cols:
-        return df
 
     def format_with_backup(val):
         if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -396,85 +491,91 @@ def colorize_numeric_columns(df: pd.DataFrame, numeric_cols: list, custom_format
         except (ValueError, TypeError):
             return str(val)
 
-    styler = df.style.background_gradient(
-        cmap="RdYlGn",
-        subset=available_cols,
-        low=0.3,
-        high=1.0
-    )
-    for col in available_cols:
-        fmt = custom_formatters.get(col, format_with_backup) if custom_formatters else format_with_backup
-        styler = styler.format({col: fmt}, subset=[col])
+    styler = df.style
+    if available_cols:
+        styler = styler.background_gradient(
+            cmap="RdYlGn",
+            subset=available_cols,
+            low=0.3,
+            high=1.0
+        )
+        for col in available_cols:
+            fmt = custom_formatters.get(col, format_with_backup) if custom_formatters else format_with_backup
+            styler = styler.format({col: fmt}, subset=[col])
     return styler
 
 
 def colorize_numeric_columns_simple(df: pd.DataFrame, numeric_cols: list) -> pd.DataFrame:
-    """对数值列应用颜色渐变渲染（每列单独取极值，简化版）
-    
+    """对数值列应用颜色渐变渲染（每列单独取极值，简化版），始终返回 Styler 对象
+
     Args:
         df: DataFrame数据
         numeric_cols: 需要渲染的数值列列表
-    
+
     Returns:
         带颜色样式的 Styler 对象
     """
     if df.empty or not numeric_cols:
-        return df
-    
-    available_cols = [c for c in numeric_cols if c in df.columns]
-    if not available_cols:
-        return df
+        return df.style
 
-    # 为每列单独计算颜色（基于该列的极值）
-    def get_color_for_value(val, col_min, col_max):
+    available_cols = [c for c in numeric_cols if c in df.columns]
+
+    # 为每列单独计算颜色（基于该列自身的极值，而非全局）
+    def get_color_for_value(val, col_min, col_max, col_name):
         """根据值在列中的位置返回颜色"""
         if val is None or pd.isna(val):
             return ''
         if col_max == col_min:
-            return 'background-color: #f0f0f0'  # 灰色（所有值相同）
-        
+            return 'background-color: #e0e0e0; color: #333333'  # 灰色（所有值相同）
+
         # 归一化到 0-1
         ratio = (val - col_min) / (col_max - col_min)
-        
-        # RdYlGn 颜色映射：红色(低) -> 黄色(中) -> 绿色(高)
-        if ratio < 0.5:
-            # 红色到黄色
-            r = 255
-            g = int(255 * ratio * 2)
-            b = 0
-        else:
-            # 黄色到绿色
-            r = int(255 * (1 - ratio) * 2)
-            g = 255
-            b = 0
-        
-        return f'background-color: rgba({r}, {g}, {b}, 0.6)'
 
-    # 为每列创建样式函数
-    def make_style_func(col_name):
-        col_data = df[col_name].dropna()
+        # 使用更深的颜色，避免白色/淡黄色背景看不清文字
+        # 颜色映射：深红(低) -> 橙色(中低) -> 黄色(中) -> 浅绿(中高) -> 深绿(高)
+        if ratio < 0.25:
+            # 深红色 (低值)
+            r, g, b = 220, 80, 80
+            text_color = '#ffffff'  # 白色文字
+        elif ratio < 0.5:
+            # 橙色 (中低值)
+            r, g, b = 255, 160, 80
+            text_color = '#333333'  # 深色文字
+        elif ratio < 0.75:
+            # 黄色 (中值)
+            r, g, b = 255, 220, 100
+            text_color = '#333333'  # 深色文字
+        else:
+            # 深绿色 (高值)
+            r, g, b = 80, 180, 80
+            text_color = '#ffffff'  # 白色文字
+
+        return f'background-color: rgb({r}, {g}, {b}); color: {text_color}; font-weight: 500'
+
+    # 应用样式：每列单独计算 min/max，确保颜色仅基于该列自身分布
+    styler = df.style
+    for col in available_cols:
+        col_data = df[col].dropna()
         if len(col_data) == 0:
             col_min, col_max = 0, 0
         else:
             col_min, col_max = col_data.min(), col_data.max()
-        
-        def style_func(val):
-            return get_color_for_value(val, col_min, col_max)
-        return style_func
 
-    # 应用样式
-    styler = df.style
-    for col in available_cols:
-        styler = styler.map(make_style_func(col), subset=[col])
-    
-    # 格式化数值显示
+        def make_style_func(cmin, cmax, cname):
+            def style_func(val):
+                return get_color_for_value(val, cmin, cmax, cname)
+            return style_func
+
+        styler = styler.map(make_style_func(col_min, col_max, col), subset=[col])
+
+    # 格式化数值显示（处理None值）
     format_dict = {}
     for col in available_cols:
         if col == 'VWAP偏离%':
-            format_dict[col] = '{:.2f}%'
+            format_dict[col] = lambda x: f"{x:.2f}%" if pd.notna(x) and x is not None else "-"
         else:
-            format_dict[col] = '{:.2f}'
-    
+            format_dict[col] = lambda x: f"{x:.2f}" if pd.notna(x) and x is not None else "-"
+
     styler = styler.format(format_dict, subset=available_cols)
     return styler
 
@@ -585,16 +686,28 @@ TAB_FIELD_CONFIGS = {
                          "规模与增长": "规模与增长", "现金创造能力": "现金创造能力",
                          "主题": "主题", "财报日期": "财报日期"}
     },
-    "全股池因子表": {
-        "fields": ["股票代码", "股票名称", "公告日期", "概念", "total_score",
-                   "边际变化与持续性", "利润质量", "资产效率", "规模与增长", "现金创造能力", "盈利能力"],
-        "types": {"股票代码": "string", "股票名称": "string", "公告日期": "string", "概念": "string",
-                  "total_score": "numeric", "边际变化与持续性": "numeric", "利润质量": "numeric",
-                  "资产效率": "numeric", "规模与增长": "numeric", "现金创造能力": "numeric", "盈利能力": "numeric"},
-        "string_fields": ["股票代码", "股票名称", "公告日期", "概念"],
-        "display_names": {"股票代码": "股票代码", "股票名称": "股票名称", "公告日期": "公告日期", "概念": "概念",
-                         "total_score": "总分", "边际变化与持续性": "边际变化与持续性", "利润质量": "利润质量",
-                         "资产效率": "资产效率", "规模与增长": "规模与增长", "现金创造能力": "现金创造能力", "盈利能力": "盈利能力"}
+    "自选股票": {
+        "fields": ["rank", "stock_name", "ts_code", "recommend_score", "recommend_grade", "action_advice",
+                   "theme_tags", "valuation_judge", "positioning", "sustainability", "profit_trend",
+                   "upside_pct", "weekly_z", "weekly_vol_z", "daily_vol_z", "vwap_deviation",
+                   "sort_reason", "sectors", "logic", "risk_factors", "signal_date"],
+        "types": {"rank": "numeric", "stock_name": "string", "ts_code": "string",
+                  "recommend_score": "numeric", "recommend_grade": "string", "action_advice": "string",
+                  "theme_tags": "string", "valuation_judge": "string", "positioning": "string",
+                  "sustainability": "string", "profit_trend": "string", "upside_pct": "numeric",
+                  "weekly_z": "numeric", "weekly_vol_z": "numeric", "daily_vol_z": "numeric",
+                  "vwap_deviation": "numeric", "sort_reason": "string", "sectors": "string",
+                  "logic": "string", "risk_factors": "string", "signal_date": "string"},
+        "string_fields": ["stock_name", "ts_code", "recommend_grade", "action_advice", "theme_tags",
+                         "valuation_judge", "positioning", "sustainability", "profit_trend",
+                         "sort_reason", "sectors", "logic", "risk_factors", "signal_date"],
+        "display_names": {"rank": "排名", "stock_name": "股票名称", "ts_code": "股票代码",
+                         "recommend_score": "推荐分", "recommend_grade": "推荐档位", "action_advice": "操作建议",
+                         "theme_tags": "主题标签", "valuation_judge": "估值判断", "positioning": "定位",
+                         "sustainability": "持续性", "profit_trend": "业绩趋势", "upside_pct": "上涨空间%",
+                         "weekly_z": "周线Z分", "weekly_vol_z": "周线VolZ", "daily_vol_z": "日线VolZ",
+                         "vwap_deviation": "VWAP偏离%", "sort_reason": "排序理由", "sectors": "板块",
+                         "logic": "炒作逻辑", "risk_factors": "风险因素", "signal_date": "事件日期"}
     },
     "C2策略选股": {
         "fields": ["symbol", "name", "concepts", "close", "dsa_pivot_pos_01", "signed_vwap_dev_pct",
@@ -618,25 +731,34 @@ TAB_FIELD_CONFIGS = {
                          "边际变化与持续性_score": "边际变化与持续性", "利润质量_score": "利润质量", "资产效率与资金占用_score": "资产效率",
                          "规模与增长_score": "规模与增长", "现金创造能力_score": "现金创造能力"}
     },
-    "选股主页": {
-        "fields": ["ts_code", "stock_name", "concepts", "daily_reversal_buy", "daily_breakout_buy",
-                   "weekly_reversal_buy", "weekly_breakout_buy",
-                   "daily_bb_width_zscore", "weekly_bb_width_zscore",
-                   "daily_vol_zscore", "weekly_vol_zscore", "weekly_vwap_deviation"],
-        "types": {"ts_code": "string", "stock_name": "string", "concepts": "string",
-                  "daily_reversal_buy": "numeric", "daily_breakout_buy": "numeric",
-                  "weekly_reversal_buy": "numeric", "weekly_breakout_buy": "numeric",
-                  "daily_bb_width_zscore": "numeric", "weekly_bb_width_zscore": "numeric",
-                  "daily_vol_zscore": "numeric", "weekly_vol_zscore": "numeric",
-                  "weekly_vwap_deviation": "numeric"},
-        "string_fields": ["ts_code", "stock_name", "concepts"],
-        "display_names": {"ts_code": "代码", "stock_name": "名称", "concepts": "概念",
-                         "daily_reversal_buy": "日线反转", "daily_breakout_buy": "日线突破",
-                         "weekly_reversal_buy": "周线反转", "weekly_breakout_buy": "周线突破",
-                         "daily_bb_width_zscore": "日线Z分", "weekly_bb_width_zscore": "周线Z分",
-                         "daily_vol_zscore": "日线VolZ", "weekly_vol_zscore": "周线VolZ",
-                         "weekly_vwap_deviation": "VWAP偏移", "VWAP偏离%": "VWAP偏离%"}
+    "自选股票": {
+        "fields": ["rank", "stock_name", "ts_code", "recommend_score", "recommend_grade", "action_advice",
+                   "theme_tags", "valuation_judge", "positioning", "sustainability", "profit_trend",
+                   "upside_pct", "weekly_z", "weekly_vol_z", "daily_vol_z", "vwap_deviation",
+                   "sort_reason", "sectors", "logic", "risk_factors", "signal_date",
+                   "avg_tick_amount", "max_tick_amount", "min_tick_amount"],
+        "types": {"rank": "numeric", "stock_name": "string", "ts_code": "string",
+                  "recommend_score": "numeric", "recommend_grade": "string", "action_advice": "string",
+                  "theme_tags": "string", "valuation_judge": "string", "positioning": "string",
+                  "sustainability": "string", "profit_trend": "string", "upside_pct": "numeric",
+                  "weekly_z": "numeric", "weekly_vol_z": "numeric", "daily_vol_z": "numeric",
+                  "vwap_deviation": "numeric", "sort_reason": "string", "sectors": "string",
+                  "logic": "string", "risk_factors": "string", "signal_date": "string",
+                  "avg_tick_amount": "numeric", "max_tick_amount": "numeric", "min_tick_amount": "numeric"},
+        "string_fields": ["stock_name", "ts_code", "recommend_grade", "action_advice", "theme_tags",
+                         "valuation_judge", "positioning", "sustainability", "profit_trend",
+                         "sort_reason", "sectors", "logic", "risk_factors", "signal_date"],
+        "display_names": {"rank": "排名", "stock_name": "股票名称", "ts_code": "股票代码",
+                         "recommend_score": "推荐分", "recommend_grade": "推荐档位", "action_advice": "操作建议",
+                         "theme_tags": "主题标签", "valuation_judge": "估值判断", "positioning": "定位",
+                         "sustainability": "持续性", "profit_trend": "业绩趋势", "upside_pct": "上涨空间%",
+                         "weekly_z": "周线Z分", "weekly_vol_z": "周线VolZ", "daily_vol_z": "日线VolZ",
+                         "vwap_deviation": "VWAP偏离%", "sort_reason": "排序理由", "sectors": "板块",
+                         "logic": "炒作逻辑", "risk_factors": "风险因素", "signal_date": "事件日期",
+                         "avg_tick_amount": "平均每笔成交额(万)",
+                         "max_tick_amount": "最大成交额(万)", "min_tick_amount": "最小成交额(万)"}
     },
+
     "股东画像": {
         "fields": ["holder_name_std", "holder_type", "quality_grade",
                    "sample_stocks", "total_trades", "total_profit_pct", "total_profit_amount", "avg_win_rate",
@@ -788,6 +910,66 @@ TAB_FIELD_CONFIGS = {
                          "规模与增长_score": "规模与增长", "现金创造能力_score": "现金创造能力",
                          "concepts": "概念", "score_report_date": "财报日期"}
     },
+    "BSM选股结果": {
+        "fields": ["ts_code", "stock_name",
+                   "bsm_signal",
+                   "weekly_bb_width_zscore", "weekly_vol_zscore",
+                   "daily_bb_width_zscore", "daily_vol_zscore",
+                   "daily_vwap_deviation",
+                   "daily_dsa_duration", "daily_dsa_avg_deviation", "daily_dsa_deviation_variance",
+                   "change_pct",
+                   "total_score", "end_date", "concepts"],
+        "types": {"ts_code": "string", "stock_name": "string",
+                  "bsm_signal": "string",
+                  "weekly_bb_width_zscore": "numeric", "weekly_vol_zscore": "numeric",
+                  "daily_bb_width_zscore": "numeric", "daily_vol_zscore": "numeric",
+                  "daily_vwap_deviation": "numeric",
+                  "daily_dsa_duration": "numeric", "daily_dsa_avg_deviation": "numeric", "daily_dsa_deviation_variance": "numeric",
+                  "change_pct": "numeric",
+                  "total_score": "numeric", "end_date": "string", "concepts": "string"},
+        "string_fields": ["ts_code", "stock_name", "bsm_signal", "end_date", "concepts"],
+        "display_names": {"ts_code": "股票代码", "stock_name": "股票名称",
+                         "bsm_signal": "周线信号",
+                         "weekly_bb_width_zscore": "周BBZ分", "weekly_vol_zscore": "周VOLZ分",
+                         "daily_bb_width_zscore": "日BBZ分", "daily_vol_zscore": "日VOLZ分",
+                         "daily_vwap_deviation": "VWAP偏离%",
+                         "daily_dsa_duration": "DSA持续", "daily_dsa_avg_deviation": "DSA偏离", "daily_dsa_deviation_variance": "DSA方差",
+                         "change_pct": "涨跌幅%",
+                         "total_score": "财务总分", "end_date": "报告期", "concepts": "概念"}
+    },
+    "Stop-Loss选股结果": {
+        "fields": ["ts_code", "stock_name",
+                   "change_pct",
+                   "sell_trigger_volume",
+                   "active_sell_cluster_count",
+                   "sum_sells_active", "sell_trigger_max_vol_price", "sell_stop_scale",
+                   "nearest_sell_stop_price",
+                   "dist_to_nearest_sell_stop_atr",
+                   "last_event_type", "last_event_volume", "last_event_bars_ago",
+                   "vol_zscore", "bbmacd_event",
+                   "daily_bb_width_zscore", "concepts"],
+        "types": {"ts_code": "string", "stock_name": "string",
+                  "change_pct": "numeric",
+                  "sell_trigger_volume": "numeric",
+                  "active_sell_cluster_count": "numeric",
+                  "sum_sells_active": "numeric", "sell_trigger_max_vol_price": "numeric", "sell_stop_scale": "numeric",
+                  "nearest_sell_stop_price": "numeric",
+                  "dist_to_nearest_sell_stop_atr": "numeric",
+                  "last_event_type": "string", "last_event_volume": "numeric", "last_event_bars_ago": "numeric",
+                  "vol_zscore": "numeric", "bbmacd_event": "string",
+                  "daily_bb_width_zscore": "numeric", "concepts": "string"},
+        "string_fields": ["ts_code", "stock_name", "last_event_type", "bbmacd_event", "concepts"],
+        "display_names": {"ts_code": "股票代码", "stock_name": "股票名称",
+                         "change_pct": "涨跌幅%",
+                         "sell_trigger_volume": "Sell释放量",
+                         "active_sell_cluster_count": "活跃Sell数",
+                         "sum_sells_active": "Sell规模", "sell_trigger_max_vol_price": "突破价格", "sell_stop_scale": "Sell规模×价格",
+                         "nearest_sell_stop_price": "最近Sell价",
+                         "dist_to_nearest_sell_stop_atr": "Sell距离ATR",
+                         "last_event_type": "上次事件", "last_event_volume": "上次量", "last_event_bars_ago": "上次距今天",
+                         "vol_zscore": "成交量Z分", "bbmacd_event": "BBMACD事件",
+                         "daily_bb_width_zscore": "日BB宽度Z分", "concepts": "概念"}
+    }
 }
 
 
@@ -806,6 +988,7 @@ def apply_filters(df: pd.DataFrame, conditions: list, config: dict) -> pd.DataFr
         value = cond["value"]
         value2 = cond.get("value2")
 
+        # 确定实际字段名（用于DataFrame列访问）
         actual_field = field
         if field not in result.columns:
             if field in field_to_display:
@@ -816,13 +999,24 @@ def apply_filters(df: pd.DataFrame, conditions: list, config: dict) -> pd.DataFr
         if actual_field not in result.columns:
             continue
 
-        if config["types"].get(field) == "string":
+        # 确定字段类型：优先使用原始字段名查询types，如果找不到则尝试显示名称
+        field_type = config["types"].get(field)
+        if field_type is None and actual_field != field:
+            field_type = config["types"].get(actual_field)
+
+        if field_type == "string":
             if operator == "等于" and value:
                 result = result[result[actual_field].astype(str) == str(value)]
             elif operator == "包含" and value:
                 result = result[result[actual_field].astype(str).str.contains(str(value), case=False, na=False)]
             elif operator == "不包含" and value:
                 result = result[~result[actual_field].astype(str).str.contains(str(value), case=False, na=False)]
+        elif field_type == "enum":
+            # 枚举类型：将显示值映射回实际值
+            enum_mapping = {"向上": 1, "向下": -1, "走平": 0}
+            actual_value = enum_mapping.get(value)
+            if actual_value is not None:
+                result = result[result[actual_field] == actual_value]
         else:
             result[actual_field] = pd.to_numeric(result[actual_field], errors="coerce")
             if operator == "大于":
@@ -844,14 +1038,15 @@ def apply_filters(df: pd.DataFrame, conditions: list, config: dict) -> pd.DataFr
 # ==================== 选股结果数据层函数 ====================
 
 def get_available_selection_dates(session) -> List[str]:
-    """获取所有可用的选股日期"""
+    """获取所有可用的选股日期（包括系统选股日期）"""
+    # 从 stock_selection_results 获取系统选股日期
     sql = """
-        SELECT DISTINCT selection_date FROM stock_selection_results
+        SELECT DISTINCT selection_date as date FROM stock_selection_results
         ORDER BY selection_date DESC
     """
     try:
         df = query_sql(session, sql, {})
-        return df["selection_date"].tolist() if not df.empty else []
+        return df["date"].tolist() if not df.empty else []
     except Exception:
         return []
 
@@ -878,6 +1073,7 @@ def load_selection_results(session, selection_date: str = None) -> pd.DataFrame:
         WITH current_selection AS (
             SELECT
                 selection_date,
+                signal_date,
                 ts_code,
                 stock_name,
                 report_date,
@@ -892,23 +1088,38 @@ def load_selection_results(session, selection_date: str = None) -> pd.DataFrame:
                 q_np_parent_yoy_delta,
                 trend_consistency,
                 ann_date,
+                pavp_selected,
+                pavp_trend,
+                vah_1, vah_2, vah_3,
+                val_1, val_2, val_3,
+                va_pos_01,
+                bbmacd_event,
+                poc_1, poc_2, poc_3,
+                poc_bars,
+                poc_avg_ret,
+                daily_bb_width_zscore,
+                daily_vol_zscore,
+                daily_vwap_deviation,
+                change_pct,
+                created_at,
                 daily_reversal_buy,
                 daily_breakout_buy,
                 weekly_reversal_buy,
                 weekly_breakout_buy,
-                daily_bb_width_zscore,
                 weekly_bb_width_zscore,
-                daily_vol_zscore,
                 weekly_vol_zscore,
-                weekly_vwap_deviation,
-                created_at
+                daily_dsa_duration,
+                daily_dsa_avg_deviation,
+                daily_dsa_deviation_variance
             FROM stock_selection_results
             WHERE selection_date = :selection_date
         )
         SELECT
             c.selection_date,
+            c.signal_date,
             c.ts_code,
             c.stock_name,
+            p.concepts,
             c.report_date,
             c.total_score,
             c.margin_score,
@@ -921,27 +1132,31 @@ def load_selection_results(session, selection_date: str = None) -> pd.DataFrame:
             c.q_np_parent_yoy_delta,
             c.trend_consistency,
             c.ann_date,
+            c.pavp_selected,
+            c.pavp_trend,
+            c.vah_1, c.vah_2, c.vah_3,
+            c.val_1, c.val_2, c.val_3,
+            c.va_pos_01,
+            c.bbmacd_event,
+            c.poc_1, c.poc_2, c.poc_3,
+            c.poc_bars,
+            c.poc_avg_ret,
+            c.daily_vwap_deviation,
+            c.daily_vol_zscore,
+            c.change_pct,
+            c.created_at,
+            c.daily_bb_width_zscore,
             c.daily_reversal_buy,
             c.daily_breakout_buy,
             c.weekly_reversal_buy,
             c.weekly_breakout_buy,
-            c.daily_bb_width_zscore,
-            c.daily_vol_zscore,
-            c.weekly_vwap_deviation,
-            c.created_at,
-            -- 如果当前日期没有周线数据，用最近一次周线买点的值填充
-            COALESCE(c.weekly_bb_width_zscore, lw.weekly_bb_width_zscore) as weekly_bb_width_zscore,
-            COALESCE(c.weekly_vol_zscore, lw.weekly_vol_zscore) as weekly_vol_zscore
+            c.weekly_bb_width_zscore,
+            c.weekly_vol_zscore,
+            c.daily_dsa_duration,
+            c.daily_dsa_avg_deviation,
+            c.daily_dsa_deviation_variance
         FROM current_selection c
-        LEFT JOIN LATERAL (
-            SELECT weekly_bb_width_zscore, weekly_vol_zscore
-            FROM stock_selection_results
-            WHERE ts_code = c.ts_code
-            AND selection_date < :selection_date
-            AND (weekly_reversal_buy = TRUE OR weekly_breakout_buy = TRUE)
-            ORDER BY selection_date DESC
-            LIMIT 1
-        ) lw ON TRUE
+        LEFT JOIN stock_pools p ON c.ts_code = p.ts_code
         ORDER BY c.margin_score DESC, c.total_score DESC
     """
     try:
@@ -949,6 +1164,72 @@ def load_selection_results(session, selection_date: str = None) -> pd.DataFrame:
         return df
     except Exception as e:
         st.error(f"加载选股结果失败: {e}")
+        return pd.DataFrame()
+
+
+def get_available_stop_loss_dates(session) -> List[str]:
+    """获取所有可用的Stop-Loss选股日期"""
+    sql = """
+        SELECT DISTINCT selection_date as date FROM stop_loss_selection
+        ORDER BY selection_date DESC
+    """
+    try:
+        df = query_sql(session, sql, {})
+        return df["date"].tolist() if not df.empty else []
+    except Exception:
+        return []
+
+
+def load_stop_loss_results(session, selection_date: str = None) -> pd.DataFrame:
+    """
+    加载Stop-Loss Clustering选股结果数据
+
+    Args:
+        session: 数据库会话
+        selection_date: 选股日期，为None时取最新日期
+
+    Returns:
+        DataFrame包含Stop-Loss选股结果
+    """
+    if selection_date is None:
+        dates = get_available_stop_loss_dates(session)
+        if not dates:
+            return pd.DataFrame()
+        selection_date = dates[0]
+
+    sql = """
+        SELECT
+            s.selection_date,
+            s.signal_date,
+            s.ts_code,
+            s.stock_name,
+            p.concepts,
+            s.sell_stop_triggered,
+            s.sell_trigger_volume,
+            s.active_sell_cluster_count,
+            s.sum_sells_active,
+            s.sell_trigger_max_vol_price,
+            s.sell_stop_scale,
+            s.nearest_sell_stop_price,
+            s.dist_to_nearest_sell_stop_atr,
+            s.last_event_type,
+            s.last_event_volume,
+            s.last_event_bars_ago,
+            s.change_pct,
+            s.vol_zscore,
+            s.bbmacd_event,
+            s.daily_bb_width_zscore,
+            s.created_at
+        FROM stop_loss_selection s
+        LEFT JOIN stock_pools p ON s.ts_code = p.ts_code
+        WHERE s.selection_date = :selection_date
+        ORDER BY s.sell_stop_scale DESC NULLS LAST
+    """
+    try:
+        df = query_sql(session, sql, {"selection_date": selection_date})
+        return df
+    except Exception as e:
+        st.error(f"加载Stop-Loss选股结果失败: {e}")
         return pd.DataFrame()
 
 
@@ -1033,43 +1314,6 @@ def compute_bbmacd_for_chart(df: pd.DataFrame, rapida: int = 8, lenta: int = 26,
     out["banda_supe"] = out["avg"] + stdv * out["sdev"]
     out["banda_inf"] = out["avg"] - stdv * out["sdev"]
     return out
-
-
-# ==================== 原自选股功能（保留） ====================
-
-def load_watchlist(session) -> list:
-    """从数据库加载自选股列表"""
-    sql = "SELECT ts_code, name FROM stock_watchlist ORDER BY sort_order, added_date DESC"
-    return query_sql(session, sql)
-
-
-def add_to_watchlist(session, ts_code: str, name: str) -> bool:
-    """添加股票到自选股"""
-    from sqlalchemy import text
-    sql = """
-        INSERT INTO stock_watchlist (ts_code, name)
-        VALUES (:ts_code, :name)
-        ON CONFLICT (ts_code) DO NOTHING
-    """
-    try:
-        session.execute(text(sql), {"ts_code": ts_code, "name": name})
-        session.commit()
-        return True
-    except Exception:
-        session.rollback()
-        return False
-
-
-def remove_from_watchlist(session, ts_code: str) -> bool:
-    """从自选股删除股票"""
-    from datasource.database import delete_by_filter
-    try:
-        delete_by_filter(session, "stock_watchlist", {"ts_code": ts_code})
-        session.commit()
-        return True
-    except Exception:
-        session.rollback()
-        return False
 
 
 def get_kline_data_from_db(ts_code: str, freq: str = 'd', bars: int = 60) -> pd.DataFrame:
@@ -1246,7 +1490,7 @@ def build_kline_chart(df: pd.DataFrame, stock_name: str, show_vwap: bool = False
     if df.empty:
         return go.Figure()
 
-    x_values = df.index.strftime('%Y-%m-%d %H:%M').tolist()
+    x_values = df.index.strftime('%Y-%m-%d').tolist()
 
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=False,
@@ -1299,7 +1543,7 @@ def build_kline_chart(df: pd.DataFrame, stock_name: str, show_vwap: bool = False
             for seg in segments:
                 seg_dir = seg["dir"]
                 color = "#ff1744" if seg_dir > 0 else "#00e676"
-                x_str = [pd.Timestamp(t).strftime('%Y-%m-%d %H:%M') for t in seg["x"]]
+                x_str = [pd.Timestamp(t).strftime('%Y-%m-%d') for t in seg["x"]]
                 fig.add_trace(
                     go.Scatter(x=x_str, y=seg["y"], mode="lines",
                                line=dict(width=2, color=color),
@@ -1313,7 +1557,7 @@ def build_kline_chart(df: pd.DataFrame, stock_name: str, show_vwap: bool = False
                 is_up = lab["dir"] > 0
                 bgcolor = "rgba(0,230,118,0.85)" if is_up else "rgba(255,23,68,0.85)"
                 ay = 25 if is_up else -25
-                x_str = pd.Timestamp(lab["x"]).strftime('%Y-%m-%d %H:%M')
+                x_str = pd.Timestamp(lab["x"]).strftime('%Y-%m-%d')
                 fig.add_annotation(
                     x=x_str, y=lab["y"], xref="x", yref="y",
                     text=txt, showarrow=True, arrowhead=2, ax=0, ay=ay,
@@ -1414,15 +1658,11 @@ def build_kline_chart(df: pd.DataFrame, stock_name: str, show_vwap: bool = False
 # ==================== BSM指标图表组件 ====================
 
 BUY_SIGNAL_COLORS = {
-    "daily_reversal_buy": "#26a69a",    # 绿色 - 日线一类
-    "daily_breakout_buy": "#2962ff",    # 蓝色 - 日线二类
     "weekly_reversal_buy": "#9c27b0",   # 紫色 - 周线一类
     "weekly_breakout_buy": "#ff9800",   # 橙色 - 周线二类
 }
 
 BUY_SIGNAL_NAMES = {
-    "daily_reversal_buy": "日线反转",
-    "daily_breakout_buy": "日线突破",
     "weekly_reversal_buy": "周线反转",
     "weekly_breakout_buy": "周线突破",
 }
@@ -1431,7 +1671,9 @@ BUY_SIGNAL_NAMES = {
 def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
                                 show_vwap: bool = False,
                                 show_atr_rope: bool = False,
-                                show_bsm: bool = True) -> go.Figure:
+                                show_bsm: bool = True,
+                                show_pavp: bool = False,
+                                ts_code: str = None) -> go.Figure:
     """
     构建带BSM指标的K线图表
 
@@ -1441,35 +1683,67 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
         show_vwap: 是否显示VWAP
         show_atr_rope: 是否显示ATR Rope
         show_bsm: 是否显示BSM指标副图
+        show_pavp: 是否显示PAVP指标（主图+副图）
+        ts_code: 股票代码
 
     Returns:
         Plotly Figure对象
     """
+    from features.pavp_tv_fixed_params_factors import compute_pavp
+
     if df.empty:
         return go.Figure()
 
     has_bsm = show_bsm and 'bbmacd' in df.columns and 'banda_supe' in df.columns
+    has_pavp = show_pavp and len(df) >= 40
+
+    if has_pavp:
+        df_full = df.copy()
+        df_plot = df.copy()
+        pavp_df, fixed_segments, last_dev = compute_pavp(df_full)
 
     # 确定子图布局
-    if has_bsm:
+    if has_bsm and has_pavp:
+        fig = make_subplots(
+            rows=4, cols=1, shared_xaxes=True,
+            vertical_spacing=0.03,
+            row_heights=[0.50, 0.25, 0.10, 0.15],
+            subplot_titles=(f"{stock_name} K线", "成交量", "PAVP VA Position", "BSM指标")
+        )
+        bsm_row = 4
+        pavp_row = 3
+        vol_row = 2
+    elif has_bsm:
         fig = make_subplots(
             rows=3, cols=1, shared_xaxes=True,
             vertical_spacing=0.05,
             row_heights=[0.55, 0.25, 0.20],
             subplot_titles=(f"{stock_name} K线", "成交量", "BSM指标")
         )
+        bsm_row = 3
+        pavp_row = None
+        vol_row = 2
+    elif has_pavp:
+        fig = make_subplots(
+            rows=3, cols=1, shared_xaxes=True,
+            vertical_spacing=0.03,
+            row_heights=[0.60, 0.20, 0.20],
+            subplot_titles=(f"{stock_name} K线", "成交量", "PAVP VA Position")
+        )
+        bsm_row = None
+        pavp_row = 3
+        vol_row = 2
     else:
         fig = make_subplots(
             rows=2, cols=1, shared_xaxes=False,
             vertical_spacing=0.03, row_heights=[0.7, 0.3],
             subplot_titles=(f"{stock_name} K线", "成交量")
         )
+        bsm_row = None
+        pavp_row = None
+        vol_row = 2
 
-    x_values = df.index.strftime('%Y-%m-%d %H:%M').tolist() if hasattr(df.index, 'strftime') else list(range(len(df)))
-    if hasattr(df.index, 'strftime'):
-        x_values = df.index.strftime('%Y-%m-%d %H:%M').tolist()
-    else:
-        x_values = df.index.astype(str).tolist()
+    x_values = df.index.strftime('%Y-%m-%d').tolist() if hasattr(df.index, 'strftime') else list(range(len(df)))
 
     colors = ["#FF0000" if df["close"].iloc[i] >= df["open"].iloc[i] else "#00FF00" for i in range(len(df))]
 
@@ -1494,10 +1768,142 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
         marker_color=colors,
         opacity=1.0,
         name="成交量"
-    ), row=2, col=1)
+    ), row=vol_row, col=1)
+
+    # PAVP指标主图+副图
+    if has_pavp:
+        PIVOT_LENGTH = 20
+        PROFILE_LEVELS = 25
+        VALUE_AREA_PCT = 0.68
+        PROFILE_WIDTH = 0.30
+        PROFILE_PLACEMENT = 'Left'
+        SHOW_BG_FILL = True
+        SHOW_VA_BG = True
+        SHOW_VOLUME_PROFILE = True
+        SHOW_POC = True
+        SHOW_VAH = True
+        SHOW_VAL = True
+        SHOW_POC_BOX = True
+        plot_start = 0
+        tick_text = x_values
+
+        def _rgba(hex_color, alpha):
+            s = hex_color.lstrip('#')
+            r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+            return f'rgba({r},{g},{b},{alpha})'
+
+        def draw_segment(seg, draw_boxes, line_width=2):
+            left = seg.start_index - plot_start
+            right = seg.end_index - plot_start
+            if right < 0 or left > len(df_plot) - 1:
+                return
+            left_clip = max(left, 0)
+            right_clip = min(right, len(df_plot) - 1)
+            left_x = tick_text[left_clip]
+            right_x = tick_text[right_clip]
+
+            if SHOW_BG_FILL:
+                fig.add_shape(type='rect', x0=left_x, x1=right_x,
+                              y0=seg.price_lowest, y1=seg.price_highest,
+                              line=dict(color=_rgba('#2962ff', 0.18), width=1, dash='dot'),
+                              fillcolor=_rgba('#2962ff', 0.05), xref='x1', yref='y1')
+            if SHOW_VA_BG:
+                fig.add_shape(type='rect', x0=left_x, x1=right_x,
+                              y0=seg.val_price, y1=seg.vah_price,
+                              line=dict(color='rgba(0,0,0,0)', width=0),
+                              fillcolor=_rgba('#00134d', 0.18), xref='x1', yref='y1')
+            if draw_boxes and SHOW_VOLUME_PROFILE:
+                max_hist = float(np.max(seg.hist)) if np.max(seg.hist) > 0 else 1.0
+                for level in range(PROFILE_LEVELS):
+                    share = float(seg.hist[level] / max_hist)
+                    width = int(share * (seg.end_index - seg.start_index) * PROFILE_WIDTH)
+                    if PROFILE_PLACEMENT.lower() == 'right':
+                        x0_idx = right_clip - width
+                        x1_idx = right_clip
+                    else:
+                        x0_idx = left
+                        x1_idx = x0_idx + width
+                    x0_idx = max(x0_idx, 0)
+                    x1_idx = min(x1_idx, len(df_plot) - 1)
+                    if x1_idx <= x0_idx:
+                        continue
+                    x0 = tick_text[x0_idx]
+                    x1 = tick_text[x1_idx]
+                    y0 = seg.price_lowest + (level + 0.10) * seg.price_step
+                    y1 = seg.price_lowest + (level + 0.90) * seg.price_step
+                    in_va = seg.level_below_poc <= level <= seg.level_above_poc
+                    fill = _rgba('#fbc02d', 0.32) if in_va else _rgba('#434651', 0.32)
+                    line_c = _rgba('#fbc02d', 0.45) if in_va else _rgba('#434651', 0.45)
+                    fig.add_shape(type='rect', x0=x0, x1=x1, y0=y0, y1=y1,
+                                  line=dict(color=line_c, width=1), fillcolor=fill,
+                                  xref='x1', yref='y1')
+            if SHOW_POC:
+                fig.add_trace(go.Scatter(x=[left_x, right_x], y=[seg.poc_price, seg.poc_price],
+                                         mode='lines', line=dict(color='#ff0000', width=line_width),
+                                         name='POC', showlegend=False), row=1, col=1)
+            if SHOW_VAH:
+                fig.add_trace(go.Scatter(x=[left_x, right_x], y=[seg.vah_price, seg.vah_price],
+                                         mode='lines', line=dict(color='#2962ff', width=line_width),
+                                         name='VAH', showlegend=False), row=1, col=1)
+            if SHOW_VAL:
+                fig.add_trace(go.Scatter(x=[left_x, right_x], y=[seg.val_price, seg.val_price],
+                                         mode='lines', line=dict(color='#2962ff', width=line_width),
+                                         name='VAL', showlegend=False), row=1, col=1)
+            if SHOW_POC_BOX:
+                fig.add_shape(type='rect', x0=left_x, x1=right_x,
+                              y0=seg.price_lowest + (seg.poc_level + 0.40) * seg.price_step,
+                              y1=seg.price_lowest + (seg.poc_level + 0.60) * seg.price_step,
+                              line=dict(color='#ff0000', width=1),
+                              fillcolor=_rgba('#ff0000', 0.35), xref='x1', yref='y1')
+
+        for seg in fixed_segments:
+            draw_segment(seg, draw_boxes=False, line_width=2)
+        if last_dev is not None:
+            draw_segment(last_dev, draw_boxes=True, line_width=2)
+
+        # pivot labels
+        for j in range(len(df_plot)):
+            full_j = plot_start + j
+            if np.isfinite(pavp_df['pvt_high_confirm'].iloc[full_j]):
+                anchor_idx = full_j - PIVOT_LENGTH - plot_start
+                if 0 <= anchor_idx < len(df_plot):
+                    anchor_x = tick_text[anchor_idx]
+                    fig.add_annotation(
+                        x=anchor_x, y=float(pavp_df['pvt_high_confirm'].iloc[full_j]),
+                        text=f"{float(pavp_df['pvt_high_confirm'].iloc[full_j]):.2f}",
+                        showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1,
+                        arrowcolor='#d4a5a5', ax=0, ay=-22,
+                        bgcolor='#d4a5a5', font=dict(color='white', size=10),
+                        xref='x1', yref='y1')
+            if np.isfinite(pavp_df['pvt_low_confirm'].iloc[full_j]):
+                anchor_idx = full_j - PIVOT_LENGTH - plot_start
+                if 0 <= anchor_idx < len(df_plot):
+                    anchor_x = tick_text[anchor_idx]
+                    fig.add_annotation(
+                        x=anchor_x, y=float(pavp_df['pvt_low_confirm'].iloc[full_j]),
+                        text=f"{float(pavp_df['pvt_low_confirm'].iloc[full_j]):.2f}",
+                        showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1,
+                        arrowcolor='#8faadc', ax=0, ay=22,
+                        bgcolor='#8faadc', font=dict(color='white', size=10),
+                        xref='x1', yref='y1')
+
+        # PAVP VA Position 副图
+        fig.add_trace(go.Scatter(x=tick_text, y=pavp_df['va_pos_01'].values, mode='lines',
+                                 name='va_pos_01'), row=pavp_row, col=1)
+        fig.add_trace(go.Scatter(x=tick_text, y=pavp_df['poc_in_va_pos_01'].values, mode='lines',
+                                 name='poc_in_va_pos_01'), row=pavp_row, col=1)
+        fig.add_hline(y=0.0, line_width=1, line_dash='dot', line_color='#90a4ae', row=pavp_row, col=1)
+        fig.add_hline(y=1.0, line_width=1, line_dash='dot', line_color='#90a4ae', row=pavp_row, col=1)
+        fig.update_yaxes(title_text="VA Position", row=pavp_row, col=1)
 
     # BSM指标副图
     if has_bsm:
+        # 计算交叉信号
+        cross_up_supe = (df['bbmacd'] > df['banda_supe']) & (df['bbmacd'].shift(1) <= df['banda_supe'].shift(1))
+        cross_up_inf = (df['bbmacd'] > df['banda_inf']) & (df['bbmacd'].shift(1) <= df['banda_inf'].shift(1))
+        cross_down_supe = (df['bbmacd'] < df['banda_supe']) & (df['bbmacd'].shift(1) >= df['banda_supe'].shift(1))
+        cross_down_inf = (df['bbmacd'] < df['banda_inf']) & (df['bbmacd'].shift(1) >= df['banda_inf'].shift(1))
+
         # bbmacd线
         fig.add_trace(go.Scatter(
             x=x_values,
@@ -1505,7 +1911,7 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
             mode="lines",
             line=dict(width=1.5, color="#2962ff"),
             name="BBMACD"
-        ), row=3, col=1)
+        ), row=bsm_row, col=1)
 
         # 上轨
         fig.add_trace(go.Scatter(
@@ -1514,7 +1920,7 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
             mode="lines",
             line=dict(width=1, color="#26a69a", dash="dash"),
             name="上轨"
-        ), row=3, col=1)
+        ), row=bsm_row, col=1)
 
         # 下轨
         fig.add_trace(go.Scatter(
@@ -1523,7 +1929,7 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
             mode="lines",
             line=dict(width=1, color="#ef5350", dash="dash"),
             name="下轨"
-        ), row=3, col=1)
+        ), row=bsm_row, col=1)
 
         # 零轴
         fig.add_trace(go.Scatter(
@@ -1532,7 +1938,75 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
             mode="lines",
             line=dict(width=0.5, color="rgba(255,255,255,0.3)"),
             name="零轴"
-        ), row=3, col=1)
+        ), row=bsm_row, col=1)
+
+        # 在BSM指标副图上添加小三角形标记（简化显示）
+        for i, (idx, row_data) in enumerate(df.iterrows()):
+            x_val = x_values[i]
+
+            # 上穿上轨 - 买入信号（绿色小三角）
+            if cross_up_supe.iloc[i]:
+                fig.add_annotation(
+                    x=x_val, y=row_data['bbmacd'],
+                    text="▲", showarrow=False,
+                    font=dict(color="#00e676", size=12),
+                    row=bsm_row, col=1
+                )
+
+            # 上穿下轨 - 买入信号（绿色小三角）
+            if cross_up_inf.iloc[i]:
+                fig.add_annotation(
+                    x=x_val, y=row_data['bbmacd'],
+                    text="▲", showarrow=False,
+                    font=dict(color="#00e676", size=12),
+                    row=bsm_row, col=1
+                )
+
+            # 下穿下轨 - 卖出信号（红色小三角）
+            if cross_down_inf.iloc[i]:
+                fig.add_annotation(
+                    x=x_val, y=row_data['bbmacd'],
+                    text="▼", showarrow=False,
+                    font=dict(color="#ff1744", size=12),
+                    row=bsm_row, col=1
+                )
+
+            # 下穿上轨 - 卖出信号（红色小三角）
+            if cross_down_supe.iloc[i]:
+                fig.add_annotation(
+                    x=x_val, y=row_data['bbmacd'],
+                    text="▼", showarrow=False,
+                    font=dict(color="#ff1744", size=12),
+                    row=bsm_row, col=1
+                )
+
+        # 在K线主图上添加粗箭头标记（无文字）
+        for i, (idx, row_data) in enumerate(df.iterrows()):
+            x_val = x_values[i]
+            low_price = row_data['low']
+            high_price = row_data['high']
+
+            # 上穿信号 - 蓝色粗箭头（向上）
+            if cross_up_supe.iloc[i] or cross_up_inf.iloc[i]:
+                fig.add_annotation(
+                    x=x_val, y=low_price,
+                    showarrow=True, arrowhead=2,
+                    arrowcolor="#00bfff",  # 蓝色
+                    arrowwidth=2,  # 粗箭头
+                    ax=0, ay=20,
+                    row=1, col=1
+                )
+
+            # 下穿信号 - 洋红色粗箭头（向下）
+            if cross_down_inf.iloc[i] or cross_down_supe.iloc[i]:
+                fig.add_annotation(
+                    x=x_val, y=high_price,
+                    showarrow=True, arrowhead=2,
+                    arrowcolor="#ff69b4",  # 洋红色
+                    arrowwidth=2,  # 粗箭头
+                    ax=0, ay=-20,
+                    row=1, col=1
+                )
 
     # 添加VWAP
     if show_vwap:
@@ -1542,7 +2016,7 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
             for seg in segments:
                 seg_dir = seg["dir"]
                 color = "#ff1744" if seg_dir > 0 else "#00e676"
-                x_str = [pd.Timestamp(t).strftime('%Y-%m-%d %H:%M') for t in seg["x"]]
+                x_str = [pd.Timestamp(t).strftime('%Y-%m-%d') for t in seg["x"]]
                 fig.add_trace(
                     go.Scatter(x=x_str, y=seg["y"], mode="lines",
                                line=dict(width=2, color=color),
@@ -1556,7 +2030,7 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
                 is_up = lab["dir"] > 0
                 bgcolor = "rgba(0,230,118,0.85)" if is_up else "rgba(255,23,68,0.85)"
                 ay = 25 if is_up else -25
-                x_str = pd.Timestamp(lab["x"]).strftime('%Y-%m-%d %H:%M')
+                x_str = pd.Timestamp(lab["x"]).strftime('%Y-%m-%d')
                 fig.add_annotation(
                     x=x_str, y=lab["y"], xref="x", yref="y",
                     text=txt, showarrow=True, arrowhead=2, ax=0, ay=ay,
@@ -1597,7 +2071,12 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
             print(f"ATR Rope计算失败: {e}")
 
     # 布局设置
-    height = 800 if has_bsm else 600
+    if has_bsm and has_pavp:
+        height = 1000
+    elif has_bsm or has_pavp:
+        height = 800
+    else:
+        height = 600
     fig.update_layout(
         template="plotly_dark",
         height=height,
@@ -1618,10 +2097,13 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
     fig.update_xaxes(type='category', showspikes=True, spikecolor="rgba(255,255,255,0.3)",
                      spikethickness=1, spikemode="across", showticklabels=False, row=1, col=1)
     fig.update_xaxes(type='category', showspikes=True, spikecolor="rgba(255,255,255,0.3)",
-                     spikethickness=1, spikemode="across", showticklabels=False, row=2, col=1)
+                     spikethickness=1, spikemode="across", showticklabels=False, row=vol_row, col=1)
+    if has_pavp and pavp_row is not None:
+        fig.update_xaxes(type='category', showspikes=True, spikecolor="rgba(255,255,255,0.3)",
+                         spikethickness=1, spikemode="across", showticklabels=False, row=pavp_row, col=1)
     if has_bsm:
         fig.update_xaxes(type='category', showspikes=True, spikecolor="rgba(255,255,255,0.3)",
-                         spikethickness=1, spikemode="across", showticklabels=True, row=3, col=1)
+                         spikethickness=1, spikemode="across", showticklabels=True, row=bsm_row, col=1)
 
     return fig
 
@@ -1642,12 +2124,10 @@ def add_buy_signals_to_chart(fig: go.Figure, df: pd.DataFrame, signals: Dict, pe
     if df.empty:
         return fig
 
-    x_values = df.index.strftime('%Y-%m-%d %H:%M').tolist() if hasattr(df.index, 'strftime') else df.index.astype(str).tolist()
+    x_values = df.index.strftime('%Y-%m-%d').tolist() if hasattr(df.index, 'strftime') else df.index.astype(str).tolist()
 
     # 根据周期确定要检查的买点类型
-    if period == 'd':
-        signal_keys = ['daily_reversal_buy', 'daily_breakout_buy']
-    elif period == 'w':
+    if period == 'w':
         signal_keys = ['weekly_reversal_buy', 'weekly_breakout_buy']
     else:
         return fig
@@ -1701,371 +2181,97 @@ def add_buy_signals_to_chart(fig: go.Figure, df: pd.DataFrame, signals: Dict, pe
     return fig
 
 
-# ==================== 新的自选股页面（基于选股结果） ====================
+def build_bbmacd_daily_chart(df: pd.DataFrame, title: str):
+    """构建日线图，显示BBMACD指标"""
+    from features.bbmacd_viewer import compute_bbmacd
 
-def render_stock_picker_page(session, sidebar):
-    """选股结果展示页面 - 仅显示股票列表"""
-    from datetime import date
+    # 计算BBMACD
+    bbmacd_df = compute_bbmacd(df)
 
-    # 获取可用日期列表
-    available_dates = get_available_selection_dates(session)
-    if not available_dates:
-        st.warning("暂无选股数据，请先运行选股脚本")
-        return
-
-    # 日期选择（日历控件）
-    # 处理日期格式：数据库可能是字符串或date对象
-    def _to_date_obj(d):
-        if isinstance(d, date):
-            return d
-        # 字符串格式 '20250415'
-        return date(int(d[:4]), int(d[4:6]), int(d[6:8]))
-
-    available_date_objs = [_to_date_obj(d) for d in available_dates]
-    min_date = min(available_date_objs)
-    max_date = max(available_date_objs)
-    default_date = available_date_objs[0]  # 最新日期
-
-    selected_date_obj = st.date_input(
-        "选股日期",
-        value=default_date,
-        min_value=min_date,
-        max_value=max_date,
-        key="sel_date_calendar"
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.6, 0.4],
+        subplot_titles=(title, "BBMACD")
     )
 
-    # 转换回字符串格式 '20250415'
-    selected_date = selected_date_obj.strftime('%Y%m%d')
+    # K线
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df['open'],
+        high=df['high'],
+        low=df['low'],
+        close=df['close'],
+        name='K线',
+        increasing_line_color='#26a69a',
+        decreasing_line_color='#ef5350'
+    ), row=1, col=1)
 
-    # 如果选中日期无数据，自动切换到最近的有效日期
-    available_date_strs = [d.strftime('%Y%m%d') if isinstance(d, date) else str(d) for d in available_dates]
-    if selected_date not in available_date_strs:
-        st.warning(f"{selected_date} 暂无选股数据，自动切换到最近的有效日期")
-        # 找到最近的有效日期（小于等于选中日期的最大有效日期）
-        valid_dates = [d for d in available_date_strs if d <= selected_date]
-        if valid_dates:
-            selected_date = max(valid_dates)
-        else:
-            selected_date = available_date_strs[0]  # 如果没有更早的日期，使用最新日期
+    # BBMACD指标
+    fig.add_trace(go.Scatter(
+        x=bbmacd_df.index,
+        y=bbmacd_df['banda_supe'],
+        mode='lines',
+        name='上轨',
+        line=dict(color='rgba(0,191,255,0.9)', width=1)
+    ), row=2, col=1)
 
-    # 加载选股结果
-    selection_df = load_selection_results(session, selected_date)
+    fig.add_trace(go.Scatter(
+        x=bbmacd_df.index,
+        y=bbmacd_df['banda_inf'],
+        mode='lines',
+        name='下轨',
+        line=dict(color='rgba(0,191,255,0.9)', width=1),
+        fill='tonexty',
+        fillcolor='rgba(0,191,255,0.16)'
+    ), row=2, col=1)
 
-    if selection_df.empty:
-        st.warning("该日期暂无选股数据")
-        return
+    fig.add_trace(go.Scatter(
+        x=bbmacd_df.index,
+        y=bbmacd_df['bbmacd'],
+        mode='lines',
+        name='BBMACD',
+        line=dict(color='#1e88e5', width=2)
+    ), row=2, col=1)
 
-    # 显示统计
-    st.markdown(f"**选股日期: {selected_date} | 共 {len(selection_df)} 只股票**")
+    fig.add_trace(go.Scatter(
+        x=bbmacd_df.index,
+        y=bbmacd_df['avg'],
+        mode='lines',
+        name='Avg',
+        line=dict(color='#ff9800', width=1, dash='dash')
+    ), row=2, col=1)
 
-    # 从 stock_pools 表获取概念数据并合并
-    ts_codes = selection_df['ts_code'].tolist()
-    if ts_codes:
-        concept_sql = f"""
-            SELECT ts_code, concepts 
-            FROM stock_pools 
-            WHERE ts_code IN ({','.join([f"'{code}'" for code in ts_codes])})
-        """
-        concept_df = query_sql(session, concept_sql, {})
-        if concept_df is not None and not concept_df.empty:
-            concept_map = dict(zip(concept_df['ts_code'], concept_df['concepts']))
-            selection_df['concepts'] = selection_df['ts_code'].map(concept_map)
-        else:
-            selection_df['concepts'] = ''
-    else:
-        selection_df['concepts'] = ''
+    # 标记V型反转点
+    bbmacd_vals = bbmacd_df['bbmacd'].values
+    if len(bbmacd_vals) >= 3:
+        v_shape_points = []
+        for i in range(2, len(bbmacd_vals)):
+            t_2 = bbmacd_vals[i-2]
+            t_1 = bbmacd_vals[i-1]
+            t = bbmacd_vals[i]
+            if t_2 > t_1 and t > t_1:
+                v_shape_points.append(i)
 
-    # 重命名列以匹配配置
-    selection_df = selection_df.rename(columns={
-        'stock_name': 'stock_name',
-        'ts_code': 'ts_code'
-    })
+        if v_shape_points:
+            fig.add_trace(go.Scatter(
+                x=[bbmacd_df.index[i] for i in v_shape_points],
+                y=[bbmacd_df['bbmacd'].iloc[i] for i in v_shape_points],
+                mode='markers',
+                name='V型反转',
+                marker=dict(symbol='diamond', size=10, color='#00e676')
+            ), row=2, col=1)
 
-    # 买点类型快速筛选
-    st.markdown("**快速筛选**")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        filter_daily_reversal = st.checkbox("日线反转", value=False, key="filter_dr")
-    with col2:
-        filter_daily_breakout = st.checkbox("日线突破", value=False, key="filter_db")
-    with col3:
-        filter_weekly_reversal = st.checkbox("周线反转", value=False, key="filter_wr")
-    with col4:
-        filter_weekly_breakout = st.checkbox("周线突破", value=False, key="filter_wb")
+    fig.update_layout(
+        template='plotly_dark',
+        xaxis_rangeslider_visible=False,
+        height=800,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+    )
 
-    # 应用快速筛选
-    filtered_df = selection_df.copy()
-    if filter_daily_reversal:
-        filtered_df = filtered_df[filtered_df['daily_reversal_buy'] == True]
-    if filter_daily_breakout:
-        filtered_df = filtered_df[filtered_df['daily_breakout_buy'] == True]
-    if filter_weekly_reversal:
-        filtered_df = filtered_df[filtered_df['weekly_reversal_buy'] == True]
-    if filter_weekly_breakout:
-        filtered_df = filtered_df[filtered_df['weekly_breakout_buy'] == True]
-
-    st.markdown("---")
-
-    # 多条件筛选
-    conditions = render_filter_bar(filtered_df, "选股主页")
-    if conditions:
-        filtered_df = apply_filters(filtered_df, conditions, TAB_FIELD_CONFIGS["选股主页"])
-
-    loaded_conditions = render_filter_manager(session, "选股主页", conditions)
-    if loaded_conditions:
-        filtered_df = selection_df.copy()
-        # 重新应用快速筛选
-        if filter_daily_reversal:
-            filtered_df = filtered_df[filtered_df['daily_reversal_buy'] == True]
-        if filter_daily_breakout:
-            filtered_df = filtered_df[filtered_df['daily_breakout_buy'] == True]
-        if filter_weekly_reversal:
-            filtered_df = filtered_df[filtered_df['weekly_reversal_buy'] == True]
-        if filter_weekly_breakout:
-            filtered_df = filtered_df[filtered_df['weekly_breakout_buy'] == True]
-        filtered_df = apply_filters(filtered_df, loaded_conditions, TAB_FIELD_CONFIGS["选股主页"])
-
-    st.markdown(f"**筛选结果: {len(filtered_df)} 只**")
-    st.markdown("---")
-
-    # 显示股票列表表格
-    if filtered_df.empty:
-        st.info("无符合条件的股票")
-    else:
-        # 准备显示数据
-        display_data = []
-        for _, row in filtered_df.iterrows():
-            # 买点标记
-            buy_signals = []
-            if row.get('daily_reversal_buy'):
-                buy_signals.append("🟢日反")
-            if row.get('daily_breakout_buy'):
-                buy_signals.append("🔵日突")
-            if row.get('weekly_reversal_buy'):
-                buy_signals.append("🟣周反")
-            if row.get('weekly_breakout_buy'):
-                buy_signals.append("🟠周突")
-            buy_signal_str = " ".join(buy_signals) if buy_signals else "-"
-
-            # 获取概念
-            concepts = row.get('concepts', '')
-            if concepts and isinstance(concepts, str) and concepts.strip():
-                concept_list = [c.strip() for c in concepts.split(';') if c.strip()]
-                concepts_display = '、'.join(concept_list)
-            else:
-                concepts_display = '-'
-
-            # VWAP偏离百分比（保持数值类型用于正确排序）
-            vwap_deviation = row.get('weekly_vwap_deviation')
-            if pd.notna(vwap_deviation) and vwap_deviation is not None:
-                vwap_pct_value = float(vwap_deviation) * 100  # 转为百分比数值
-            else:
-                vwap_pct_value = None
-
-            display_data.append({
-                '代码': row['ts_code'],
-                '名称': row.get('stock_name', ''),
-                '概念': concepts_display,
-                '买点': buy_signal_str,
-                '日线Z分': row.get('daily_bb_width_zscore') if pd.notna(row.get('daily_bb_width_zscore')) else None,
-                '周线Z分': row.get('weekly_bb_width_zscore') if pd.notna(row.get('weekly_bb_width_zscore')) else None,
-                '日线VolZ': row.get('daily_vol_zscore') if pd.notna(row.get('daily_vol_zscore')) else None,
-                '周线VolZ': row.get('weekly_vol_zscore') if pd.notna(row.get('weekly_vol_zscore')) else None,
-                'VWAP偏离%': vwap_pct_value,
-            })
-
-        display_df = pd.DataFrame(display_data)
-
-        # 定义需要颜色渲染的数值列（后5列）
-        color_cols = ['日线Z分', '周线Z分', '日线VolZ', '周线VolZ', 'VWAP偏离%']
-
-        # 使用颜色渲染显示，并支持选中
-        selected_stock = None
-        if not display_df.empty:
-            styled_df = colorize_numeric_columns_simple(display_df, color_cols)
-            event = st.dataframe(
-                styled_df,
-                use_container_width=True,
-                hide_index=True,
-                on_select="rerun",
-                selection_mode="single-row"
-            )
-            # 获取选中行
-            if event.selection.rows:
-                selected_idx = event.selection.rows[0]
-                selected_stock = display_df.iloc[selected_idx]
-        else:
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-        # 显示选中股票的详情（周线/日线K线图）
-        if selected_stock is not None:
-            ts_code = selected_stock['代码']
-            stock_name = selected_stock['名称']
-
-            with st.expander(f"📊 {stock_name} ({ts_code}) 详情", expanded=True):
-                tab_weekly, tab_daily = st.tabs(["📈 周线", "📈 日线"])
-
-                with tab_weekly:
-                    with st.spinner("加载周线数据..."):
-                        weekly_df = get_kline_data_from_db(ts_code, 'w', bars=250)
-                        if not weekly_df.empty:
-                            weekly_df = calculate_bsm_indicators(weekly_df)
-                            fig_w = build_kline_chart_with_bsm(
-                                weekly_df, f"{stock_name} 周线",
-                                show_vwap=True, show_bsm=True
-                            )
-                            st.plotly_chart(fig_w, use_container_width=True, key=f"weekly_{ts_code}")
-                        else:
-                            st.warning("⚠️ 无周线数据")
-
-                with tab_daily:
-                    with st.spinner("加载日线数据..."):
-                        daily_df = get_kline_data_from_db(ts_code, 'd', bars=250)
-                        if not daily_df.empty:
-                            daily_df = calculate_bsm_indicators(daily_df)
-                            fig_d = build_kline_chart_with_bsm(
-                                daily_df, f"{stock_name} 日线",
-                                show_vwap=True, show_bsm=True
-                            )
-                            st.plotly_chart(fig_d, use_container_width=True, key=f"daily_{ts_code}")
-                        else:
-                            st.warning("⚠️ 无日线数据")
-
-
-# ==================== 原自选股功能（保留备用） ====================
-
-def render_old_watchlist_page(session, sidebar):
-    """原自选股管理页面（保留备用）"""
-    watchlist_df = load_watchlist(session)
-
-    with sidebar:
-        st.subheader("📌 我的自选股")
-
-        if watchlist_df.empty:
-            st.info("自选股为空，请添加股票")
-        else:
-            stock_options = [f"{row['name']} ({row['ts_code']})" for _, row in watchlist_df.iterrows()]
-
-            if "wl_idx" not in st.session_state:
-                st.session_state.wl_idx = 0
-
-            nav_cols = st.columns([1, 1, 8])
-            with nav_cols[0]:
-                if st.button("◀", key="wl_prev", help="上一只"):
-                    st.session_state.wl_idx = max(0, st.session_state.wl_idx - 1)
-                    st.rerun()
-            with nav_cols[1]:
-                if st.button("▶", key="wl_next", help="下一只"):
-                    st.session_state.wl_idx = min(len(stock_options) - 1, st.session_state.wl_idx + 1)
-                    st.rerun()
-
-            selected = st.selectbox(
-                "选择股票",
-                options=stock_options,
-                index=st.session_state.wl_idx,
-                key="wl_sel"
-            )
-            selected_idx = stock_options.index(selected)
-            st.session_state.wl_idx = selected_idx
-
-            cols = st.columns([11, 1])
-            with cols[1]:
-                ts_code = watchlist_df.iloc[selected_idx]["ts_code"]
-                if st.button("×", key=f"wl_del_{selected_idx}"):
-                    remove_from_watchlist(session, ts_code)
-                    st.rerun()
-
-        st.markdown("---")
-        st.subheader("+ 添加自选股")
-
-        pinyin_input = st.text_input("输入股票名称/代码", placeholder="例如: pag -> 平安银行", key="wl_search")
-
-        if pinyin_input:
-            stock_list = load_stock_list(session)
-            matched = match_stocks_by_pinyin(pinyin_input, stock_list)
-
-            if not matched.empty:
-                selected = st.selectbox(
-                    "选择股票",
-                    options=range(len(matched)),
-                    format_func=lambda i: f"{matched.iloc[i]['name']} ({matched.iloc[i]['ts_code']})",
-                    key="wl_select"
-                )
-                if st.button("添加", key="wl_add_btn"):
-                    ts_code = matched.iloc[selected]["ts_code"]
-                    name = matched.iloc[selected]["name"]
-                    if add_to_watchlist(session, ts_code, name):
-                        st.success(f"已添加 {name}")
-                        st.rerun()
-                    else:
-                        st.warning(f"{name} 已在自选股中")
-            else:
-                st.info("未找到匹配的股票")
-
-    st.header("⭐ 自选股")
-
-    if watchlist_df.empty:
-        st.info("请先添加自选股")
-        return
-
-    ts_code = watchlist_df.iloc[selected_idx]["ts_code"]
-    name = watchlist_df.iloc[selected_idx]["name"]
-
-    tabs = st.tabs(["月线", "周线", "日线", "60分钟", "📊 个股属性"])
-    period_map = {"月线": "m", "周线": "w", "日线": "d", "60分钟": "60m"}
-
-    for i, tab_name in enumerate(["月线", "周线", "日线", "60分钟"]):
-        with tabs[i]:
-            period = period_map[tab_name]
-
-            with st.expander("⚙️ 指标设置", expanded=False):
-                cols = st.columns(2)
-                enabled_indicators = {}
-                period_code = period
-                for j, (key, cfg) in enumerate(INDICATOR_CONFIG.items()):
-                    with cols[j % 2]:
-                        is_applicable = period_code in cfg["periods"]
-                        enabled = st.checkbox(
-                            cfg["name"],
-                            value=cfg["default"] if is_applicable else False,
-                            disabled=not is_applicable,
-                            key=f"ind_{key}_{tab_name}"
-                        )
-                        enabled_indicators[key] = enabled
-
-            with st.spinner("加载K线数据..."):
-                try:
-                    kline_df = get_cached_kline(ts_code, period, count=250)
-                    if kline_df is None or kline_df.empty:
-                        st.warning("暂无数据")
-                    else:
-                        kline_df['bar_time'] = pd.to_datetime(kline_df['bar_time']).dt.tz_localize(None)
-                        kline_df = kline_df.set_index('bar_time')
-
-                        fig = build_kline_chart(
-                            kline_df, name,
-                            show_vwap=enabled_indicators.get("vwap", False),
-                            show_atr_rope=enabled_indicators.get("atr_rope", False)
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-
-                        latest = kline_df.iloc[-1]
-                        prev = kline_df.iloc[-2] if len(kline_df) > 1 else latest
-
-                        cols = st.columns(4)
-                        close = latest.get("close", 0)
-                        prev_close = prev.get("close", close)
-                        pct_change = ((close - prev_close) / prev_close * 100) if prev_close != 0 else 0
-
-                        cols[0].metric("最新价", f"{close:.2f}", f"{pct_change:.2f}%")
-                        cols[1].metric("最高", f"{latest.get('high', 0):.2f}")
-                        cols[2].metric("最低", f"{latest.get('low', 0):.2f}")
-                        cols[3].metric("成交量", f"{latest.get('volume', 0)/10000:.2f}万")
-                except Exception as e:
-                    st.error(f"获取K线数据失败: {e}")
-
-    with tabs[4]:
-        render_stock_profile_page(session, ts_code, name)
+    return fig
 
 
 def render_filter_bar(df: pd.DataFrame, tab_name: str) -> list:
@@ -2100,7 +2306,14 @@ def render_filter_bar(df: pd.DataFrame, tab_name: str) -> list:
             )
 
         field_type = config["types"].get(selected_field, "string")
-        operators = ["包含", "等于", "不包含"] if field_type == "string" else ["大于", "小于", "大于等于", "小于等于", "区间"]
+
+        # 根据字段类型确定运算符
+        if field_type == "string":
+            operators = ["包含", "等于", "不包含"]
+        elif field_type == "enum":
+            operators = ["等于"]
+        else:
+            operators = ["大于", "小于", "大于等于", "小于等于", "区间"]
 
         with cols[1]:
             default_op = operators.index(cond["operator"]) if cond.get("operator") in operators else 0
@@ -2114,6 +2327,12 @@ def render_filter_bar(df: pd.DataFrame, tab_name: str) -> list:
         with cols[2]:
             if field_type == "string":
                 value = st.text_input("值", value=cond.get("value") or "", key=f"cond_{tab_name}_{i}_val", label_visibility="collapsed")
+                value2 = None
+            elif field_type == "enum":
+                # 枚举类型显示下拉选择
+                enum_values = config.get("enum_fields", {}).get(selected_field, [])
+                default_val = cond.get("value") if cond.get("value") in enum_values else (enum_values[0] if enum_values else "")
+                value = st.selectbox("值", options=enum_values, index=enum_values.index(default_val) if default_val in enum_values else 0, key=f"cond_{tab_name}_{i}_val", label_visibility="collapsed")
                 value2 = None
             else:
                 if selected_op == "区间":
@@ -2163,15 +2382,16 @@ def render_filter_bar(df: pd.DataFrame, tab_name: str) -> list:
 
 
 def get_latest_financial_scores(session) -> pd.DataFrame:
-    """获取每只股票的最新一期财务评分（用于join）"""
+    """获取每只股票的最新一期财务评分（用于join，从 financial_scores 表）"""
     sql = """
-        SELECT ts_code, stock_name, total_score, report_date,
-               边际变化与持续性_score, 利润质量_score, 资产效率与资金占用_score,
-               规模与增长_score, 现金创造能力_score, 盈利能力_score
-        FROM stock_financial_score_pool
-        WHERE (ts_code, report_date) IN (
-            SELECT ts_code, MAX(report_date)
-            FROM stock_financial_score_pool
+        SELECT ts_code, total_score, end_date as report_date,
+               main_profit_score, revenue_expense_efficiency_score, cashflow_validation_score,
+               working_capital_quality_score, investment_asset_efficiency_score,
+               cashflow_red_flag, ar_pressure_worsen_flag, inventory_pressure_worsen_flag, core_profit_worsen_flag
+        FROM financial_scores
+        WHERE (ts_code, end_date) IN (
+            SELECT ts_code, MAX(end_date)
+            FROM financial_scores
             GROUP BY ts_code
         )
     """
@@ -2208,8 +2428,90 @@ def format_report_date(date_str: str) -> str:
     return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
 
 
+def render_risk_flags(row: pd.Series):
+    """渲染风险警示区域"""
+    active_flags = []
+
+    for flag_col, flag_config in RISK_FLAG_CONFIG.items():
+        if row.get(flag_col, False):
+            active_flags.append(flag_config)
+
+    if not active_flags:
+        return
+
+    st.markdown("#### ⚠️ 风险警示")
+    cols = st.columns(len(active_flags))
+    for i, flag in enumerate(active_flags):
+        with cols[i]:
+            st.markdown(
+                f"<div style='background-color: {flag['color']}22; border-left: 4px solid {flag['color']}; "
+                f"padding: 10px; border-radius: 4px;'>"
+                f"<span style='color: {flag['color']}; font-weight: bold;'>⚠️ {flag['name']}</span><br>"
+                f"<span style='color: #888; font-size: 12px;'>{flag['desc']}</span>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+    st.markdown("---")
+
+
+def render_metric_detail_table(row: pd.Series):
+    """渲染14项核心指标明细表格"""
+    # 按维度分组展示
+    for dim_col, dim_config in DIMENSION_CONFIG.items():
+        dim_name = dim_config["name"]
+        dim_weight = dim_config["weight"]
+        dim_color = dim_config["color"]
+
+        # 获取该维度下的指标
+        dim_metrics = {k: v for k, v in METRIC_CONFIG.items() if v["dimension"] == dim_col}
+
+        if not dim_metrics:
+            continue
+
+        st.markdown(f"**{dim_name}** (权重{dim_weight}分)")
+
+        # 构建指标数据
+        metric_data = []
+        for metric_col, metric_config in dim_metrics.items():
+            metric_name = metric_config["name"]
+            metric_weight = metric_config["weight"]
+
+            # 原始值
+            raw_value = row.get(metric_col)
+            raw_display = f"{raw_value:.4f}" if pd.notna(raw_value) else "N/A"
+
+            # 得分
+            score_col = f"{metric_col.split('_')[0]}_score"  # F1_score, F2_score, etc.
+            score_value = row.get(score_col)
+            score_display = f"{score_value:.2f}" if pd.notna(score_value) else "N/A"
+
+            # 得分率
+            if pd.notna(score_value) and metric_weight > 0:
+                score_ratio = score_value / metric_weight * 100
+                score_bar = f"<div style='background: linear-gradient(90deg, {dim_color} {score_ratio:.0f}%, transparent {score_ratio:.0f}%); " \
+                           f"height: 8px; border-radius: 4px; width: 100px;'></div>"
+            else:
+                score_bar = "<div style='color: #888;'>N/A</div>"
+
+            metric_data.append({
+                "指标": metric_name,
+                "权重": f"{metric_weight}分",
+                "原始值": raw_display,
+                "得分": score_display,
+                "得分率": score_bar,
+            })
+
+        if metric_data:
+            metric_df = pd.DataFrame(metric_data)
+            st.markdown(
+                metric_df.to_html(escape=False, index=False, classes="metric-table"),
+                unsafe_allow_html=True
+            )
+        st.markdown("")
+
+
 def render_dimension_chart(df: pd.DataFrame, report_date: str) -> go.Figure:
-    """渲染5维度柱状图"""
+    """渲染5维度雷达图"""
     if df.empty:
         return None
 
@@ -2221,44 +2523,69 @@ def render_dimension_chart(df: pd.DataFrame, report_date: str) -> go.Figure:
     dimensions = []
     scores = []
     colors = []
+    max_weights = []
 
     for dim_col in DIMENSION_COLS:
-        dim_name = dim_col.replace("_score", "")
+        dim_config = DIMENSION_CONFIG.get(dim_col, {})
+        dim_name = dim_config.get("name", dim_col)
+        max_weight = dim_config.get("weight", 0)
         score = latest.get(dim_col)
         if pd.notna(score):
             dimensions.append(dim_name)
             scores.append(float(score))
-            colors.append(DIMENSION_COLORS.get(dim_name, "#888888"))
+            colors.append(dim_config.get("color", "#888888"))
+            max_weights.append(max_weight)
 
-    fig = go.Figure(go.Bar(
-        x=scores,
-        y=dimensions,
-        orientation="h",
-        marker_color=colors,
-        text=[f"{s:.1f}" for s in scores],
-        textposition="outside",
-        hovertemplate="<b>%{y}</b><br>分数: %{x:.1f}<extra></extra>",
+    # 使用雷达图展示5维度评分
+    fig = go.Figure()
+
+    # 添加实际得分
+    fig.add_trace(go.Scatterpolar(
+        r=scores + [scores[0]],  # 闭合
+        theta=dimensions + [dimensions[0]],
+        fill='toself',
+        fillcolor='rgba(41, 98, 255, 0.2)',
+        line=dict(color='#2962ff', width=2),
+        name='实际得分',
+        hovertemplate="<b>%{theta}</b><br>得分: %{r:.1f}<extra></extra>",
+    ))
+
+    # 添加满分参考线
+    fig.add_trace(go.Scatterpolar(
+        r=max_weights + [max_weights[0]],
+        theta=dimensions + [dimensions[0]],
+        fill='none',
+        line=dict(color='rgba(255, 255, 255, 0.3)', width=1, dash='dash'),
+        name='维度满分',
+        hovertemplate="<b>%{theta}</b><br>满分: %{r:.1f}<extra></extra>",
     ))
 
     fig.update_layout(
-        title=dict(
-            text="5维度评分",
-            font=dict(size=14, color=DARK_THEME["text_color"]),
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, max(max_weights) * 1.1],
+                gridcolor='rgba(255,255,255,0.1)',
+            ),
+            angularaxis=dict(
+                gridcolor='rgba(255,255,255,0.1)',
+            ),
+            bgcolor='rgba(0,0,0,0)',
+        ),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.15,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=10, color=DARK_THEME["text_color"]),
         ),
         plot_bgcolor=DARK_THEME["bg_color"],
         paper_bgcolor=DARK_THEME["paper_bgcolor"],
         font=dict(color=DARK_THEME["text_color"]),
-        height=280,
-        margin=dict(l=20, r=40, t=40, b=20),
-        xaxis=dict(
-            range=[0, 100],
-            title="分数",
-            gridcolor=DARK_THEME["grid_color"],
-        ),
-        yaxis=dict(
-            title="",
-            gridcolor=DARK_THEME["grid_color"],
-        ),
+        height=350,
+        margin=dict(l=40, r=40, t=40, b=40),
     )
 
     return fig
@@ -2285,8 +2612,9 @@ def render_trend_chart(df: pd.DataFrame) -> go.Figure:
     ))
 
     for dim_col in DIMENSION_COLS:
-        dim_name = dim_col.replace("_score", "")
-        color = DIMENSION_COLORS.get(dim_name, "#888888")
+        dim_config = DIMENSION_CONFIG.get(dim_col, {})
+        dim_name = dim_config.get("name", dim_col)
+        color = dim_config.get("color", "#888888")
         fig.add_trace(go.Scatter(
             x=df["report_date_display"],
             y=df[dim_col],
@@ -2368,91 +2696,983 @@ def render_factor_table(factor_data: pd.DataFrame, dim_filter: Optional[str] = N
     return pd.DataFrame(rows)
 
 
-def render_pool_page(session):
-    """渲染全股池因子表页面"""
-    st.header("📊 全股池财务因子表")
+def init_selected_picks_table(session):
+    """确保 stock_selected_picks 表存在"""
+    from sqlalchemy import text
+    sql = text("""
+        CREATE TABLE IF NOT EXISTS stock_selected_picks (
+            id SERIAL PRIMARY KEY,
+            pick_date DATE NOT NULL,
+            rank INTEGER NOT NULL,
+            ts_code VARCHAR(20) NOT NULL,
+            stock_name VARCHAR(50),
+            recommend_score DECIMAL(5,2),
+            recommend_grade VARCHAR(50),
+            action_advice VARCHAR(100),
+            theme_tags VARCHAR(200),
+            valuation_judge VARCHAR(100),
+            positioning VARCHAR(50),
+            sustainability VARCHAR(20),
+            profit_trend VARCHAR(50),
+            upside_pct DECIMAL(6,2),
+            weekly_z DECIMAL(8,4),
+            weekly_vol_z DECIMAL(8,4),
+            daily_vol_z DECIMAL(8,4),
+            vwap_deviation DECIMAL(8,4),
+            sort_reason TEXT,
+            sectors VARCHAR(200),
+            logic TEXT,
+            risk_factors TEXT,
+            score INTEGER,
+            theme VARCHAR(100),
+            position VARCHAR(50),
+            report_period VARCHAR(50),
+            detail TEXT,
+            signal_date DATE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    session.execute(sql)
+    session.commit()
+    
+    sql = text("CREATE INDEX IF NOT EXISTS idx_selected_picks_date ON stock_selected_picks(pick_date)")
+    session.execute(sql)
+    sql = text("CREATE INDEX IF NOT EXISTS idx_selected_picks_date_rank ON stock_selected_picks(pick_date, rank)")
+    session.execute(sql)
+    session.commit()
 
-    report_dates = get_available_report_dates(session)
-    if not report_dates:
-        report_dates = []
 
-    if report_dates:
-        selected_report = st.selectbox("报告期", options=report_dates, format_func=format_report_date, index=0)
-    else:
-        selected_report = None
-        st.info("暂无报告期数据")
+def init_watchlist_table(session):
+    """确保 stock_watchlist 自选股表存在"""
+    from sqlalchemy import text
+    sql = text("""
+        CREATE TABLE IF NOT EXISTS stock_watchlist (
+            id SERIAL PRIMARY KEY,
+            ts_code VARCHAR(20) NOT NULL,
+            stock_name VARCHAR(50) NOT NULL,
+            added_date DATE DEFAULT CURRENT_DATE,
+            sort_order INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            bsm_event VARCHAR(100) DEFAULT '',
+            bsm_event_date DATE,
+            pavp_prices VARCHAR(100) DEFAULT '',
+            UNIQUE(ts_code)
+        )
+    """)
+    session.execute(sql)
+    session.commit()
+    
+    # 创建索引
+    sql = text("CREATE INDEX IF NOT EXISTS idx_watchlist_added_date ON stock_watchlist(added_date)")
+    session.execute(sql)
+    sql = text("CREATE INDEX IF NOT EXISTS idx_watchlist_sort ON stock_watchlist(sort_order)")
+    session.execute(sql)
+    session.commit()
+    
+    # 兼容旧表：确保新字段存在
+    try:
+        session.execute(text("ALTER TABLE stock_watchlist ADD COLUMN IF NOT EXISTS bsm_event VARCHAR(100) DEFAULT ''"))
+        session.execute(text("ALTER TABLE stock_watchlist ADD COLUMN IF NOT EXISTS bsm_event_date DATE"))
+        session.execute(text("ALTER TABLE stock_watchlist ADD COLUMN IF NOT EXISTS pavp_prices VARCHAR(100) DEFAULT ''"))
+        session.execute(text("ALTER TABLE stock_watchlist ADD COLUMN IF NOT EXISTS dsa_dir INTEGER"))
+        session.execute(text("ALTER TABLE stock_watchlist ADD COLUMN IF NOT EXISTS dsa_vwap FLOAT"))
+        session.execute(text("ALTER TABLE stock_watchlist ADD COLUMN IF NOT EXISTS is_monitored BOOLEAN DEFAULT FALSE"))
+        session.commit()
+    except Exception:
+        pass
 
-    with st.spinner("加载数据..."):
-        df = load_all_scores(session, selected_report) if selected_report else pd.DataFrame()
 
-    concept_sql = "SELECT ts_code, concepts FROM stock_pools"
-    concept_df = query_sql(session, concept_sql, {})
-    if concept_df is not None and not concept_df.empty:
-        df = df.merge(concept_df, on="ts_code", how="left")
+def add_to_watchlist(session, ts_code: str, stock_name: str) -> bool:
+    """添加股票到自选股（stock_watchlist表）
+    
+    Args:
+        session: 数据库会话
+        ts_code: 股票代码（支持带后缀格式如300037.SZ）
+        stock_name: 股票名称
+        
+    Returns:
+        bool: 是否添加成功（True=新添加，False=已存在或失败）
+    """
+    from sqlalchemy import text
+    
+    # 统一转换为纯数字格式（去除.SZ/.SH/.BJ后缀）
+    ts_code_clean = ts_code.split('.')[0] if '.' in ts_code else ts_code
+    
+    # 检查是否已存在
+    check_sql = """
+        SELECT 1 FROM stock_watchlist 
+        WHERE ts_code = :ts_code
+        LIMIT 1
+    """
+    result = session.execute(text(check_sql), {"ts_code": ts_code_clean}).fetchone()
+    
+    if result:
+        return False  # 已存在
+    
+    # 获取当前最大sort_order
+    sort_sql = """
+        SELECT COALESCE(MAX(sort_order), 0) + 1 
+        FROM stock_watchlist
+    """
+    sort_result = session.execute(text(sort_sql)).fetchone()
+    new_sort = sort_result[0] if sort_result else 1
+    
+    # 插入新记录
+    insert_sql = """
+        INSERT INTO stock_watchlist 
+        (ts_code, stock_name, sort_order, created_at)
+        VALUES 
+        (:ts_code, :stock_name, :sort_order, CURRENT_TIMESTAMP)
+    """
+    try:
+        session.execute(text(insert_sql), {
+            "ts_code": ts_code_clean,
+            "stock_name": stock_name,
+            "sort_order": new_sort
+        })
+        session.commit()
+        return True
+    except Exception as e:
+        session.rollback()
+        print(f"添加自选股失败: {e}")
+        return False
 
-    display_cols = ["ts_code", "stock_name", "report_date", "ann_date", "total_score"] + DIMENSION_COLS
-    display_cols = [c for c in display_cols if c in df.columns]
 
-    key_factors = ["q_rev_yoy_delta", "q_np_parent_yoy_delta", "q_gm_yoy_change", "q_cfo_to_np_parent", "roa_parent"]
-    key_factors = [f for f in key_factors if f in df.columns]
-    display_cols.extend(key_factors)
+def remove_from_watchlist(session, ts_code: str) -> bool:
+    """从自选股删除股票"""
+    from sqlalchemy import text
+    
+    ts_code_clean = ts_code.split('.')[0] if '.' in ts_code else ts_code
+    
+    try:
+        sql = text("DELETE FROM stock_watchlist WHERE ts_code = :ts_code")
+        session.execute(sql, {"ts_code": ts_code_clean})
+        session.commit()
+        return True
+    except Exception as e:
+        session.rollback()
+        print(f"删除自选股失败: {e}")
+        return False
 
-    if "concepts" in df.columns:
-        display_cols.append("concepts")
 
-    display_df = df[display_cols].copy()
+def update_monitor_status(session, ts_code: str, is_monitored: bool) -> bool:
+    """更新股票监控状态"""
+    from sqlalchemy import text
+    
+    ts_code_clean = ts_code.split('.')[0] if '.' in ts_code else ts_code
+    
+    try:
+        sql = text("""
+            UPDATE stock_watchlist
+            SET is_monitored = :is_monitored
+            WHERE ts_code = :ts_code
+        """)
+        session.execute(sql, {'ts_code': ts_code_clean, 'is_monitored': is_monitored})
+        session.commit()
+        return True
+    except Exception as e:
+        session.rollback()
+        st.error(f"更新监控状态失败: {e}")
+        return False
 
-    col_names = ["股票代码", "股票名称", "报告期", "公告日期", "总分",
-                 "边际变化与持续性", "利润质量", "资产效率", "规模与增长", "现金创造能力", "盈利能力"]
-    col_names = col_names[:len(display_cols) - len(key_factors) - (1 if "concepts" in df.columns else 0)]
-    display_df.columns = col_names + [f for f in key_factors] + (["概念"] if "concepts" in df.columns else [])
 
-    conditions = render_filter_bar(display_df, "全股池因子表")
-    if conditions:
-        display_df = apply_filters(display_df, conditions, TAB_FIELD_CONFIGS["全股池因子表"])
+def load_watchlist(session) -> pd.DataFrame:
+    """加载自选股列表（关联财务评分获取总分，含BSM事件、PAVP价格、DSA指标和监控状态）
+    排序规则：正在监控的股票(is_monitored=TRUE)排在最上面"""
+    sql = """
+        SELECT
+            w.ts_code,
+            w.stock_name,
+            w.added_date,
+            w.sort_order,
+            w.bsm_event,
+            w.bsm_event_date,
+            w.pavp_prices,
+            w.dsa_dir,
+            w.dsa_vwap,
+            w.is_monitored,
+            f.total_score,
+            f.end_date as report_date
+        FROM stock_watchlist w
+        LEFT JOIN (
+            SELECT DISTINCT ON (ts_code) ts_code, total_score, end_date
+            FROM financial_scores
+            ORDER BY ts_code, end_date DESC
+        ) f ON
+            CASE
+                WHEN w.ts_code LIKE '%.SZ' OR w.ts_code LIKE '%.SH' OR w.ts_code LIKE '%.BJ' THEN w.ts_code
+                WHEN w.ts_code LIKE '6%' OR w.ts_code LIKE '9%' THEN w.ts_code || '.SH'
+                WHEN w.ts_code LIKE '8%' OR w.ts_code LIKE '4%' THEN w.ts_code || '.BJ'
+                ELSE w.ts_code || '.SZ'
+            END = f.ts_code
+        ORDER BY w.is_monitored DESC, w.sort_order, w.added_date DESC
+    """
+    return query_sql(session, sql, {})
 
-    loaded_conditions = render_filter_manager(session, "全股池因子表", conditions)
-    if loaded_conditions:
-        display_df = df.copy()
-        display_df = apply_filters(display_df, loaded_conditions, TAB_FIELD_CONFIGS["全股池因子表"])
 
-    # 默认按边际变化与持续性降序排序（确保分页前已排序）
-    if "边际变化与持续性" in display_df.columns:
-        display_df = display_df.sort_values("边际变化与持续性", ascending=False, na_position="last").reset_index(drop=True)
-    elif "边际变化与持续性_score" in display_df.columns:
-        display_df = display_df.sort_values("边际变化与持续性_score", ascending=False, na_position="last").reset_index(drop=True)
+def load_selected_picks(session, pick_date):
+    """加载指定日期的精选股票池数据
+    Args:
+        session: 数据库会话
+        pick_date: 选股日期（date或str）
+    Returns:
+        DataFrame: 按 rank 升序排序的精选股票池数据（含逐笔成交额统计）
+    """
+    sql = f"""
+        SELECT rank, stock_name, ts_code, recommend_score, recommend_grade, action_advice,
+               theme_tags, valuation_judge, positioning, sustainability, profit_trend,
+               upside_pct, weekly_z, weekly_vol_z, daily_vol_z, vwap_deviation,
+               sort_reason, sectors, logic, risk_factors, score, signal_date,
+               avg_tick_amount, max_tick_amount, min_tick_amount
+        FROM stock_selected_picks
+        WHERE pick_date = '{pick_date}'
+        ORDER BY rank ASC
+    """
+    return query_sql(session, sql, {})
 
-    total_rows = len(display_df)
-    st.markdown(f"**股票数: {total_rows}** | **报告期: {format_report_date(selected_report)}**")
 
-    # 分页
-    page_size = 20
-    total_pages = max(1, (total_rows + page_size - 1) // page_size)
-    page = st.number_input("页码", min_value=1, max_value=total_pages, value=1, step=1, key="pool_page")
-    start_idx = (page - 1) * page_size
-    end_idx = min(start_idx + page_size, total_rows)
-    page_df = display_df.iloc[start_idx:end_idx].copy()
-    st.caption(f"第 {page}/{total_pages} 页，显示第 {start_idx + 1}-{end_idx} 条")
+def _format_ts_code(ts_code: str) -> str:
+    """添加交易所后缀"""
+    if "." not in ts_code:
+        if ts_code.startswith("6") or ts_code.startswith("9"):
+            return ts_code + ".SH"
+        elif ts_code.startswith("8") or ts_code.startswith("4"):
+            return ts_code + ".BJ"
+        else:
+            return ts_code + ".SZ"
+    return ts_code
 
-    color_cols = ["总分", "边际变化与持续性", "利润质量", "资产效率", "规模与增长", "现金创造能力"]
-    st.dataframe(
-        colorize_numeric_columns(page_df, color_cols),
+
+def _render_watchlist_single_mode(session, watchlist_df: pd.DataFrame):
+    """单选浏览模式 - 选中后展开显示行情+指标数据图
+
+    直接复用 _render_stock_detail 函数，保持与个股分析页面一致
+    """
+    # 准备显示数据，调整列顺序和列名
+    display_df = watchlist_df[["ts_code", "stock_name", "bsm_event", "pavp_prices", "dsa_dir", "dsa_vwap", "is_monitored", "total_score", "report_date", "added_date"]].copy()
+    display_df.columns = ["股票代码", "股票名称", "BSM事件", "PAVP价格", "DSA方向", "DSA_VWAP", "监控", "财务评分", "报告期", "添加日期"]
+
+    # 格式化日期
+    display_df["报告期"] = display_df["报告期"].apply(format_report_date)
+    display_df["添加日期"] = display_df["添加日期"].apply(lambda x: str(x)[:10] if pd.notna(x) else "")
+
+    # 格式化分数
+    display_df["财务评分"] = display_df["财务评分"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+
+    # 格式化BSM事件
+    display_df["BSM事件"] = display_df["BSM事件"].fillna("").apply(lambda x: x if x else "-")
+
+    # 格式化PAVP价格
+    display_df["PAVP价格"] = display_df["PAVP价格"].fillna("").apply(lambda x: x if x else "-")
+
+    # 格式化DSA方向
+    display_df["DSA方向"] = display_df["DSA方向"].apply(lambda x: "多头" if x == 1 else ("空头" if x == -1 else "-"))
+
+    # 格式化DSA_VWAP
+    display_df["DSA_VWAP"] = display_df["DSA_VWAP"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+
+    # 格式化监控状态
+    display_df["监控"] = display_df["监控"].apply(lambda x: "✅" if x else "⬜")
+
+    event = st.dataframe(
+        display_df,
         use_container_width=True,
         hide_index=True,
-        height=600,
+        on_select="rerun",
+        selection_mode="single-row",
+        height=400,
+        column_config={
+            "股票代码": st.column_config.TextColumn("股票代码", width="small"),
+            "股票名称": st.column_config.TextColumn("股票名称", width="small"),
+            "BSM事件": st.column_config.TextColumn("BSM事件", width="medium"),
+            "PAVP价格": st.column_config.TextColumn("PAVP价格", width="medium"),
+            "DSA方向": st.column_config.TextColumn("DSA方向", width="small"),
+            "DSA_VWAP": st.column_config.TextColumn("DSA_VWAP", width="small"),
+            "监控": st.column_config.TextColumn("监控", width="small"),
+            "财务评分": st.column_config.NumberColumn("财务评分", width="small", format="%.1f"),
+            "报告期": st.column_config.TextColumn("报告期", width="small"),
+            "添加日期": st.column_config.TextColumn("添加日期", width="small"),
+        }
     )
 
+    # 处理选中行 - 展开显示详情
+    if event.selection.rows:
+        selected_idx = event.selection.rows[0]
+        selected_stock = watchlist_df.iloc[selected_idx]
+        ts_code = selected_stock["ts_code"]
+        stock_name = selected_stock["stock_name"]
 
-def _render_stock_page(session, matched_stocks: pd.DataFrame, selected_option: int):
-    """渲染个股分析页面"""
-    if selected_option is None:
+        # 添加交易所后缀
+        ts_code_full = _format_ts_code(ts_code)
+
+        # 显示选中股票的详情 - 使用 expander 展开
+        with st.expander(f"📊 {stock_name} ({ts_code_full}) 详情", expanded=True):
+            # 复用个股分析页面的渲染逻辑
+            _render_stock_detail(session, ts_code_full, stock_name, key_prefix=f"watchlist_{ts_code}")
+
+
+def _render_watchlist_batch_mode(session, watchlist_df: pd.DataFrame):
+    """批量管理模式"""
+    # 准备显示数据，调整列顺序和列名
+    display_df = watchlist_df[["ts_code", "stock_name", "bsm_event", "pavp_prices", "dsa_dir", "dsa_vwap", "is_monitored", "total_score", "report_date", "added_date"]].copy()
+    display_df.columns = ["股票代码", "股票名称", "BSM事件", "PAVP价格", "DSA方向", "DSA_VWAP", "监控", "财务评分", "报告期", "添加日期"]
+
+    # 格式化日期
+    display_df["报告期"] = display_df["报告期"].apply(format_report_date)
+    display_df["添加日期"] = display_df["添加日期"].apply(lambda x: str(x)[:10] if pd.notna(x) else "")
+
+    # 格式化分数
+    display_df["财务评分"] = display_df["财务评分"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+
+    # 格式化BSM事件
+    display_df["BSM事件"] = display_df["BSM事件"].fillna("").apply(lambda x: x if x else "-")
+
+    # 格式化PAVP价格
+    display_df["PAVP价格"] = display_df["PAVP价格"].fillna("").apply(lambda x: x if x else "-")
+
+    # 格式化DSA方向
+    display_df["DSA方向"] = display_df["DSA方向"].apply(lambda x: "多头" if x == 1 else ("空头" if x == -1 else "-"))
+
+    # 格式化DSA_VWAP
+    display_df["DSA_VWAP"] = display_df["DSA_VWAP"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+
+    # 格式化监控状态
+    display_df["监控"] = display_df["监控"].apply(lambda x: "✅" if x else "⬜")
+
+    event = st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="multi-row",
+        height=400,
+        column_config={
+            "股票代码": st.column_config.TextColumn("股票代码", width="small"),
+            "股票名称": st.column_config.TextColumn("股票名称", width="small"),
+            "BSM事件": st.column_config.TextColumn("BSM事件", width="medium"),
+            "PAVP价格": st.column_config.TextColumn("PAVP价格", width="medium"),
+            "DSA方向": st.column_config.TextColumn("DSA方向", width="small"),
+            "DSA_VWAP": st.column_config.TextColumn("DSA_VWAP", width="small"),
+            "监控": st.column_config.TextColumn("监控", width="small"),
+            "财务评分": st.column_config.NumberColumn("财务评分", width="small", format="%.1f"),
+            "报告期": st.column_config.TextColumn("报告期", width="small"),
+            "添加日期": st.column_config.TextColumn("添加日期", width="small"),
+        }
+    )
+
+    selected_rows = list(event.selection.rows) if event.selection and event.selection.rows else []
+
+    st.markdown("---")
+    col_count, col_actions = st.columns([2, 3])
+
+    with col_count:
+        st.markdown(f"**已选中**: {len(selected_rows)} 只")
+
+    with col_actions:
+        col_del, col_monitor_on, col_monitor_off = st.columns(3)
+
+        with col_del:
+            if selected_rows and st.button("🗑️ 批量删除", type="primary"):
+                st.session_state["confirm_batch_delete"] = True
+
+        with col_monitor_on:
+            if selected_rows and st.button("🔔 开启监控"):
+                updated = 0
+                for idx in selected_rows:
+                    ts_code = watchlist_df.iloc[idx]["ts_code"]
+                    if update_monitor_status(session, ts_code, True):
+                        updated += 1
+                if updated > 0:
+                    st.success(f"✅ 已开启 {updated} 只股票的监控")
+                    st.rerun()
+
+        with col_monitor_off:
+            if selected_rows and st.button("🔕 关闭监控"):
+                updated = 0
+                for idx in selected_rows:
+                    ts_code = watchlist_df.iloc[idx]["ts_code"]
+                    if update_monitor_status(session, ts_code, False):
+                        updated += 1
+                if updated > 0:
+                    st.success(f"✅ 已关闭 {updated} 只股票的监控")
+                    st.rerun()
+
+    if st.session_state.get("confirm_batch_delete", False) and selected_rows:
+        with st.container(border=True):
+            st.warning(f"确定删除选中的 **{len(selected_rows)}** 只股票？")
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("确认删除", type="primary", key="confirm_batch_yes"):
+                    deleted = 0
+                    failed = []
+                    for idx in selected_rows:
+                        ts_code = watchlist_df.iloc[idx]["ts_code"]
+                        stock_name = watchlist_df.iloc[idx]["stock_name"]
+                        if remove_from_watchlist(session, ts_code):
+                            deleted += 1
+                        else:
+                            failed.append(stock_name)
+
+                    if deleted > 0:
+                        st.success(f"✅ 成功删除 {deleted} 只股票")
+                    if failed:
+                        st.error(f"❌ 删除失败: {', '.join(failed)}")
+
+                    st.session_state["confirm_batch_delete"] = False
+                    st.rerun()
+            with col_no:
+                if st.button("取消", key="confirm_batch_no"):
+                    st.session_state["confirm_batch_delete"] = False
+                    st.rerun()
+
+
+def _render_watchlist_monitor_mode(session, watchlist_df: pd.DataFrame):
+    """批量监控模式 - 多选股票批量开启/关闭监控"""
+    # 准备显示数据
+    display_df = watchlist_df[["ts_code", "stock_name", "bsm_event", "pavp_prices", "dsa_dir", "dsa_vwap", "is_monitored", "total_score", "report_date", "added_date"]].copy()
+    display_df.columns = ["股票代码", "股票名称", "BSM事件", "PAVP价格", "DSA方向", "DSA_VWAP", "监控", "财务评分", "报告期", "添加日期"]
+
+    # 格式化日期
+    display_df["报告期"] = display_df["报告期"].apply(format_report_date)
+    display_df["添加日期"] = display_df["添加日期"].apply(lambda x: str(x)[:10] if pd.notna(x) else "")
+
+    # 格式化分数
+    display_df["财务评分"] = display_df["财务评分"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+
+    # 格式化BSM事件
+    display_df["BSM事件"] = display_df["BSM事件"].fillna("").apply(lambda x: x if x else "-")
+
+    # 格式化PAVP价格
+    display_df["PAVP价格"] = display_df["PAVP价格"].fillna("").apply(lambda x: x if x else "-")
+
+    # 格式化DSA方向
+    display_df["DSA方向"] = display_df["DSA方向"].apply(lambda x: "多头" if x == 1 else ("空头" if x == -1 else "-"))
+
+    # 格式化DSA_VWAP
+    display_df["DSA_VWAP"] = display_df["DSA_VWAP"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+
+    # 格式化监控状态
+    display_df["监控"] = display_df["监控"].apply(lambda x: "✅" if x else "⬜")
+
+    # 显示统计信息
+    monitored_count = watchlist_df["is_monitored"].sum()
+    st.markdown(f"**监控中**: {monitored_count} 只 / **总计**: {len(watchlist_df)} 只")
+
+    event = st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="multi-row",
+        height=400,
+        column_config={
+            "股票代码": st.column_config.TextColumn("股票代码", width="small"),
+            "股票名称": st.column_config.TextColumn("股票名称", width="small"),
+            "BSM事件": st.column_config.TextColumn("BSM事件", width="medium"),
+            "PAVP价格": st.column_config.TextColumn("PAVP价格", width="medium"),
+            "DSA方向": st.column_config.TextColumn("DSA方向", width="small"),
+            "DSA_VWAP": st.column_config.TextColumn("DSA_VWAP", width="small"),
+            "监控": st.column_config.TextColumn("监控", width="small"),
+            "财务评分": st.column_config.NumberColumn("财务评分", width="small", format="%.1f"),
+            "报告期": st.column_config.TextColumn("报告期", width="small"),
+            "添加日期": st.column_config.TextColumn("添加日期", width="small"),
+        }
+    )
+
+    selected_rows = list(event.selection.rows) if event.selection and event.selection.rows else []
+
+    st.markdown("---")
+    col_count, col_actions = st.columns([2, 3])
+
+    with col_count:
+        selected_monitored = sum(watchlist_df.iloc[idx]["is_monitored"] for idx in selected_rows) if selected_rows else 0
+        st.markdown(f"**已选中**: {len(selected_rows)} 只 | **其中监控中**: {selected_monitored} 只")
+
+    with col_actions:
+        col_on, col_off = st.columns(2)
+
+        with col_on:
+            if selected_rows and st.button("🔔 批量开启监控", type="primary"):
+                updated = 0
+                for idx in selected_rows:
+                    ts_code = watchlist_df.iloc[idx]["ts_code"]
+                    stock_name = watchlist_df.iloc[idx]["stock_name"]
+                    if not watchlist_df.iloc[idx]["is_monitored"]:
+                        if update_monitor_status(session, ts_code, True):
+                            updated += 1
+                if updated > 0:
+                    st.success(f"✅ 已开启 {updated} 只股票的监控")
+                    st.rerun()
+                else:
+                    st.info("选中的股票已在监控中")
+
+        with col_off:
+            if selected_rows and st.button("🔕 批量关闭监控"):
+                updated = 0
+                for idx in selected_rows:
+                    ts_code = watchlist_df.iloc[idx]["ts_code"]
+                    stock_name = watchlist_df.iloc[idx]["stock_name"]
+                    if watchlist_df.iloc[idx]["is_monitored"]:
+                        if update_monitor_status(session, ts_code, False):
+                            updated += 1
+                if updated > 0:
+                    st.success(f"✅ 已关闭 {updated} 只股票的监控")
+                    st.rerun()
+                else:
+                    st.info("选中的股票已不在监控中")
+
+
+def render_bsm_selection_page(session, sidebar):
+    """渲染BSM选股结果页面
+
+    根据日期获取 selection_ana.py 的选股结果（基于BSM买点信号），
+    展示BSM指标值，支持搜索、单选展开详情、添加到自选股。
+    """
+    st.header("📊 BSM 选股结果")
+
+    # 获取可用选股日期
+    available_dates = get_available_selection_dates(session)
+    if not available_dates:
+        st.info("暂无选股结果数据，请先运行 selection/selection_ana.py 生成数据")
         return
 
-    selected_stock = matched_stocks.iloc[selected_option]
-    ts_code = selected_stock["ts_code"]
-    stock_name = selected_stock["name"]
+    # 日期选择器放在 sidebar（导航栏下面）
+    with sidebar:
+        st.markdown("---")
+        st.subheader("⚙️ BSM选股配置")
+        # 将日期转换为 date 对象用于 date_input（处理字符串或 datetime 对象）
+        available_dates_dt = []
+        for d in available_dates:
+            if isinstance(d, str):
+                available_dates_dt.append(datetime.datetime.strptime(d, "%Y-%m-%d").date())
+            elif isinstance(d, datetime.datetime):
+                available_dates_dt.append(d.date())
+            elif isinstance(d, datetime.date):
+                available_dates_dt.append(d)
+        default_date = available_dates_dt[0] if available_dates_dt else datetime.date.today()
+        selected_date_dt = st.date_input(
+            "选股日期",
+            value=default_date,
+            min_value=min(available_dates_dt) if available_dates_dt else None,
+            max_value=max(available_dates_dt) if available_dates_dt else None,
+            key="bsm_selection_date"
+        )
+        # 将选择的日期转换回字符串格式
+        selected_date = selected_date_dt.strftime("%Y-%m-%d")
 
-    st.markdown(f"### 当前股票: **{stock_name}** ({ts_code})")
+    # 加载选股数据
+    with st.spinner("加载选股数据..."):
+        df = load_selection_results(session, selected_date)
+
+    if df.empty:
+        st.info(f"{selected_date} 暂无选股结果数据")
+        return
+
+    # 从 financial_scores 表获取财务总分和报告期
+    with st.spinner("加载财务评分..."):
+        sql = """
+            SELECT DISTINCT ON (ts_code)
+                ts_code, total_score, end_date
+            FROM financial_scores
+            ORDER BY ts_code, end_date DESC
+        """
+        try:
+            fs_df = query_sql(session, sql, {})
+            if not fs_df.empty:
+                # 去除后缀匹配
+                df["ts_code_clean"] = df["ts_code"].str.replace(r"\\.SZ$|\\.SH$|\\.BJ$", "", regex=True)
+                fs_df["ts_code_clean"] = fs_df["ts_code"].str.replace(r"\\.SZ$|\\.SH$|\\.BJ$", "", regex=True)
+                df = df.drop(columns=["total_score"], errors="ignore")
+                df = df.merge(fs_df[["ts_code_clean", "total_score", "end_date"]], on="ts_code_clean", how="left")
+                df = df.drop(columns=["ts_code_clean"])
+        except Exception as e:
+            st.warning(f"加载财务评分失败: {e}")
+
+    # 创建合并的BSM信号字段（周线突破/周线反转二选一）
+    def get_bsm_signal(row):
+        if row.get("weekly_reversal_buy"):
+            return "周线反转"
+        elif row.get("weekly_breakout_buy"):
+            return "周线突破"
+        else:
+            return "-"
+
+    df["bsm_signal"] = df.apply(get_bsm_signal, axis=1)
+
+    # 统计概览
+    total_count = len(df)
+    weekly_reversal_count = int(df["weekly_reversal_buy"].sum()) if "weekly_reversal_buy" in df.columns else 0
+    weekly_breakout_count = int(df["weekly_breakout_buy"].sum()) if "weekly_breakout_buy" in df.columns else 0
+
+    st.markdown(
+        f"**选股总数**: {total_count} 只 | "
+        f"**周线反转**: {weekly_reversal_count} 只 | "
+        f"**周线突破**: {weekly_breakout_count} 只"
+    )
+
+    # 搜索框
+    search_term = st.text_input(
+        "🔍 搜索",
+        placeholder="搜索：代码/名称/概念/信号类型（多条件用;隔开）",
+        key="bsm_search"
+    )
+
+    # 应用搜索筛选（支持股票代码、名称、概念、周线信号）
+    filtered_df = df.copy()
+    if search_term:
+        search_conditions = [s.strip() for s in search_term.split(";") if s.strip()]
+        combined_mask = pd.Series([True] * len(df), index=df.index)
+        for condition in search_conditions:
+            condition_mask = (
+                df["ts_code"].astype(str).str.contains(condition, case=False, na=False) |
+                df["stock_name"].astype(str).str.contains(condition, case=False, na=False) |
+                df["concepts"].astype(str).str.contains(condition, case=False, na=False) |
+                df["bsm_signal"].astype(str).str.contains(condition, case=False, na=False)
+            )
+            combined_mask = combined_mask & condition_mask
+        filtered_df = df[combined_mask]
+        st.markdown(f"**共 {total_count} 只** | 筛选后: {len(filtered_df)} 只")
+    else:
+        st.markdown(f"**共 {total_count} 只**")
+
+    if filtered_df.empty:
+        st.info("没有匹配的股票")
+        return
+
+    # 准备展示数据
+    display_df = filtered_df.copy()
+
+    # 重命名列为中文（用于显示）
+    config = TAB_FIELD_CONFIGS["BSM选股结果"]
+    display_names = config["display_names"]
+    rename_map = {k: v for k, v in display_names.items() if k in display_df.columns}
+    display_df_renamed = display_df.rename(columns=rename_map)
+
+    # 确定要展示的列（按配置顺序）
+    available_cols = [display_names.get(f, f) for f in config["fields"] if display_names.get(f, f) in display_df_renamed.columns]
+    display_df_renamed = display_df_renamed[available_cols]
+
+    # 需要颜色渲染的数值列（中文列名）
+    numeric_cols_display = [
+        display_names.get("weekly_bb_width_zscore", "周线BB宽度Z分"),
+        display_names.get("weekly_vol_zscore", "周线成交量Z分"),
+        display_names.get("daily_bb_width_zscore", "日线BB宽度Z分"),
+        display_names.get("daily_vol_zscore", "日线Z分"),
+        display_names.get("daily_vwap_deviation", "日线VWAP偏离%"),
+        display_names.get("daily_dsa_duration", "DSA持续bar"),
+        display_names.get("daily_dsa_avg_deviation", "DSA平均偏离"),
+        display_names.get("daily_dsa_deviation_variance", "DSA偏离方差"),
+        display_names.get("change_pct", "涨跌幅%"),
+        display_names.get("total_score", "财务总分"),
+    ]
+    # 过滤掉实际不存在的列
+    numeric_cols_display = [c for c in numeric_cols_display if c in display_df_renamed.columns]
+
+    # 重置索引以确保与event.selection.rows匹配
+    display_df_renamed_reset = display_df_renamed.reset_index(drop=True)
+
+    # 数据表格（支持单选，带颜色渲染）
+    event = st.dataframe(
+        colorize_numeric_columns_simple(display_df_renamed_reset, numeric_cols_display),
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        height=500,
+    )
+
+    # 处理选中行 - 展开详情
+    if event.selection and event.selection.rows:
+        selected_idx = event.selection.rows[0]
+        selected_row_display = display_df_renamed_reset.iloc[selected_idx]
+        selected_row = filtered_df.iloc[selected_idx]
+        ts_code = selected_row["ts_code"]
+        stock_name = selected_row["stock_name"]
+
+        st.markdown("---")
+        st.markdown(f"### 📊 {stock_name} ({ts_code}) 详情")
+
+        # 添加到自选股按钮
+        col_add, _ = st.columns([1, 4])
+        with col_add:
+            if st.button("➕ 添加到自选股", key=f"bsm_add_{ts_code}"):
+                if add_to_watchlist(session, ts_code, stock_name):
+                    st.success(f"✅ {stock_name} 已添加到自选股")
+                else:
+                    st.info(f"ℹ️ {stock_name} 已在自选股中")
+
+        # 复用个股详情渲染函数
+        ts_code_full = _format_ts_code(ts_code)
+        _render_stock_detail(session, ts_code_full, stock_name, key_prefix=f"bsm_{ts_code}_")
+
+
+def render_stop_loss_selection_page(session, sidebar):
+    """渲染Stop-Loss Clustering选股结果页面
+
+    根据日期获取 selection_stop.py 的选股结果，
+    只展示突破 sell-stop cluster 的股票，
+    支持搜索、单选展开详情、添加到自选股。
+    """
+    st.header("🛑 Stop-Loss Clustering 选股结果（突破Sell-Stop）")
+
+    # 获取可用选股日期
+    available_dates = get_available_stop_loss_dates(session)
+    if not available_dates:
+        st.info("暂无Stop-Loss选股结果数据，请先运行 selection/selection_stop.py 生成数据")
+        return
+
+    # 日期选择器放在 sidebar
+    with sidebar:
+        st.markdown("---")
+        st.subheader("⚙️ Stop-Loss选股配置")
+        available_dates_dt = []
+        for d in available_dates:
+            if isinstance(d, str):
+                available_dates_dt.append(datetime.datetime.strptime(d, "%Y-%m-%d").date())
+            elif isinstance(d, datetime.datetime):
+                available_dates_dt.append(d.date())
+            elif isinstance(d, datetime.date):
+                available_dates_dt.append(d)
+        default_date = available_dates_dt[0] if available_dates_dt else datetime.date.today()
+        selected_date_dt = st.date_input(
+            "选股日期",
+            value=default_date,
+            min_value=min(available_dates_dt) if available_dates_dt else None,
+            max_value=max(available_dates_dt) if available_dates_dt else None,
+            key="stop_loss_selection_date"
+        )
+        selected_date = selected_date_dt.strftime("%Y-%m-%d")
+
+    # 加载选股数据
+    with st.spinner("加载Stop-Loss选股数据..."):
+        df = load_stop_loss_results(session, selected_date)
+
+    if df.empty:
+        st.info(f"{selected_date} 暂无Stop-Loss选股结果数据")
+        return
+
+    # 统计概览
+    total_count = len(df)
+    sell_count = int(df["sell_stop_triggered"].sum()) if "sell_stop_triggered" in df.columns else 0
+
+    st.markdown(
+        f"**选股总数**: {total_count} 只 | "
+        f"**突破Sell-Stop**: {sell_count} 只"
+    )
+
+    # 搜索框
+    search_term = st.text_input(
+        "🔍 搜索",
+        placeholder="搜索：代码/名称/概念/事件类型（sell_stop/buy_stop，多条件用;隔开）",
+        key="stop_loss_search"
+    )
+
+    # 应用搜索筛选
+    filtered_df = df.copy()
+    if search_term:
+        search_conditions = [s.strip() for s in search_term.split(";") if s.strip()]
+        combined_mask = pd.Series([True] * len(df), index=df.index)
+        for condition in search_conditions:
+            condition_mask = (
+                df["ts_code"].astype(str).str.contains(condition, case=False, na=False) |
+                df["stock_name"].astype(str).str.contains(condition, case=False, na=False) |
+                df["concepts"].astype(str).str.contains(condition, case=False, na=False) |
+                df["last_event_type"].astype(str).str.contains(condition, case=False, na=False)
+            )
+            combined_mask = combined_mask & condition_mask
+        filtered_df = df[combined_mask]
+        st.markdown(f"**共 {total_count} 只** | 筛选后: {len(filtered_df)} 只")
+    else:
+        st.markdown(f"**共 {total_count} 只**")
+
+    if filtered_df.empty:
+        st.info("没有匹配的股票")
+        return
+
+    # 准备展示数据
+    display_df = filtered_df.copy()
+
+    # 重命名列为中文（用于显示）
+    config = TAB_FIELD_CONFIGS["Stop-Loss选股结果"]
+    display_names = config["display_names"]
+    rename_map = {k: v for k, v in display_names.items() if k in display_df.columns}
+    display_df_renamed = display_df.rename(columns=rename_map)
+
+    # 确定要展示的列（按配置顺序）
+    available_cols = [display_names.get(f, f) for f in config["fields"] if display_names.get(f, f) in display_df_renamed.columns]
+    display_df_renamed = display_df_renamed[available_cols]
+
+    # 需要颜色渲染的数值列（中文列名）
+    numeric_cols_display = [
+        display_names.get("sell_trigger_volume", "Sell释放量"),
+        display_names.get("sum_sells_active", "Sell规模"),
+        display_names.get("sell_trigger_max_vol_price", "突破价格"),
+        display_names.get("sell_stop_scale", "Sell规模×价格"),
+        display_names.get("dist_to_nearest_sell_stop_atr", "Sell距离ATR"),
+        display_names.get("last_event_volume", "上次量"),
+        display_names.get("last_event_bars_ago", "上次距今天"),
+        display_names.get("change_pct", "涨跌幅%"),
+        display_names.get("vol_zscore", "成交量Z分"),
+        display_names.get("daily_bb_width_zscore", "日BB宽度Z分"),
+    ]
+    numeric_cols_display = [c for c in numeric_cols_display if c in display_df_renamed.columns]
+
+    # 重置索引以确保与event.selection.rows匹配
+    display_df_renamed_reset = display_df_renamed.reset_index(drop=True)
+
+    # 数据表格（支持单选，带颜色渲染）
+    event = st.dataframe(
+        colorize_numeric_columns_simple(display_df_renamed_reset, numeric_cols_display),
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        height=500,
+    )
+
+    # 处理选中行 - 展开详情
+    if event.selection and event.selection.rows:
+        selected_idx = event.selection.rows[0]
+        selected_row_display = display_df_renamed_reset.iloc[selected_idx]
+        selected_row = filtered_df.iloc[selected_idx]
+        ts_code = selected_row["ts_code"]
+        stock_name = selected_row["stock_name"]
+
+        st.markdown("---")
+        st.markdown(f"### 📊 {stock_name} ({ts_code}) 详情")
+
+        # 添加到自选股按钮
+        col_add, _ = st.columns([1, 4])
+        with col_add:
+            if st.button("➕ 添加到自选股", key=f"stop_add_{ts_code}"):
+                if add_to_watchlist(session, ts_code, stock_name):
+                    st.success(f"✅ {stock_name} 已添加到自选股")
+                else:
+                    st.info(f"ℹ️ {stock_name} 已在自选股中")
+
+        # 复用个股详情渲染函数
+        ts_code_full = _format_ts_code(ts_code)
+        _render_stock_detail(session, ts_code_full, stock_name, key_prefix=f"stop_{ts_code}_")
+
+
+def render_watchlist_page(session, sidebar):
+    """渲染自选股票页面
+    Args:
+        session: 数据库会话
+        sidebar: streamlit sidebar 对象
+    """
+    st.header("⭐ 自选股票")
+
+    watchlist_df = load_watchlist(session)
+
+    if watchlist_df.empty:
+        st.info("暂无自选股，请在个股分析页面添加")
+        return
+
+    # 搜索框
+    col_search, col_mode = st.columns([3, 2])
+    with col_search:
+        search_term = st.text_input(
+            "🔍 搜索",
+            placeholder="输入股票代码、名称、BSM事件或PAVP价格（多条件用;隔开）",
+            key="watchlist_search"
+        )
+
+    with col_mode:
+        operation_mode = st.segmented_control(
+            "操作模式",
+            ["单选浏览", "批量管理", "批量监控"],
+            default="单选浏览",
+            key="watchlist_mode"
+        )
+
+    # 应用搜索筛选（支持多条件，用;隔开）
+    if search_term:
+        # 分割多个搜索条件
+        search_conditions = [s.strip() for s in search_term.split(';') if s.strip()]
+
+        # 初始掩码全为True
+        combined_mask = pd.Series([True] * len(watchlist_df), index=watchlist_df.index)
+
+        # 每个条件都必须满足（AND逻辑）
+        for condition in search_conditions:
+            # DSA方向特殊处理：支持搜索"多头"/"空头"文本
+            dsa_mask = pd.Series([False] * len(watchlist_df), index=watchlist_df.index)
+            if '多头' in condition:
+                dsa_mask = dsa_mask | (watchlist_df["dsa_dir"] == 1)
+            if '空头' in condition:
+                dsa_mask = dsa_mask | (watchlist_df["dsa_dir"] == -1)
+
+            condition_mask = (
+                watchlist_df["ts_code"].astype(str).str.contains(condition, case=False, na=False) |
+                watchlist_df["stock_name"].astype(str).str.contains(condition, case=False, na=False) |
+                watchlist_df["bsm_event"].astype(str).str.contains(condition, case=False, na=False) |
+                watchlist_df["pavp_prices"].astype(str).str.contains(condition, case=False, na=False) |
+                dsa_mask
+            )
+            combined_mask = combined_mask & condition_mask
+
+        filtered_df = watchlist_df[combined_mask]
+        st.markdown(f"**共 {len(watchlist_df)} 只自选股** | 筛选后: {len(filtered_df)} 只")
+    else:
+        filtered_df = watchlist_df
+        st.markdown(f"**共 {len(watchlist_df)} 只自选股**")
+
+    if filtered_df.empty:
+        st.info("没有匹配的股票")
+        return
+
+    if operation_mode == "批量管理":
+        _render_watchlist_batch_mode(session, filtered_df)
+    elif operation_mode == "批量监控":
+        _render_watchlist_monitor_mode(session, filtered_df)
+    else:
+        _render_watchlist_single_mode(session, filtered_df)
+
+
+
+def _render_stock_detail(session, ts_code: str, stock_name: str, key_prefix: str = ""):
+    """渲染个股详情（K线+财务评分+股东画像）
+    
+    此函数被个股分析页面和自选股页面复用，保持两处显示一致。
+    当修改个股分析页面布局时，只需修改此函数即可。
+    
+    Args:
+        session: 数据库会话
+        ts_code: 带交易所后缀的股票代码（如 000001.SZ）
+        stock_name: 股票名称
+        key_prefix: 用于区分不同页面的 key 前缀，避免冲突
+    """
+    # K线图标签页切换（日线/周线）
+    tab_daily, tab_weekly = st.tabs(["📈 日线", "📈 周线"])
+
+    with tab_daily:
+        with st.spinner("加载日线数据..."):
+            daily_kline_df = get_kline_data_from_db(ts_code, 'd', bars=250)
+            if not daily_kline_df.empty:
+                daily_kline_df = calculate_bsm_indicators(daily_kline_df)
+                daily_fig = build_kline_chart_with_bsm(
+                    daily_kline_df, f"{stock_name} 日线",
+                    show_vwap=True, show_bsm=True, show_pavp=True, ts_code=ts_code
+                )
+                st.plotly_chart(daily_fig, use_container_width=True, key=f"{key_prefix}daily_{ts_code}")
+            else:
+                st.warning("⚠️ 无日线数据")
+
+    with tab_weekly:
+        with st.spinner("加载周线数据..."):
+            weekly_kline_df = get_kline_data_from_db(ts_code, 'w', bars=250)
+            if not weekly_kline_df.empty:
+                weekly_kline_df = calculate_bsm_indicators(weekly_kline_df)
+                weekly_fig = build_kline_chart_with_bsm(
+                    weekly_kline_df, f"{stock_name} 周线",
+                    show_vwap=True, show_bsm=True, show_pavp=True, ts_code=ts_code
+                )
+                st.plotly_chart(weekly_fig, use_container_width=True, key=f"{key_prefix}weekly_{ts_code}")
+            else:
+                st.warning("⚠️ 无周线数据")
+
+    st.markdown("---")
 
     # 加载财务评分数据
     with st.spinner("加载评分数据..."):
@@ -2463,41 +3683,53 @@ def _render_stock_page(session, matched_stocks: pd.DataFrame, selected_option: i
     if has_score_data:
         report_dates = score_df["report_date"].unique().tolist()
         latest_report = report_dates[-1] if report_dates else None
+        latest_row = score_df[score_df["report_date"] == latest_report].iloc[0]
 
+        # ========== 财务评分概览卡片 ==========
+        st.markdown("#### 📊 财务评分概览")
         col1, col2, col3, col4, col5, col6 = st.columns(6)
 
         with col1:
-            total_score = score_df[score_df["report_date"] == latest_report]["total_score"].values[0]
-            st.metric("总分", format_score(total_score))
+            total_score = latest_row["total_score"]
+            st.metric("总分", format_score(total_score), help="满分100分，基于14项指标综合计算")
 
         with col2:
-            score = score_df[score_df["report_date"] == latest_report]["边际变化与持续性_score"].values[0]
-            st.metric("边际变化与持续性", format_score(score))
+            score = latest_row["main_profit_score"]
+            weight = DIMENSION_CONFIG["main_profit_score"]["weight"]
+            st.metric(f"主业盈利改善", format_score(score), help=f"权重{weight}分：核心利润改善强度、加速度、归母净利润改善")
 
         with col3:
-            score = score_df[score_df["report_date"] == latest_report]["利润质量_score"].values[0]
-            st.metric("利润质量", format_score(score))
+            score = latest_row["revenue_expense_efficiency_score"]
+            weight = DIMENSION_CONFIG["revenue_expense_efficiency_score"]["weight"]
+            st.metric(f"收入费用效率", format_score(score), help=f"权重{weight}分：收入动量、毛利率扩张、费用率改善")
 
         with col4:
-            score = score_df[score_df["report_date"] == latest_report]["资产效率与资金占用_score"].values[0]
-            st.metric("资产效率与资金占用", format_score(score))
+            score = latest_row["cashflow_validation_score"]
+            weight = DIMENSION_CONFIG["cashflow_validation_score"]["weight"]
+            st.metric(f"现金流验证", format_score(score), help=f"权重{weight}分：销售收现、经营现金流、利润现金背离")
 
         with col5:
-            score = score_df[score_df["report_date"] == latest_report]["规模与增长_score"].values[0]
-            st.metric("规模与增长", format_score(score))
+            score = latest_row["working_capital_quality_score"]
+            weight = DIMENSION_CONFIG["working_capital_quality_score"]["weight"]
+            st.metric(f"营运资本质量", format_score(score), help=f"权重{weight}分：应收、存货、合同负债改善")
 
         with col6:
-            score = score_df[score_df["report_date"] == latest_report]["现金创造能力_score"].values[0]
-            st.metric("现金创造能力", format_score(score))
+            score = latest_row["investment_asset_efficiency_score"]
+            weight = DIMENSION_CONFIG["investment_asset_efficiency_score"]["weight"]
+            st.metric(f"投入资产效率", format_score(score), help=f"权重{weight}分：资本开支效率、资产周转率改善")
 
         st.markdown("---")
 
+        # ========== 风险警示区域 ==========
+        render_risk_flags(latest_row)
+
+        # ========== 评分可视化区域 ==========
         chart_col1, chart_col2 = st.columns([1, 1])
 
         with chart_col1:
             st.markdown("#### 最新报告期评分")
             # 获取最新报告期的公告日期
-            latest_ann_date = score_df[score_df["report_date"] == latest_report]["ann_date"].values[0]
+            latest_ann_date = latest_row.get("ann_date")
             ann_date_str = str(latest_ann_date) if pd.notna(latest_ann_date) else "N/A"
             st.markdown(f"**报告期: {format_report_date(latest_report)}**  |  **公告日: {ann_date_str}**")
             dim_chart = render_dimension_chart(score_df, latest_report)
@@ -2512,42 +3744,27 @@ def _render_stock_page(session, matched_stocks: pd.DataFrame, selected_option: i
 
         st.markdown("---")
 
-        # 股东质量画像
-        st.markdown("#### 股东质量画像")
-        render_stock_holder_quality_section(session, ts_code)
+        # ========== 14项核心指标明细 ==========
+        with st.expander("📋 14项核心指标明细"):
+            render_metric_detail_table(latest_row)
 
         st.markdown("---")
 
-        with st.expander("📋 因子明细表"):
-            dim_options = ["全部"] + sorted(list(DIMENSION_WEIGHTS.keys()))
-            selected_dim = st.selectbox("按维度筛选", options=dim_options, key="dim_filter")
-
-            factor_df = load_factor_scores(session, ts_code, latest_report)
-            table_data = render_factor_table(factor_df)
-
-            if selected_dim != "全部":
-                table_data = table_data[table_data["维度"] == selected_dim]
-
-            if not table_data.empty:
-                table_data = table_data.sort_values(["核心", "权重"], ascending=[False, False])
-                st.dataframe(
-                    table_data,
-                    use_container_width=True,
-                    hide_index=True,
-                )
-            else:
-                st.info("无因子数据")
-
-        st.markdown("---")
-
-        with st.expander("📈 评分数据概览"):
+        # ========== 历史评分数据表 ==========
+        with st.expander("📈 历史评分数据"):
             display_df = score_df[["report_date", "total_score"] + DIMENSION_COLS].copy()
             display_df["report_date"] = display_df["report_date"].apply(format_report_date)
-            display_df.columns = ["报告期", "总分", "边际变化与持续性", "利润质量", "现金创造能力",
-                                   "资产效率与资金占用", "规模与增长", "盈利能力"]
+            display_df.columns = ["报告期", "总分", "主业盈利改善", "收入费用效率", "现金流验证",
+                                   "营运资本质量", "投入资产效率"]
             for col in display_df.columns[1:]:
                 display_df[col] = display_df[col].apply(format_score)
             st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+
+        # ========== 股东质量画像 ==========
+        st.markdown("#### 股东质量画像")
+        render_stock_holder_quality_section(session, ts_code)
 
         st.markdown("---")
     else:
@@ -2557,6 +3774,204 @@ def _render_stock_page(session, matched_stocks: pd.DataFrame, selected_option: i
         # 股东质量画像（无财务评分数据时也显示）
         st.markdown("#### 股东质量画像")
         render_stock_holder_quality_section(session, ts_code)
+
+
+def _get_score_color(value: float, min_val: float = 0, max_val: float = 100) -> str:
+    """根据分数值返回对应的颜色（红到绿的渐变）"""
+    if pd.isna(value):
+        return "#808080"  # 灰色
+    if max_val == min_val:
+        return "#808080"
+    
+    # 归一化到 0-1
+    ratio = (value - min_val) / (max_val - min_val)
+    ratio = max(0, min(1, ratio))
+    
+    # 红色 (低分) -> 黄色 (中分) -> 绿色 (高分)
+    if ratio < 0.5:
+        # 红色到黄色
+        r = 255
+        g = int(255 * ratio * 2)
+        b = 0
+    else:
+        # 黄色到绿色
+        r = int(255 * (1 - ratio) * 2)
+        g = 255
+        b = 0
+    
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def render_financial_score_overview_page(session):
+    """渲染财务评分总览页面
+    
+    以表格形式展示所有股票的最近一期财务评分，支持：
+    - 颜色渲染（按数值从小到大渐变，红->黄->绿）
+    - 筛选/搜索功能
+    - 点击行跳转到个股详情
+    """
+    st.header("📊 财务评分总览")
+    
+    # 加载数据
+    with st.spinner("加载财务评分数据..."):
+        df = load_financial_score_overview(session)
+    
+    if df.empty:
+        st.info("暂无财务评分数据")
+        return
+    
+    # 统计数据分布
+    scored_count = df["total_score"].notna().sum()
+    unscored_count = df["total_score"].isna().sum()
+    report_date_counts = df["report_date"].value_counts().sort_index(ascending=False)
+    
+    # 显示数据概览
+    st.markdown(f"**股票池总数**: {len(df)} 只 | **有评分**: {scored_count} 只 | **无评分**: {unscored_count} 只")
+    
+    # 显示各报告期分布
+    with st.expander("📅 查看各报告期数据分布"):
+        report_dist = report_date_counts.head(10).reset_index()
+        report_dist.columns = ["报告期", "股票数量"]
+        st.dataframe(report_dist, use_container_width=True, hide_index=True)
+    
+    # 筛选区域
+    st.markdown("---")
+    col_search, col_score_min, col_score_max = st.columns([3, 1, 1])
+    
+    with col_search:
+        search_term = st.text_input(
+            "🔍 搜索",
+            placeholder="输入股票代码、名称或概念",
+            key="overview_search"
+        )
+    
+    with col_score_min:
+        min_score = st.number_input(
+            "最低分",
+            min_value=0.0,
+            max_value=100.0,
+            value=0.0,
+            step=5.0,
+            key="overview_min_score"
+        )
+    
+    with col_score_max:
+        max_score = st.number_input(
+            "最高分",
+            min_value=0.0,
+            max_value=100.0,
+            value=100.0,
+            step=5.0,
+            key="overview_max_score"
+        )
+    
+    # 应用筛选
+    filtered_df = df.copy()
+    
+    if search_term:
+        mask = (
+            filtered_df["ts_code"].str.contains(search_term, case=False, na=False) |
+            filtered_df["stock_name"].str.contains(search_term, case=False, na=False) |
+            filtered_df["concept"].str.contains(search_term, case=False, na=False)
+        )
+        filtered_df = filtered_df[mask]
+    
+    filtered_df = filtered_df[
+        (filtered_df["total_score"] >= min_score) &
+        (filtered_df["total_score"] <= max_score)
+    ]
+    
+    st.markdown(f"**筛选结果**: {len(filtered_df)} 只股票")
+    st.markdown("---")
+    
+    # 准备显示数据 - 调整列顺序和列名
+    display_df = filtered_df[[
+        "ts_code", "stock_name", "concept", "total_score",
+        "main_profit_score", "revenue_expense_efficiency_score", "cashflow_validation_score",
+        "working_capital_quality_score", "investment_asset_efficiency_score",
+        "report_date", "ann_date"
+    ]].copy()
+    
+    display_df.columns = [
+        "股票代码", "股票名称", "概念", "总分",
+        "主业盈利改善", "收入费用效率", "现金流验证",
+        "营运资本质量", "投入资产效率",
+        "报告期", "公告日"
+    ]
+    
+    # 格式化日期
+    display_df["报告期"] = display_df["报告期"].apply(format_report_date)
+    display_df["公告日"] = display_df["公告日"].apply(lambda x: str(int(float(x))) if pd.notna(x) and str(x).lower() not in ['nan', 'nat', 'none'] else "")
+    
+    # 使用 st.dataframe 显示，支持点击行（不显示颜色，保持交互性）
+    event = st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        height=600,
+        column_config={
+            "股票代码": st.column_config.TextColumn("股票代码", width="small"),
+            "股票名称": st.column_config.TextColumn("股票名称", width="small"),
+            "概念": st.column_config.TextColumn("概念", width="medium"),
+            "总分": st.column_config.NumberColumn("总分", width="small", format="%.1f"),
+            "主业盈利改善": st.column_config.NumberColumn("主业盈利改善", width="small", format="%.1f"),
+            "收入费用效率": st.column_config.NumberColumn("收入费用效率", width="small", format="%.1f"),
+            "现金流验证": st.column_config.NumberColumn("现金流验证", width="small", format="%.1f"),
+            "营运资本质量": st.column_config.NumberColumn("营运资本质量", width="small", format="%.1f"),
+            "投入资产效率": st.column_config.NumberColumn("投入资产效率", width="small", format="%.1f"),
+            "报告期": st.column_config.TextColumn("报告期", width="small"),
+            "公告日": st.column_config.TextColumn("公告日", width="small"),
+        }
+    )
+    
+    # 处理点击行 - 跳转到个股详情
+    if event.selection.rows:
+        selected_idx = event.selection.rows[0]
+        selected_row = filtered_df.iloc[selected_idx]
+        ts_code = selected_row["ts_code"]
+        stock_name = selected_row["stock_name"]
+        
+        st.markdown("---")
+        st.markdown(f"### 📈 {stock_name} ({ts_code}) 详情")
+        
+        # 添加到自选股按钮
+        col_add, _ = st.columns([1, 4])
+        with col_add:
+            if st.button("➕ 添加到自选股", key=f"overview_add_{ts_code}"):
+                if add_to_watchlist(session, ts_code, stock_name):
+                    st.success(f"✅ {stock_name} 已添加到自选股")
+                else:
+                    st.info(f"ℹ️ {stock_name} 已在自选股中")
+        
+        # 复用个股详情渲染函数
+        ts_code_full = _format_ts_code(ts_code)
+        _render_stock_detail(session, ts_code_full, stock_name, key_prefix=f"overview_{ts_code}_")
+
+
+def _render_stock_page(session, matched_stocks: pd.DataFrame, selected_option: int):
+    """渲染个股分析页面"""
+    if selected_option is None:
+        return
+
+    selected_stock = matched_stocks.iloc[selected_option]
+    ts_code = selected_stock["ts_code"]
+    stock_name = selected_stock["name"]
+
+    # 股票标题和添加按钮
+    title_col, btn_col = st.columns([4, 1])
+    with title_col:
+        st.markdown(f"### 当前股票: **{stock_name}** ({ts_code})")
+    with btn_col:
+        if st.button("➕ 添加到自选股", key=f"add_to_watchlist_{ts_code}"):
+            if add_to_watchlist(session, ts_code, stock_name):
+                st.success(f"✅ {stock_name} 已添加到自选股")
+            else:
+                st.info(f"ℹ️ {stock_name} 已在自选股中")
+
+    # 复用通用的详情渲染函数
+    _render_stock_detail(session, ts_code, stock_name, key_prefix="analysis_")
 
 
 def render_stock_holder_quality_section(session, ts_code: str):
@@ -3402,15 +4817,17 @@ def main():
 
     with get_session() as session:
         init_saved_filters_table(session)
+        init_selected_picks_table(session)
+        init_watchlist_table(session)
         stock_list = load_stock_list(session)
 
         with st.sidebar:
             st.header("📊 财务评分分析")
-            page = st.radio("页面", ["个股分析", "全股池因子表", "选股主页", "股东画像"], index=0)
+            page = st.radio("页面", ["个股分析", "自选股票", "BSM选股结果", "Stop-Loss选股结果", "财务评分总览", "股东画像"], index=0)
 
         if page == "个股分析":
             if stock_list.empty:
-                st.info("暂无评分数据（stock_financial_score_pool 表不存在或为空）")
+                st.info("暂无股票数据（stock_pools 表不存在或为空）")
             else:
                 with st.sidebar:
                     st.markdown("---")
@@ -3438,24 +4855,22 @@ def main():
 
                         st.markdown("---")
                         st.markdown("**维度权重说明**")
-                        for dim, weight in DIMENSION_WEIGHTS.items():
-                            color = DIMENSION_COLORS.get(dim, "#888888")
-                            st.markdown(f"<span style='color:{color}'>●</span> {dim}: {weight*100:.0f}%", unsafe_allow_html=True)
+                        for dim_col, dim_config in DIMENSION_CONFIG.items():
+                            dim_name = dim_config["name"]
+                            weight = dim_config["weight"]
+                            color = dim_config["color"]
+                            st.markdown(f"<span style='color:{color}'>●</span> {dim_name}: {weight}分", unsafe_allow_html=True)
 
                 if selected_option is not None:
                     _render_stock_page(session, matched_stocks, selected_option)
-        elif page == "全股池因子表":
-            with st.sidebar:
-                st.markdown("---")
-                st.markdown("**维度权重说明**")
-                for dim, weight in DIMENSION_WEIGHTS.items():
-                    color = DIMENSION_COLORS.get(dim, "#888888")
-                    st.markdown(f"<span style='color:{color}'>●</span> {dim}: {weight*100:.0f}%", unsafe_allow_html=True)
-
-            render_pool_page(session)
-        elif page == "选股主页":
-            render_stock_picker_page(session, st.sidebar)
-
+        elif page == "自选股票":
+            render_watchlist_page(session, st.sidebar)
+        elif page == "BSM选股结果":
+            render_bsm_selection_page(session, st.sidebar)
+        elif page == "Stop-Loss选股结果":
+            render_stop_loss_selection_page(session, st.sidebar)
+        elif page == "财务评分总览":
+            render_financial_score_overview_page(session)
         elif page == "股东画像":
             render_holder_profile_page(session)
 
