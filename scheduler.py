@@ -5,8 +5,8 @@
 
 功能：集中管理所有定时调度任务
 作者：项目团队
-修改日期：2026-04-14
-版本：v1.2.0
+修改日期：2026-05-05
+版本：v1.3.0
 
 ================================================================================
 当前任务列表（共 3 类任务）
@@ -15,7 +15,8 @@
 1. 每日数据更新与选股任务 (task_每日数据更新与选股) - [已授权]
    - 函数：daily_update_and_selection_task()
    - 触发器：Cron (每天 15:10)
-   - 执行时间：周一至周五 15:10（收盘后）
+   - 执行时间：交易日 15:10（收盘后，含节假日判断）
+   - 交易日检查：通过 datasource.trade_calendar.is_trading_day() 判断，非交易日自动跳过
    - 执行流程：
         1. 日线数据增量更新（每天）
         2. 周线数据增量更新（每天）
@@ -35,7 +36,8 @@
 3. 盘中自选股监控任务 - [已授权]
    - 函数：watchlist_monitor_task(freq)
    - 触发器：Cron (交易时段内按周期执行)
-   - 执行时间：周一至周五 9:30-15:00
+   - 执行时间：交易日 9:30-15:00（含节假日判断）
+   - 交易日检查：通过 datasource.trade_calendar.is_trading_day() 判断，非交易日自动跳过
    - 检测周期：
      a. 15分钟：每15分钟整点执行（9:45, 10:00, 10:15... 14:45, 15:00）
      b. 60分钟：每天4个固定时间点（10:30, 11:30, 14:00, 14:55）
@@ -205,7 +207,7 @@ LOG_FILE=scheduler.log         # 日志文件路径
 
 常见问题：
     Q1: 任务没有按时执行？
-    A: 检查 .env 中任务开关是否开启，确认当前是否在交易日
+    A: 检查 .env 中任务开关是否开启，确认当前是否为交易日（含节假日判断）
     
     Q2: 调度器无法启动？
     A: 检查 Python 版本（需要 3.8+），检查依赖是否安装
@@ -233,6 +235,7 @@ import os
 import sys
 import logging
 import subprocess
+import functools
 from datetime import datetime
 from pathlib import Path
 
@@ -268,6 +271,19 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger('scheduler')
+
+from datasource.trade_calendar import is_trading_day
+
+
+def trading_day_only(func):
+    """装饰器：仅在交易日执行任务，非交易日跳过并记录日志"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if not is_trading_day():
+            logger.info(f"今天不是交易日，跳过任务：{func.__name__}")
+            return
+        return func(*args, **kwargs)
+    return wrapper
 
 
 class TaskScheduler:
@@ -489,8 +505,9 @@ def send_feishu_notification(title: str, content: str, is_error: bool = False):
         logger.warning(f"飞书通知发送失败：{e}")
 
 
+@trading_day_only
 def daily_update_and_selection_task():
-    """每日数据更新与选股任务 - 已授权（周一至周五15:10执行）
+    """每日数据更新与选股任务 - 已授权（交易日15:10执行）
 
     执行流程：
     1. 日线数据增量更新（每天）
@@ -611,6 +628,7 @@ def daily_update_and_selection_task():
         raise
 
 
+@trading_day_only
 def watchlist_monitor_task(freq: str):
     """盘中自选股监控任务
 
@@ -637,27 +655,6 @@ def watchlist_monitor_task(freq: str):
             f"时间：{now.strftime('%H:%M:%S')}\n错误：{str(e)}",
             is_error=True
         )
-
-
-def _is_trading_day() -> bool:
-    """检查今天是否为交易日（周一至周五）"""
-    today = datetime.now()
-    return today.weekday() < 5
-
-
-def _is_trading_hours() -> bool:
-    """检查当前是否在交易时段内"""
-    now = datetime.now()
-    hour = now.hour
-    minute = now.minute
-    time_val = hour * 60 + minute
-    
-    morning_start = 9 * 60 + 30
-    morning_end = 11 * 60 + 30
-    afternoon_start = 13 * 60
-    afternoon_end = 15 * 60
-    
-    return (morning_start <= time_val <= morning_end) or (afternoon_start <= time_val <= afternoon_end)
 
 
 def start_streamlit():

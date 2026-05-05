@@ -125,6 +125,9 @@ def main():
     parser.add_argument("--max-daily", type=int, default=10, help="每天最多买几只")
     parser.add_argument("--stop-threshold", type=float, default=-0.05, help="止损阈值")
     parser.add_argument("--strict", action="store_true", help="严格模式：使用OOS数据+训练集阈值")
+    parser.add_argument("--regime-filter", action="store_true", help="启用市场环境过滤")
+    parser.add_argument("--regime-csv", type=str, default="/tmp/market_daily_summary.csv",
+                        help="市场环境标签 CSV 路径")
     args = parser.parse_args()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -157,6 +160,31 @@ def main():
 
     buy_df = df[(df["daily_opportunity_score"] >= opp_q) & (df["daily_risk_score"] >= risk_q)].copy()
     print(f"  符合条件的记录: {len(buy_df)}")
+
+    if args.regime_filter:
+        import sys, os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        from market_structure_analysis.regime_filter import load_regime_series, get_regime_rules
+
+        try:
+            regime_series = load_regime_series(csv_path=args.regime_csv, use_cache=False)
+        except (FileNotFoundError, KeyError) as e:
+            print(f"  警告: 无法加载环境标签 ({e})，跳过过滤")
+            regime_series = None
+
+        if regime_series is not None and not regime_series.empty:
+            buy_df["buy_date_dt"] = pd.to_datetime(buy_df["buy_date"]).dt.date
+            buy_df["_regime"] = buy_df["buy_date_dt"].apply(
+                lambda d: regime_series.get(pd.Timestamp(d), "中性")
+            )
+            before_filter = len(buy_df)
+            buy_df = buy_df[buy_df["_regime"] != "强退潮"]
+            after_filter = len(buy_df)
+            filtered_out = before_filter - after_filter
+            print(f"  [regime filter] 过滤前: {before_filter}, 过滤后: {after_filter}, 滤除: {filtered_out} ({filtered_out/before_filter*100:.1f}%)")
+
+            regime_stats = buy_df["_regime"].value_counts()
+            print(f"  信号环境分布: {dict(regime_stats)}")
 
     all_results = []
 
