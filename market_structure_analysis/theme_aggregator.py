@@ -30,7 +30,7 @@ from market_structure_analysis.market_aggregator import (
 
 logger = logging.getLogger(__name__)
 
-MIN_THEME_SAMPLE = 8
+from market_structure_analysis._config import MIN_THEME_SAMPLE
 
 
 def load_concept_map(min_stocks: int = MIN_THEME_SAMPLE) -> pd.DataFrame:
@@ -121,9 +121,12 @@ def rank_daily_themes(
     date=None,
     top_n: int = 10,
     sort_by: str = "composite_strength",
+    min_event_ratio: float = 0.0,
+    lightweight_events: Optional[pd.DataFrame] = None,
+    concept_map: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
-    获取指定日期的 Top N 主线题材。
+    获取指定日期的 Top N 主线题材，含可信度过滤。
 
     Parameters
     ----------
@@ -134,11 +137,17 @@ def rank_daily_themes(
     top_n : int
     sort_by : str
         排序字段
+    min_event_ratio : float
+        最小事件覆盖率阈值。0.0 = 不过滤。建议 0.05~0.10
+    lightweight_events : pd.DataFrame, optional
+        用于计算事件覆盖率，含 ts_code/trade_date/evt_*
+    concept_map : pd.DataFrame, optional
+        用于计算事件覆盖率
 
     Returns
     -------
     pd.DataFrame
-        Top N 题材，含 composite_strength / structure_score / stock_count 等
+        Top N 题材，含 credibility 标注
     """
     if theme_agg.empty:
         return pd.DataFrame()
@@ -152,11 +161,45 @@ def rank_daily_themes(
     if day_data.empty:
         return pd.DataFrame()
 
+    # 事件覆盖率计算
+    if min_event_ratio > 0 and lightweight_events is not None and not lightweight_events.empty \
+            and concept_map is not None and not concept_map.empty:
+        day_events = lightweight_events[lightweight_events["trade_date"] == date]
+        if not day_events.empty:
+            evt_cols_list = [c for c in day_events.columns if c.startswith("evt_")]
+            # 每只股票是否触发了任意事件
+            day_events["_has_event"] = day_events[evt_cols_list].max(axis=1).fillna(0) > 0
+            events_with_cp = day_events.merge(
+                concept_map, on="ts_code", how="inner"
+            )
+            cp_stats = events_with_cp.groupby("concept").agg(
+                total_stocks=("ts_code", "nunique"),
+                event_stocks=("_has_event", "sum"),
+            )
+            cp_stats["event_ratio"] = cp_stats["event_stocks"] / cp_stats["total_stocks"].clip(lower=1)
+            day_data = day_data.merge(
+                cp_stats[["event_ratio"]],
+                left_on="group_name", right_index=True, how="left"
+            )
+            # 过滤低覆盖率题材
+            day_data = day_data[
+                day_data["event_ratio"].isna() | (day_data["event_ratio"] >= min_event_ratio)
+            ]
+            day_data["credibility"] = day_data["event_ratio"].apply(
+                lambda x: "可信" if pd.notna(x) and x >= 0.10 else "一般" if pd.notna(x) else "未评估"
+            )
+        else:
+            day_data["credibility"] = "未评估"
+    else:
+        day_data["credibility"] = "未评估"
+
     if sort_by not in day_data.columns:
         sort_by = "structure_score" if "structure_score" in day_data.columns else day_data.columns[0]
 
     ranked = day_data.nlargest(top_n, sort_by)
-    return ranked[["group_name", "stock_count", "structure_score", sort_by]].reset_index(drop=True)
+    display_cols = ["group_name", "stock_count", "structure_score", sort_by, "credibility"]
+    avail_display = [c for c in display_cols if c in ranked.columns]
+    return ranked[avail_display].reset_index(drop=True)
 
 
 def identify_theme_trends(
@@ -257,7 +300,9 @@ def generate_theme_report(
         name = row["group_name"]
         stock_cnt = int(row.get("stock_count", 0))
         strength = row.get("composite_strength", row.get("structure_score", 0))
-        lines.append(f"  {i+1:2d}. {name:20s}  股票数:{stock_cnt:4d}  强度:{strength:+.4f}")
+        cred = row.get("credibility", "未评估")
+        cred_flag = "" if cred == "可信" else f" [{cred}]" if cred != "未评估" else ""
+        lines.append(f"  {i+1:2d}. {name:20s}  股票数:{stock_cnt:4d}  强度:{strength:+.4f}{cred_flag}")
 
     if show_trends:
         trends = identify_theme_trends(theme_agg, n_days=5)

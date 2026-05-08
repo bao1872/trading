@@ -66,44 +66,13 @@ engine = create_engine(DATABASE_URL)
 EXPERIMENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(EXPERIMENT_DIR, "output")
 
-RAW_FEATURES = [
-    "dsa_dir", "prev_pivot_code", "last_confirmed_high", "last_confirmed_low",
-    "dsa_pivot_pos_01", "ret_to_last_high_pct", "ret_to_last_low_pct",
-    "price_vs_dsa_vwap_pct", "current_stage_bars", "prev_stage_bars",
-    "bars_since_last_high", "bars_since_last_low", "prev_stage_amp_pct",
-    "current_stage_ret_pct", "current_stage_amp_pct",
-    "current_pullback_from_stage_extreme_pct", "bbmacd", "bbmacd_minus_avg",
-    "bbmacd_state", "bbmacd_band_pos_01", "bbmacd_bandwidth_zscore",
-    "bbmacd_cross_upper", "bbmacd_cross_lower", "trend_align_momo",
-    "vol_zscore_5", "vol_zscore_10", "vol_zscore_20", "vol_ratio_10",
-    "vol_stage_cv", "vol_prev_stage_cv", "vol_cv_ratio",
-    "price_vol_coord", "momo_vol_coord", "low_pos_break_coord", "coord_consistency",
-    "coord_stage_current", "coord_stage_prev", "coord_stage_ratio",
-]
+from dsa_experiment.pipeline.factor_columns import WEEKLY_FEATURE_COLS
+from dsa_experiment.pipeline.derived_features import WEEKLY_DERIVED_NAMES, build_weekly_features
 
+RAW_FEATURES = WEEKLY_FEATURE_COLS
 CATEGORICAL_FEATURES = []
-
-DERIVED_FEATURES = [
-    "high_low_range", "high_low_range_pct",
-    "pivot_pos_x_trend", "stage_bars_ratio", "amp_x_pullback", "bbmacd_band_width",
-]
-
+DERIVED_FEATURES = WEEKLY_DERIVED_NAMES
 ALL_FEATURES = RAW_FEATURES + DERIVED_FEATURES
-
-
-def build_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    high = df["last_confirmed_high"].fillna(0)
-    low = df["last_confirmed_low"].fillna(0)
-    df["high_low_range"] = high - low
-    df["high_low_range_pct"] = np.where(low > 0, (high - low) / low, 0)
-    df["pivot_pos_x_trend"] = df["dsa_pivot_pos_01"].fillna(0) * df["trend_align_momo"].fillna(0)
-    prev_bars = df["prev_stage_bars"].fillna(0).replace(0, np.nan)
-    df["stage_bars_ratio"] = df["current_stage_bars"].fillna(0) / prev_bars
-    df["stage_bars_ratio"] = df["stage_bars_ratio"].fillna(0)
-    df["amp_x_pullback"] = df["current_stage_amp_pct"].fillna(0) * df["current_pullback_from_stage_extreme_pct"].fillna(0)
-    df["bbmacd_band_width"] = df["bbmacd_band_pos_01"].fillna(0) * df["bbmacd_bandwidth_zscore"].fillna(0)
-    return df
 
 
 def get_feature_cols(df: pd.DataFrame) -> list:
@@ -171,11 +140,10 @@ def fetch_stock_names(ts_codes: list) -> dict:
             all_codes.append(f"{code}.SH")
         else:
             all_codes.append(f"{code}.SZ")
-    placeholders = ", ".join([f"'{c}'" for c in all_codes])
     try:
-        sql = text(f"SELECT ts_code, name FROM stock_pools WHERE ts_code IN ({placeholders})")
+        sql = text("SELECT ts_code, name FROM stock_pools WHERE ts_code = ANY(:codes)")
         with engine.connect() as conn:
-            result = conn.execute(sql)
+            result = conn.execute(sql, {"codes": all_codes})
             return {row[0].split(".")[0]: row[1] for row in result}
     except Exception:
         return {}
@@ -203,7 +171,7 @@ def run_selection(
     print(f"  触发点: {len(df)}")
 
     print("  [2/7] 特征工程...")
-    df = build_features(df)
+    df = build_weekly_features(df)
     feature_cols = get_feature_cols(df)
     print(f"  特征数: {len(feature_cols)}")
 

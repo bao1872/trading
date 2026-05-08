@@ -1,0 +1,86 @@
+我建议你现在补的功能
+1）在 daily inference 里加一个保存步骤
+
+每次推理后，把这些字段保存：
+
+trade_date / obs_date
+ts_code
+signal_id
+obs_day
+pred_sell_reg
+pred_sell_cls
+pred_buy_reg
+pred_buy_cls
+model_version
+feature_version
+generated_at
+
+这一步是必须的。
+
+2）保存方式建议 append-only
+
+不要覆盖写，建议：
+
+按日期追加
+或按日期分文件保存
+
+例如：
+
+predictions/2026-05-08.parquet
+predictions/2026-05-09.parquet
+
+或者一个总表 append。
+
+3）replay 读取逻辑改成“优先读真实预测”
+
+比如：
+
+若目标日期有真实保存预测
+
+→ 用真实预测 replay
+
+若目标日期没有真实保存预测
+
+→ 明确标记：
+
+NO_REAL_PREDICTION_DATA
+如需要，再退回 projection 模式
+
+这样语义就清楚了。
+
+最小改法 vs 最优改法
+最小改法
+
+直接在当前 daily inference 结束后：
+
+append 到一个 daily_predictions.parquet
+
+优点：
+
+改动小
+很快就能让 replay 有真实输入
+最优改法
+
+建一个统一的预测结果表/仓库，例如：
+
+model_predictions 数据库表
+或
+分区 parquet 仓库
+
+字段里带上：
+
+日期
+模型版本
+生成时间
+数据来源
+
+优点：
+
+后面更稳
+更适合长期模拟盘 / 实盘
+一句话结论
+
+对，你缺的就是“推理后顺便保存预测结果”的能力；有了这个能力，replay 才能对新日期做真实回放。
+但我不建议直接把所有新结果都混写进当前那个冻结的 full_test_predictions.parquet。更合理的是：
+
+保留 full_test_predictions.parquet 作为历史 test 快照，再新增一个增量预测结果仓库，供未来 replay 和日报使用。

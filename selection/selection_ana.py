@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-BSM指标选股脚本（基于周线买点信号）
+BSM指标选股脚本（基于周线V型形态）
 
-Purpose: 基于BSM周线买点信号选股（周线反转/周线突破）
+Purpose: 基于周线BBMACD V型形态选股
 Inputs: stock_k_data (日线/周线K线数据)
 Outputs: stock_selection_results (选股结果)
 How to Run:
@@ -13,27 +13,24 @@ Side Effects: 写入 stock_selection_results 表
 ================================================================================
 【选股条件】
 
-保存条件：(周线反转买点 或 周线突破买点) 且 过去5天平均成交额 > 1亿
-  - 核心条件1：周线反转买点（weekly_reversal_buy）
-    * V型形态 + DSA dir=1 + 收盘价<=VWAP*1.10 + 周线bbmacd不在下轨以下
-  - 核心条件2：周线突破买点（weekly_breakout_buy）
-    * 上穿上轨 + DSA dir=-1 + 收盘价>=VWAP*0.85 + 周线bbmacd不在下轨以下
+选股条件：周线V型形态 且 过去5天平均成交额 > 1亿
+  - 核心条件：周线BBMACD V型形态（t_2 > t_1 and t > t_1）
   - 过滤条件：成交额 > 1亿（5日平均）
+
+观察项（不参与选股，仅记录）：
+  - 周线：DSA方向(dir)、VWAP、收盘价与VWAP偏差率
+  - 日线：DSA方向(dir)、VWAP、收盘价与VWAP偏离度、PAVP/BBMACD指标
 
 周线数据：
   - 使用周线数据计算BSM信号（bars=120）
   - 周线数据只在周五收盘后更新
 
-日线指标（仅观察，不参与选股）：
-  - PAVP：VAH/VAL/POC、成交量分布位置（va_pos_01）
-  - BBMACD：布林带宽度Z-Score、BBMACD事件
-  - DSA：方向(dir)和VWAP、VWAP偏离度
-  - 成交量Z-Score
-
 保存字段：
-  - BSM字段：weekly_reversal_buy, weekly_breakout_buy, weekly_bb_width_zscore
+  - 选股字段：weekly_reversal_buy（V型形态）
+  - 周线观察项：weekly_dsa_dir, weekly_dsa_vwap, weekly_vwap_deviation
+  - 日线观察项：daily_dsa_dir, daily_dsa_vwap, daily_vwap_deviation
   - PAVP字段（观察）：vah_1/2/3, val_1/2/3, poc_1/2/3, va_pos_01
-  - 日线观察项：daily_bb_width_zscore, daily_vol_zscore, daily_vwap_deviation, bbmacd_event
+  - BBMACD观察项：daily_bb_width_zscore, daily_vol_zscore, bbmacd_event
   - 批次号：batch_no（每10只一批）
 
 批次号规则：
@@ -407,28 +404,6 @@ def has_weekly_data_for_date(target_date: date) -> bool:
         return bool(result.scalar())
 
 
-def check_weekly_not_below_lower(ts_code: str, selection_date: Optional[date] = None) -> bool:
-    """
-    检查周线BSM是否不在下轨以下（必要条件）
-    Args:
-        ts_code: 股票代码
-        selection_date: 选股日期，用于获取该日期之前的数据
-    Returns: True-满足条件, False-不满足
-    """
-    df = get_kline_data(ts_code, 'w', bars=120, end_date=selection_date)
-    if df.empty or len(df) < 26:  # 至少需要26根计算BSM
-        return False
-    
-    bbmacd_df = compute_bbmacd(df)
-    latest = bbmacd_df.iloc[-1]
-    
-    # 检查bbmacd是否为有效值
-    if pd.isna(latest['bbmacd']) or pd.isna(latest['banda_inf']):
-        return False
-    
-    return latest['bbmacd'] >= latest['banda_inf']
-
-
 def batch_get_stock_names(ts_codes: List[str]) -> Dict[str, str]:
     """批量获取股票名称（一次查询）"""
     if not ts_codes:
@@ -531,10 +506,6 @@ def compute_poc_avg_return(pocs: List[float], poc_bars: int) -> float:
     total_return = (poc_3 - poc_1) / poc_1
     return float(total_return / poc_bars)
 
-
-def cross_over(a: pd.Series, b: pd.Series) -> pd.Series:
-    """判断上穿：当日>基准且前一日<=基准"""
-    return (a > b) & (a.shift(1) <= b.shift(1))
 
 def get_html_consistent_dsa_snapshot(
     ts_code: str,
@@ -672,39 +643,43 @@ def compute_dsa_state_stats(
 
 def process_stock_pavp(ts_code: str, selection_date: date, has_daily: bool) -> Optional[Dict]:
     """
-    处理单只股票的BSM指标选股（基于周线买点信号）
+    处理单只股票的V型形态选股
 
     选股逻辑：
-        - 检测周线BSM买点信号（周线反转/周线突破）
-        - 条件1：周线反转买点 或 周线突破买点
+        - 条件1：周线BBMACD出现V型形态
         - 条件2：过去5天平均成交额 > 1亿
-        - 日线指标（PAVP/BBMACD/DSA）仅作为观察项，不参与选股
+        - DSA dir和收盘价vs VWAP偏差作为观察项，不参与选股
 
     核心字段：
-        - weekly_reversal_buy: 周线反转买点
-        - weekly_breakout_buy: 周线突破买点
+        - weekly_reversal_buy: 周线V型形态（选股条件）
         - weekly_bb_width_zscore: 周线布林带宽度Z-Score
+
+    观察字段（周线）：
+        - weekly_dsa_dir: 周线DSA方向
+        - weekly_dsa_vwap: 周线DSA VWAP
+        - weekly_vwap_deviation: 周线收盘价与VWAP偏差率
 
     观察字段（日线）：
         - vah_1/2/3, val_1/2/3, poc_1/2/3: PAVP成交量分布
         - va_pos_01: 当前收盘价在VA中的位置
         - daily_bb_width_zscore, daily_vol_zscore: 日线Z-Score
+        - daily_dsa_dir: 日线DSA方向
+        - daily_dsa_vwap: 日线DSA VWAP
         - daily_vwap_deviation: 日线VWAP偏离度
         - bbmacd_event: BBMACD事件
 
-    Returns: 信号字典，如果满足周线BSM条件则返回结果，否则返回None
+    Returns: 信号字典，如果满足选股条件则返回结果，否则返回None
     """
     if not has_daily:
         return None
 
-    # 首先检测周线BSM信号（核心选股条件）
+    # 首先检测周线V型形态（核心选股条件）
     bsm_signals = detect_bsm_signals(ts_code, selection_date)
 
-    # 核心选股条件：周线反转买点 或 周线突破买点
+    # 核心选股条件：周线V型形态
     weekly_reversal_buy = bsm_signals.get('weekly_reversal_buy', False)
-    weekly_breakout_buy = bsm_signals.get('weekly_breakout_buy', False)
 
-    if not (weekly_reversal_buy or weekly_breakout_buy):
+    if not weekly_reversal_buy:
         return None
 
     # 获取日线数据用于成交额过滤和观察项计算
@@ -780,9 +755,13 @@ def process_stock_pavp(ts_code: str, selection_date: date, has_daily: bool) -> O
         'ts_code': ts_code,
         # BSM核心选股字段（周线）
         'weekly_reversal_buy': weekly_reversal_buy,
-        'weekly_breakout_buy': weekly_breakout_buy,
+        'weekly_breakout_buy': False,  # 已废弃，始终为False
         'weekly_bb_width_zscore': bsm_signals.get('weekly_bb_width_zscore'),
         'weekly_vol_zscore': bsm_signals.get('weekly_vol_zscore'),
+        # 周线DSA观察项
+        'weekly_dsa_dir': bsm_signals.get('weekly_dsa_dir'),
+        'weekly_dsa_vwap': bsm_signals.get('weekly_dsa_vwap'),
+        'weekly_vwap_deviation': bsm_signals.get('weekly_vwap_deviation'),
         # PAVP字段（观察项，日线）
         'vah_1': vahs[0] if len(vahs) > 0 else None,
         'vah_2': vahs[1] if len(vahs) > 1 else None,
@@ -819,19 +798,27 @@ def process_stock_pavp(ts_code: str, selection_date: date, has_daily: bool) -> O
 
 def detect_bsm_signals(ts_code: str, selection_date: Optional[date] = None) -> Dict:
     """
-    检测BSM买点信号（仅周线买点）
+    检测BSM信号（仅V型形态选股，DSA为观察项）
+
+    选股条件：周线BBMACD出现V型形态（t_2 > t_1 and t > t_1）
+    观察项：周线DSA dir、VWAP、收盘价与VWAP偏差率
+
     Args:
         ts_code: 股票代码
         selection_date: 选股日期，用于获取该日期之前的数据
-    Returns: 信号字典（包含周线买点信号、Z-Score值和实际使用的行情日期）
+    Returns: 信号字典（包含V型形态信号、Z-Score值、DSA观察项和实际使用的行情日期）
     """
     signals = {
-        'weekly_reversal_buy': False,     # 周线反转买点（周线一类）
-        'weekly_breakout_buy': False,     # 周线突破买点（周线二类）
+        'weekly_reversal_buy': False,     # 周线V型形态（选股条件）
+        'weekly_breakout_buy': False,     # 已废弃，始终为False
         'weekly_bb_width_zscore': None,   # 周线布林带宽度Z-Score
         'weekly_vol_zscore': None,        # 周线成交量Z-Score
         'daily_bar_time': None,           # 实际使用的日线日期（用于成交额过滤）
         'weekly_bar_time': None,          # 实际使用的周线日期
+        # 观察项：周线DSA
+        'weekly_dsa_dir': None,           # 周线DSA方向
+        'weekly_dsa_vwap': None,          # 周线DSA VWAP值
+        'weekly_vwap_deviation': None,    # 周线收盘价与VWAP偏差率
     }
 
     # 获取日线数据用于成交额过滤
@@ -855,48 +842,32 @@ def detect_bsm_signals(ts_code: str, selection_date: Optional[date] = None) -> D
             # 周线成交量Z-Score
             signals['weekly_vol_zscore'] = volume_zscore(weekly_df['volume'], win=20)
 
-            # 必要条件：周线bbmacd不在下轨以下
-            if weekly_bbmacd['bbmacd'].iloc[-1] >= weekly_bbmacd['banda_inf'].iloc[-1]:
-                # 获取DSA数据
-                dsa_snapshot = get_html_consistent_dsa_snapshot(
-                    ts_code=ts_code,
-                    freq='w',
-                    selection_date=selection_date,
-                )
-                current_dir = dsa_snapshot['dir']
-                current_vwap = dsa_snapshot['vwap']
+            # 获取周线DSA数据（观察项）
+            dsa_snapshot = get_html_consistent_dsa_snapshot(
+                ts_code=ts_code,
+                freq='w',
+                selection_date=selection_date,
+            )
+            current_dir = dsa_snapshot['dir']
+            current_vwap = dsa_snapshot['vwap']
 
-                # 周线反转：V型形态 + DSA dir=1 + 收盘价<=VWAP*1.10
-                bbmacd_vals = weekly_bbmacd['bbmacd'].values
-                has_v_shape = False
-                if len(bbmacd_vals) >= 3:
-                    t_2 = bbmacd_vals[-3]
-                    t_1 = bbmacd_vals[-2]
-                    t = bbmacd_vals[-1]
-                    has_v_shape = (t_2 > t_1) and (t > t_1)
+            # 记录周线DSA观察项
+            signals['weekly_dsa_dir'] = current_dir
+            signals['weekly_dsa_vwap'] = current_vwap
+            if current_vwap is not None and current_vwap != 0:
+                signals['weekly_vwap_deviation'] = (weekly_close - current_vwap) / current_vwap
 
-                weekly_reversal = has_v_shape and (current_dir == 1)
-                if weekly_reversal and current_vwap is not None:
-                    if weekly_close > current_vwap * 1.10:
-                        weekly_reversal = False
+            # V型形态检测（唯一选股条件）
+            bbmacd_vals = weekly_bbmacd['bbmacd'].values
+            has_v_shape = False
+            if len(bbmacd_vals) >= 3:
+                t_2 = bbmacd_vals[-3]
+                t_1 = bbmacd_vals[-2]
+                t = bbmacd_vals[-1]
+                has_v_shape = (t_2 > t_1) and (t > t_1)
 
-                # 周线反转：增加成交额过滤
-                if weekly_reversal:
-                    if check_volume_filter(daily_df, days=5, min_amount=100_000_000):
-                        signals['weekly_reversal_buy'] = True
-
-                # 周线突破：上穿上轨 + DSA dir=-1 + 收盘价>=VWAP*0.85 + 成交额过滤
-                weekly_breakout = cross_over(weekly_bbmacd['bbmacd'], weekly_bbmacd['banda_supe']).iloc[-1]
-                if weekly_breakout:
-                    if current_dir != -1:
-                        weekly_breakout = False
-                    elif current_vwap is not None and weekly_close < current_vwap * 0.85:
-                        weekly_breakout = False
-                    elif not check_volume_filter(daily_df, days=5, min_amount=100_000_000):
-                        weekly_breakout = False
-
-                if weekly_breakout:
-                    signals['weekly_breakout_buy'] = True
+            if has_v_shape:
+                signals['weekly_reversal_buy'] = True
 
     return signals
 
@@ -1009,6 +980,13 @@ def ensure_table_exists(engine):
         conn.execute(text("ALTER TABLE stock_selection_results ADD COLUMN IF NOT EXISTS daily_dsa_duration INT"))
         conn.execute(text("ALTER TABLE stock_selection_results ADD COLUMN IF NOT EXISTS daily_dsa_avg_deviation FLOAT"))
         conn.execute(text("ALTER TABLE stock_selection_results ADD COLUMN IF NOT EXISTS daily_dsa_deviation_variance FLOAT"))
+        # 周线DSA观察项
+        conn.execute(text("ALTER TABLE stock_selection_results ADD COLUMN IF NOT EXISTS weekly_dsa_dir INT"))
+        conn.execute(text("ALTER TABLE stock_selection_results ADD COLUMN IF NOT EXISTS weekly_dsa_vwap FLOAT"))
+        conn.execute(text("ALTER TABLE stock_selection_results ADD COLUMN IF NOT EXISTS weekly_vwap_deviation FLOAT"))
+        # 日线DSA观察项（已计算但此前未持久化）
+        conn.execute(text("ALTER TABLE stock_selection_results ADD COLUMN IF NOT EXISTS daily_dsa_dir INT"))
+        conn.execute(text("ALTER TABLE stock_selection_results ADD COLUMN IF NOT EXISTS daily_dsa_vwap FLOAT"))
         conn.commit()
 
 
@@ -1143,6 +1121,13 @@ def save_to_database_by_weekly_date(df, fallback_date=None):
             'daily_dsa_duration': int(row['daily_dsa_duration']) if pd.notna(row.get('daily_dsa_duration')) else None,
             'daily_dsa_avg_deviation': float(row['daily_dsa_avg_deviation']) if pd.notna(row.get('daily_dsa_avg_deviation')) else None,
             'daily_dsa_deviation_variance': float(row['daily_dsa_deviation_variance']) if pd.notna(row.get('daily_dsa_deviation_variance')) else None,
+            # 周线DSA观察项
+            'weekly_dsa_dir': int(row['weekly_dsa_dir']) if pd.notna(row.get('weekly_dsa_dir')) else None,
+            'weekly_dsa_vwap': float(row['weekly_dsa_vwap']) if pd.notna(row.get('weekly_dsa_vwap')) else None,
+            'weekly_vwap_deviation': float(row['weekly_vwap_deviation']) if pd.notna(row.get('weekly_vwap_deviation')) else None,
+            # 日线DSA观察项
+            'daily_dsa_dir': int(row['daily_dsa_dir']) if pd.notna(row.get('daily_dsa_dir')) else None,
+            'daily_dsa_vwap': float(row['daily_dsa_vwap']) if pd.notna(row.get('daily_dsa_vwap')) else None,
         }
         records.append(record)
 
@@ -1176,12 +1161,12 @@ def select_high_margin_stocks(selection_date: Optional[date] = None, save_to_db:
         selection_date = date.today()
 
     print("=" * 80)
-    print("选股条件（BSM周线策略）：")
+    print("选股条件（周线V型形态策略）：")
     print(f"  选股日期: {selection_date.strftime('%Y-%m-%d')}")
     print(f"  行情数据源: {MARKET_DATA_SOURCE}")
-    print(f"  核心条件: 周线反转买点 或 周线突破买点")
+    print(f"  核心条件: 周线BBMACD V型形态")
     print(f"  过滤条件: 过去5天平均成交额 > 1亿")
-    print(f"  观察项: PAVP/BBMACD/DSA日线指标（仅作为参考，不参与选股）")
+    print(f"  观察项: DSA dir/收盘价vs VWAP偏差（周线+日线）、PAVP/BBMACD日线指标")
     print("=" * 80)
 
     with engine.connect() as conn:
@@ -1224,12 +1209,37 @@ def select_high_margin_stocks(selection_date: Optional[date] = None, save_to_db:
         print("\n" + "=" * 80)
         print("选股结果汇总：")
         print("=" * 80)
-        print(f"BSM筛选后: {len(result_df)} 只")
+        print(f"V型形态筛选后: {len(result_df)} 只")
 
         if not result_df.empty:
-            print(f"\nBSM选股统计：")
-            print(f"  周线反转买点: {result_df['weekly_reversal_buy'].sum()} 只")
-            print(f"  周线突破买点: {result_df['weekly_breakout_buy'].sum()} 只")
+            print(f"\n选股统计：")
+            print(f"  周线V型形态: {result_df['weekly_reversal_buy'].sum()} 只")
+
+            # 显示周线DSA观察项统计
+            valid_w_dir = result_df['weekly_dsa_dir'].dropna()
+            if len(valid_w_dir) > 0:
+                dir_counts = valid_w_dir.value_counts().sort_index()
+                dir_desc = ', '.join([f"dir={k}:{v}只" for k, v in dir_counts.items()])
+                print(f"\n周线DSA dir分布（观察项）：{dir_desc}")
+
+            valid_w_dev = result_df['weekly_vwap_deviation'].dropna()
+            if len(valid_w_dev) > 0:
+                print(f"周线收盘价vs VWAP偏差（观察项）：")
+                print(f"  平均值: {valid_w_dev.mean():.4%}")
+                print(f"  中位数: {valid_w_dev.median():.4%}")
+
+            # 显示日线DSA观察项统计
+            valid_d_dir = result_df['daily_dsa_dir'].dropna()
+            if len(valid_d_dir) > 0:
+                dir_counts = valid_d_dir.value_counts().sort_index()
+                dir_desc = ', '.join([f"dir={k}:{v}只" for k, v in dir_counts.items()])
+                print(f"\n日线DSA dir分布（观察项）：{dir_desc}")
+
+            valid_d_dev = result_df['daily_vwap_deviation'].dropna()
+            if len(valid_d_dev) > 0:
+                print(f"日线收盘价vs VWAP偏差（观察项）：")
+                print(f"  平均值: {valid_d_dev.mean():.4%}")
+                print(f"  中位数: {valid_d_dev.median():.4%}")
 
             # 显示POC平均日收益率统计（观察项）
             valid_ret = result_df['poc_avg_ret'].dropna()
@@ -1246,7 +1256,7 @@ def select_high_margin_stocks(selection_date: Optional[date] = None, save_to_db:
             print("\n" + "=" * 80)
             print("前20名股票：")
             print("=" * 80)
-            display_cols = ['ts_code', 'batch_no', 'weekly_reversal_buy', 'weekly_breakout_buy', 'weekly_bb_width_zscore']
+            display_cols = ['ts_code', 'batch_no', 'weekly_dsa_dir', 'weekly_vwap_deviation', 'daily_dsa_dir', 'daily_vwap_deviation', 'weekly_bb_width_zscore']
             print(result_df[display_cols].head(20).to_string(index=False))
         
         # 保存到数据库

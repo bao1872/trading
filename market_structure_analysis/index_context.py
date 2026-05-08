@@ -56,7 +56,7 @@ INDEX_EVENT_COLS = [
     "idx_vol_spike_down",
 ]
 
-VOL_SPIKE_THRESH = 2.0
+from market_structure_analysis._config import VOL_ZSCORE_SPIKE_THRESHOLD, VOL_ZSCORE_PLAT_THRESHOLD
 
 
 def _fetch_index_kline(ts_code: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
@@ -176,8 +176,8 @@ def extract_index_events(index_factors: Dict[str, pd.DataFrame]) -> pd.DataFrame
 
             if vol_z_col is not None and vol_z_col in df.columns:
                 vz = df.iloc[i].get(vol_z_col, 0.0)
-                row[prefix + "vol_spike_up"] = 1.0 if float(vz) > VOL_SPIKE_THRESH else 0.0
-                row[prefix + "vol_spike_down"] = 1.0 if float(vz) < -VOL_SPIKE_THRESH else 0.0
+                row[prefix + "vol_spike_up"] = 1.0 if float(vz) > VOL_ZSCORE_SPIKE_THRESHOLD else 0.0
+                row[prefix + "vol_spike_down"] = 1.0 if float(vz) < -VOL_ZSCORE_SPIKE_THRESHOLD else 0.0
             else:
                 row[prefix + "vol_spike_up"] = 0.0
                 row[prefix + "vol_spike_down"] = 0.0
@@ -201,7 +201,8 @@ def classify_index_state(index_events_df: pd.DataFrame) -> pd.DataFrame:
                  强多(dsa_dir_flip_up 且 dsa_above_vwap) / 多(dsa_above_vwap) /
                  中性 / 空(dsa_below_vwap) / 强空(dsa_dir_flip_down 且 dsa_below_vwap)
       *_state:   复用 v2 五档逻辑但放宽阈值（指数波动小于个股）
-      *_volume_state: 放量(vol_zscore > 0.5) / 平量 / 缩量(vol_zscore < -0.5)
+      *_volume_state: 放量(vol_spike_up==1) / 平量 / 缩量(vol_spike_down==1)
+                    阈值来自 _config.VOL_ZSCORE_SPIKE_THRESHOLD
 
     Parameters
     ----------

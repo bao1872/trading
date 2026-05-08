@@ -12,16 +12,19 @@
 当前任务列表（共 3 类任务）
 ================================================================================
 
-1. 每日数据更新与选股任务 (task_每日数据更新与选股) - [已授权]
+1. 每日数据更新与策略任务 (task_每日数据更新与选股) - [已授权]
    - 函数：daily_update_and_selection_task()
    - 触发器：Cron (每天 15:10)
    - 执行时间：交易日 15:10（收盘后，含节假日判断）
    - 交易日检查：通过 datasource.trade_calendar.is_trading_day() 判断，非交易日自动跳过
    - 执行流程：
-        1. 日线数据增量更新（每天）
-        2. 周线数据增量更新（每天）
-        3. BSM指标选股任务（每天，基于周线数据）
-        4. 自选股BSM事件检测（每天）
+        1. 日线K线增量更新（每天）
+        2. 周线K线增量更新（每天）
+        3. 日线因子入库（已停用）
+        4. 周线因子入库（已停用）
+        5. DSA策略全流程（已停用）
+        6. BSM选股 + BSM事件检测
+        7. Stop-Loss Clustering 选股
    - 配置：ENABLE_DAILY_WORKFLOW=true
    - 日志：scheduler.log 中搜索 "每日数据更新与选股"
    - 状态：✅ 已授权并启用
@@ -398,19 +401,19 @@ class TaskScheduler:
         logger.info("调度器已关闭")
 
 
-def run_subprocess(cmd: list, task_name: str, timeout: int = 3600) -> bool:
+def run_subprocess(cmd: list, task_name: str, timeout: int = 3600) -> None:
     """运行子进程任务
-    
+
     Args:
         cmd: 命令列表
         task_name: 任务名称（用于日志）
         timeout: 超时时间（秒）
-    
-    Returns:
-        bool: 是否成功
+
+    Raises:
+        RuntimeError: 子进程非零退出或超时
     """
     logger.info(f"[{task_name}] 执行命令：{' '.join(cmd)}")
-    
+
     try:
         result = subprocess.run(
             cmd,
@@ -419,26 +422,28 @@ def run_subprocess(cmd: list, task_name: str, timeout: int = 3600) -> bool:
             text=True,
             timeout=timeout,
         )
-        
-        # 记录输出
+
         if result.stdout:
             for line in result.stdout.strip().split('\n'):
                 logger.info(f"[{task_name}] {line}")
-        
+
         if result.stderr:
             for line in result.stderr.strip().split('\n'):
                 logger.warning(f"[{task_name}] {line}")
-        
-        # 检查执行结果
-        if result.returncode == 0:
-            logger.info(f"✅ [{task_name}] 执行完成")
-            return True
-        else:
-            logger.error(f"❌ [{task_name}] 执行失败，退出码：{result.returncode}")
-            return False
-    
+
+        if result.returncode != 0:
+            stderr_tail = result.stderr[-500:] if result.stderr else 'N/A'
+            raise RuntimeError(
+                f"[{task_name}] 执行失败，退出码: {result.returncode}\n"
+                f"stderr: {stderr_tail}"
+            )
+
+        logger.info(f"✅ [{task_name}] 执行完成")
+
     except subprocess.TimeoutExpired:
         logger.error(f"❌ [{task_name}] 执行超时（超过 {timeout} 秒）")
+        raise
+    except RuntimeError:
         raise
     except Exception as e:
         logger.error(f"❌ [{task_name}] 执行失败：{e}", exc_info=True)
@@ -507,122 +512,121 @@ def send_feishu_notification(title: str, content: str, is_error: bool = False):
 
 @trading_day_only
 def daily_update_and_selection_task():
-    """每日数据更新与选股任务 - 已授权（交易日15:10执行）
+    """每日数据更新与策略任务 - 已授权（交易日15:10执行）
 
-    执行流程：
-    1. 日线数据增量更新（每天）
-    2. 周线数据增量更新（每天）
-    3. 执行选股任务（每天）
+    执行流程（6 步）：
+    1. 日线K线增量更新
+    2. 周线K线增量更新
+    3. 日线因子入库 [已停用]
+    4. 周线因子入库 [已停用]
+    5. DSA策略全流程 [已停用]
+    6. BSM选股 + BSM事件
+    7. Stop-Loss Clustering 选股
     """
     today = datetime.now()
     today_str = today.strftime('%Y-%m-%d')
 
     logger.info("=" * 60)
-    logger.info(f"开始执行每日数据更新与选股任务 - {today.strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"今天是：{['周一', '周二', '周三', '周四', '周五', '周六', '周日'][today.weekday()]}")
+    logger.info(f"每日策略任务开始 - {today_str}")
     logger.info("=" * 60)
 
-    # 发送任务开始通知
     send_feishu_notification(
-        f"选股任务开始 - {today_str}",
-        f"任务开始时间：{today.strftime('%H:%M:%S')}\n今天是：{['周一', '周二', '周三', '周四', '周五', '周六', '周日'][today.weekday()]}"
+        f"每日策略任务开始 - {today_str}",
+        f"开始时间：{today.strftime('%H:%M:%S')}"
     )
 
+    factors_ok = True
+    weekly_factors_ok = True
+
     try:
-        # ========== 步骤 1/3：日线数据增量更新（每天执行） ==========
-        logger.info("【步骤 1/3】日线数据增量更新...")
-        daily_cmd = [
-            sys.executable,
-            str(PROJECT_ROOT / "app" / "build_dataset.py"),
-            "--period", "d",
-            "--update",
-        ]
+        # ===== Step 1/6：日线K线增量 =====
+        logger.info("[Step 1/6] 日线K线增量更新...")
+        run_subprocess([
+            sys.executable, str(PROJECT_ROOT / "app" / "build_dataset.py"),
+            "--period", "d", "--update",
+        ], "日线K线更新", timeout=3600)
 
+        # ===== Step 2/6：周线K线增量 =====
+        logger.info("[Step 2/6] 周线K线增量更新...")
         try:
-            run_subprocess(daily_cmd, "日线更新", timeout=3600)
+            run_subprocess([
+                sys.executable, str(PROJECT_ROOT / "app" / "build_dataset.py"),
+                "--period", "w", "--update",
+            ], "周线K线更新", timeout=3600)
         except Exception as e:
-            logger.error(f"日线更新失败，停止后续步骤：{e}")
-            send_feishu_notification(
-                f"选股任务失败 - {today_str}",
-                f"日线更新失败：{str(e)}",
-                is_error=True
-            )
-            raise
+            logger.warning(f"周线K线更新失败，继续: {e}")
+            send_feishu_notification("周线K线更新失败", str(e), is_error=True)
 
-        # ========== 步骤 2/3：周线数据增量更新（每天执行） ==========
-        logger.info("【步骤 2/3】周线数据增量更新...")
-        weekly_cmd = [
-            sys.executable,
-            str(PROJECT_ROOT / "app" / "build_dataset.py"),
-            "--period", "w",
-            "--update",
-        ]
+        # ===== Step 3/6：日线因子入库 [已停用] =====
+        logger.info("[Step 3/6] 日线因子入库 - 已停用，跳过")
+        # 因子/事件不再每日写入 DB，实验请直接引用 factor_lib
 
+        # ===== Step 4/6：周线因子入库 [已停用] =====
+        logger.info("[Step 4/6] 周线因子入库 - 已停用，跳过")
+        # 因子/事件不再每日写入 DB，实验请直接引用 factor_lib
+
+        # ===== Step 5/6：DSA策略全流程 [已停用] =====
+        logger.info("[Step 5/6] DSA策略全流程 - 已停用，跳过")
+        # DSA策略已停用，如需启用请取消注释以下代码
+        # if factors_ok and weekly_factors_ok:
+        #     logger.info("[Step 5/6] DSA策略全流程...")
+        #     try:
+        #         run_subprocess([
+        #             sys.executable, str(PROJECT_ROOT / "dsa_experiment" / "run_daily.py"),
+        #             "--date", today_str, "--skip-factors", "--notify",
+        #         ], "DSA策略全流程", timeout=7200)
+        #     except Exception as e:
+        #         logger.error(f"DSA策略全流程失败: {e}")
+        #         send_feishu_notification("DSA策略失败", str(e), is_error=True)
+        # else:
+        #     logger.warning("因子计算不完整，跳过 DSA 策略全流程")
+
+        # ===== Step 6/6：BSM选股 + BSM事件 =====
+        logger.info("[Step 6/6] BSM选股...")
         try:
-            run_subprocess(weekly_cmd, "周线更新", timeout=3600)
+            run_subprocess([
+                sys.executable, str(PROJECT_ROOT / "selection" / "selection_ana.py"),
+            ], "BSM选股", timeout=3600)
         except Exception as e:
-            logger.error(f"周线更新失败，继续执行选股任务：{e}")
-            # 周线更新失败不阻断选股任务，但发送警告
-            send_feishu_notification(
-                f"选股任务警告 - {today_str}",
-                f"周线更新失败，但继续执行选股任务：{str(e)}",
-                is_error=True
-            )
+            logger.error(f"BSM选股失败: {e}")
+            send_feishu_notification("BSM选股失败", str(e), is_error=True)
 
-        # ========== 步骤 3/4：BSM指标选股任务 ==========
-        logger.info("【步骤 3/4】BSM指标选股任务...")
-        selection_cmd = [
-            sys.executable,
-            str(PROJECT_ROOT / "selection" / "selection_ana.py"),
-        ]
-
-        try:
-            run_subprocess(selection_cmd, "BSM选股", timeout=3600)
-        except Exception as e:
-            logger.error(f"BSM选股任务失败：{e}")
-            # BSM选股失败不阻断后续任务，但发送警告
-            send_feishu_notification(
-                f"选股任务警告 - {today_str}",
-                f"BSM选股任务失败：{str(e)}",
-                is_error=True
-            )
-
-        # ========== 步骤 4/4：自选股BSM事件检测 ==========
-        logger.info("【步骤 4/4】自选股BSM事件检测...")
+        logger.info("[Step 6/6] BSM事件检测...")
         try:
             from selection.watchlist_event_detection import detect_and_save_bsm_events
             detect_and_save_bsm_events()
-            logger.info("✅ 自选股BSM事件检测完成")
+            logger.info("✅ BSM事件检测完成")
         except Exception as e:
-            logger.error(f"自选股BSM事件检测失败：{e}")
-            send_feishu_notification(
-                f"选股任务警告 - {today_str}",
-                f"自选股BSM事件检测失败：{str(e)}",
-                is_error=True
-            )
+            logger.error(f"BSM事件检测失败: {e}")
+            send_feishu_notification("BSM事件检测失败", str(e), is_error=True)
 
-        # 任务成功完成
+        # ===== Step 7/7：Stop-Loss Clustering 选股 =====
+        logger.info("[Step 7/7] Stop-Loss Clustering 选股...")
+        try:
+            run_subprocess([
+                sys.executable, str(PROJECT_ROOT / "selection" / "selection_stop.py"),
+            ], "SLC选股", timeout=3600)
+            logger.info("✅ Stop-Loss Clustering 选股完成")
+        except Exception as e:
+            logger.error(f"Stop-Loss Clustering 选股失败: {e}")
+            send_feishu_notification("SLC选股失败", str(e), is_error=True)
+
+        # 完成
         end_time = datetime.now()
-        duration = (end_time - today).total_seconds() / 60  # 分钟
-
-        logger.info("=" * 60)
-        logger.info(f"✅ 每日数据更新与选股任务全部完成 - {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info("=" * 60)
-
+        duration = (end_time - today).total_seconds() / 60
+        logger.info(f"✅ 每日策略任务完成 ({duration:.1f}分钟)")
         send_feishu_notification(
-            f"选股任务完成 - {today_str}",
-            f"任务完成时间：{end_time.strftime('%H:%M:%S')}\n执行时长：{duration:.1f}分钟\n所有步骤执行成功"
+            f"每日策略任务完成 - {today_str}",
+            f"完成时间：{end_time.strftime('%H:%M:%S')}\n"
+            f"执行时长：{duration:.1f}分钟\n"
+            f"因子状态: 1d={'✅' if factors_ok else '❌'} 1w={'✅' if weekly_factors_ok else '❌'}"
         )
 
     except Exception as e:
-        # 任务失败
-        end_time = datetime.now()
-        logger.error(f"❌ 每日数据更新与选股任务失败：{e}")
-
-        # 发送失败通知（如果前面没有发送过）
+        logger.error(f"❌ 每日策略任务失败: {e}")
         send_feishu_notification(
-            f"选股任务失败 - {today_str}",
-            f"任务失败时间：{end_time.strftime('%H:%M:%S')}\n错误信息：{str(e)}",
+            f"每日策略任务失败 - {today_str}",
+            f"错误：{str(e)}",
             is_error=True
         )
         raise

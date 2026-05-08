@@ -6,13 +6,13 @@ Purpose: 验证周线池+日线V1信号在账户级能否跑出稳定净值
 Inputs: output/daily_factor_with_scores.parquet or daily_factor_with_scores_strict.parquet, DB: stock_k_data
 Outputs: output/account_backtest/ 目录下5张表
 How to Run:
-    python dsa_experiment/account_backtest.py
-    python dsa_experiment/account_backtest.py --all-groups
-    python dsa_experiment/account_backtest.py --strict
+    python dsa_experiment/backtest/account_backtest.py
+    python dsa_experiment/backtest/account_backtest.py --all-groups
+    python dsa_experiment/backtest/account_backtest.py --strict
 Examples:
-    python dsa_experiment/account_backtest.py
-    python dsa_experiment/account_backtest.py --all-groups
-    python dsa_experiment/account_backtest.py --strict
+    python dsa_experiment/backtest/account_backtest.py
+    python dsa_experiment/backtest/account_backtest.py --all-groups
+    python dsa_experiment/backtest/account_backtest.py --strict
 Side Effects: 只读操作，输出CSV到 dsa_experiment/output/account_backtest/
 
 交易口径: T日收盘信号 → T+1开盘买 → T+N+1开盘卖

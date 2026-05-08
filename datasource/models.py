@@ -848,6 +848,40 @@ CREATE INDEX IF NOT EXISTS idx_watchlist_ts_code ON stock_watchlist(ts_code);
 TABLE_DEFINITIONS["stock_watchlist"] = STOCK_WATCHLIST_TABLE
 
 
+SENTIMENT_POSTS_TABLE = """
+CREATE TABLE IF NOT EXISTS stock_sentiment_posts (
+    id BIGSERIAL PRIMARY KEY,
+    ts_code VARCHAR(20) NOT NULL,
+    post_id VARCHAR(50) NOT NULL,
+    author VARCHAR(100),
+    post_time TIMESTAMP NOT NULL,
+    title TEXT,
+    content TEXT,
+    link VARCHAR(500),
+    source VARCHAR(20) DEFAULT 'xueqiu',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(ts_code, post_id, source)
+);
+CREATE INDEX IF NOT EXISTS idx_sentiment_ts_code ON stock_sentiment_posts(ts_code);
+CREATE INDEX IF NOT EXISTS idx_sentiment_post_time ON stock_sentiment_posts(post_time);
+CREATE INDEX IF NOT EXISTS idx_sentiment_created_at ON stock_sentiment_posts(created_at);
+"""
+TABLE_DEFINITIONS["stock_sentiment_posts"] = SENTIMENT_POSTS_TABLE
+
+
+SENTIMENT_POSTS_UPSERT_SQL = """
+INSERT INTO stock_sentiment_posts
+(ts_code, post_id, author, post_time, title, content, link, source)
+VALUES (:ts_code, :post_id, :author, :post_time, :title, :content, :link, :source)
+ON CONFLICT (ts_code, post_id, source) DO UPDATE SET
+    author = EXCLUDED.author,
+    post_time = EXCLUDED.post_time,
+    title = EXCLUDED.title,
+    content = EXCLUDED.content,
+    link = EXCLUDED.link
+"""
+
+
 AMP_FEATURES_UPSERT_SQL = """
 INSERT INTO stock_amp_features
 (ts_code, name, freq, bar_time, window_len, final_period, pearson_r, strength_pr,
@@ -872,6 +906,32 @@ ON CONFLICT (ts_code, freq, bar_time) DO UPDATE SET
     lower_ret_per_bar = EXCLUDED.lower_ret_per_bar,
     lower_total_ret = EXCLUDED.lower_total_ret
 """
+
+
+STOCK_FIVE_DIM_SCORE_TABLE = """
+CREATE TABLE IF NOT EXISTS stock_five_dim_score (
+    id BIGSERIAL PRIMARY KEY,
+    evaluation_date DATE NOT NULL,
+    ts_code VARCHAR(20) NOT NULL,
+    stock_name VARCHAR(50),
+    industry_attractiveness DECIMAL(5,2),
+    competitive_position DECIMAL(5,2),
+    business_model_quality DECIMAL(5,2),
+    growth_sustainability DECIMAL(5,2),
+    management_capital DECIMAL(5,2),
+    total_score DECIMAL(5,2),
+    hype_logic VARCHAR(50),
+    score_credibility VARCHAR(10),
+    company_tags VARCHAR(200),
+    raw_response TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(evaluation_date, ts_code)
+);
+CREATE INDEX IF NOT EXISTS idx_five_dim_eval_date ON stock_five_dim_score(evaluation_date);
+CREATE INDEX IF NOT EXISTS idx_five_dim_ts_code ON stock_five_dim_score(ts_code);
+CREATE INDEX IF NOT EXISTS idx_five_dim_total_score ON stock_five_dim_score(total_score);
+"""
+TABLE_DEFINITIONS["stock_five_dim_score"] = STOCK_FIVE_DIM_SCORE_TABLE
 
 
 def get_table_names() -> List[str]:

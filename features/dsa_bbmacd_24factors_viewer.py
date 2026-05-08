@@ -225,13 +225,9 @@ def alpha_from_apt(apt: float) -> float:
     return float(1.0 - decay)
 
 
-@dataclass
-class DSAConfig:
-    prd: int = 50
-    base_apt: float = 20.0
-    use_adapt: bool = False
-    vol_bias: float = 10.0
-    atr_len: int = 50
+# DSAConfig 已迁移到 dsa_experiment.pipeline.dsa_config
+# 此处保留重导出以兼容现有引用（04/07 后续改为直接导入 dsa_config）
+from dsa_experiment.pipeline.dsa_config import DSAConfig  # noqa: F401
 
 
 @dataclass

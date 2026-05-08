@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """DSA策略每日生产主入口
 
-Purpose: 编排 DSA 策略每日生产流程（触发点扫描 → 周线选股 → 每日决策+飞书推送）
+Purpose: 编排 DSA 策略每日生产流程（因子计算入库 → 触发点扫描 → 周线选股 → 每日决策+飞书推送）
 Inputs: 数据库行情数据 + 已训练模型
 Outputs: 交易清单CSV + 飞书推送
 How to Run:
@@ -10,14 +10,18 @@ How to Run:
     python dsa_experiment/run_daily.py --date today --notify
     python dsa_experiment/run_daily.py --date 2026-04-30 --dry-run
     python dsa_experiment/run_daily.py --date 2026-04-30 --step 3 --notify
+    python dsa_experiment/run_daily.py --date 2026-04-30 --skip-factors  # 因子已计算时跳过
 Examples:
     python dsa_experiment/run_daily.py --date 2026-04-30
     python dsa_experiment/run_daily.py --date today --notify
 Side Effects:
-    - 步骤1: 写入 stock_dsa_vreversal_results 表
-    - 步骤3: 更新 portfolio_state.json, 发送飞书消息
+    - Step 0: 写入 factor_value / event_trigger 表
+    - Step 1: 写入 stock_dsa_vreversal_results 表
+    - Step 3: 更新 portfolio_state.json, 发送飞书消息
 
 流程:
+    Step 0: 因子计算入库 (pipeline/daily_factor_update.py --freq 1d --skip-events)
+    Step 0b: [周五] 周线因子入库 (pipeline/daily_factor_update.py --freq 1w --skip-events)
     Step 1: 增量扫描当日BBMACD V型反转触发点 (01_selection_dsa.py)
     Step 2: 周线精选选股 (06_weekly_selector.py)
     Step 3: 每日决策输出+飞书推送 (07_daily_trading_sheet.py)
@@ -33,6 +37,7 @@ from datetime import datetime
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline")
+FACTOR_UPDATE_DIR = os.path.join(PROJECT_ROOT, "pipeline")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 
 REQUIRED_MODELS = [
@@ -51,14 +56,16 @@ def parse_args():
     parser.add_argument("--date", type=str, required=True,
                         help="决策日期 (YYYY-MM-DD 或 'today')")
     parser.add_argument("--step", type=str, default="all",
-                        choices=["1", "2", "3", "all"],
-                        help="执行步骤: 1=扫描触发点, 2=周线选股, 3=每日决策, all=全流程")
+                        choices=["0", "1", "2", "3", "all"],
+                        help="执行步骤: 0=因子计算, 1=扫描触发点, 2=周线选股, 3=每日决策, all=全流程")
     parser.add_argument("--dry-run", action="store_true",
                         help="试运行，不更新持仓状态")
     parser.add_argument("--notify", action="store_true",
                         help="推送飞书消息")
+    parser.add_argument("--skip-factors", action="store_true",
+                        help="跳过 Step 0（因子已在 factor_value 中）")
     parser.add_argument("--skip-scan", action="store_true",
-                        help="跳过步骤1（已有触发点数据时）")
+                        help="跳过 Step 1（已有触发点数据时）")
     return parser.parse_args()
 
 
@@ -99,8 +106,8 @@ def check_prerequisites(require_notify: bool = False):
     return True
 
 
-def run_step(script_name: str, extra_args: list[str], step_label: str) -> bool:
-    script_path = os.path.join(PIPELINE_DIR, script_name)
+def run_step_script(script_path: str, extra_args: list[str], step_label: str,
+                    cwd: str = None) -> bool:
     if not os.path.exists(script_path):
         print(f"  ❌ 脚本不存在: {script_path}")
         return False
@@ -111,11 +118,7 @@ def run_step(script_name: str, extra_args: list[str], step_label: str) -> bool:
 
     t0 = time.time()
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=PROJECT_ROOT,
-            check=False,
-        )
+        result = subprocess.run(cmd, cwd=cwd or PROJECT_ROOT, check=False)
         elapsed = time.time() - t0
         if result.returncode != 0:
             print(f"\n  ❌ {step_label} 失败 (exit={result.returncode}, 耗时{elapsed:.1f}s)")
@@ -128,12 +131,44 @@ def run_step(script_name: str, extra_args: list[str], step_label: str) -> bool:
         return False
 
 
+def step0_compute_factors(target_date: str) -> bool:
+    print(f"\n{'=' * 60}")
+    print(f"Step 0: 因子计算入库 — {target_date}")
+    print(f"{'=' * 60}")
+
+    target_dt = datetime.strptime(target_date, "%Y-%m-%d")
+    is_friday = target_dt.weekday() == 4
+
+    script_path = os.path.join(FACTOR_UPDATE_DIR, "daily_factor_update.py")
+    ok = run_step_script(
+        script_path,
+        ["--date", target_date, "--freq", "1d", "--skip-events"],
+        "Step 0: 日线因子入库",
+        cwd=PROJECT_ROOT,
+    )
+    if not ok:
+        return False
+
+    if is_friday:
+        print(f"\n  [周五] 额外执行周线因子更新...")
+        ok = run_step_script(
+            script_path,
+            ["--date", target_date, "--freq", "1w", "--skip-events"],
+            "Step 0b: 周线因子入库",
+            cwd=PROJECT_ROOT,
+        )
+        if not ok:
+            return False
+
+    return True
+
+
 def step1_scan_triggers(target_date: str) -> bool:
     print(f"\n{'=' * 60}")
     print(f"Step 1: 扫描 {target_date} BBMACD V型反转触发点")
     print(f"{'=' * 60}")
-    return run_step(
-        "01_selection_dsa.py",
+    return run_step_script(
+        os.path.join(PIPELINE_DIR, "01_selection_dsa.py"),
         ["--date", target_date],
         "Step 1: 触发点扫描",
     )
@@ -143,8 +178,8 @@ def step2_weekly_select(target_date: str) -> bool:
     print(f"\n{'=' * 60}")
     print(f"Step 2: 周线精选选股 — {target_date}")
     print(f"{'=' * 60}")
-    return run_step(
-        "06_weekly_selector.py",
+    return run_step_script(
+        os.path.join(PIPELINE_DIR, "06_weekly_selector.py"),
         ["--date", target_date],
         "Step 2: 周线选股",
     )
@@ -159,8 +194,8 @@ def step3_daily_decision(target_date: str, dry_run: bool, notify: bool) -> bool:
         args.append("--dry-run")
     if notify:
         args.append("--notify")
-    return run_step(
-        "07_daily_trading_sheet.py",
+    return run_step_script(
+        os.path.join(PIPELINE_DIR, "07_daily_trading_sheet.py"),
         args,
         "Step 3: 每日决策",
     )
@@ -180,6 +215,7 @@ def main():
     print(f"  步骤: {args.step}")
     print(f"  试运行: {args.dry_run}")
     print(f"  飞书推送: {args.notify}")
+    print(f"  跳过因子: {args.skip_factors}")
     print(f"  跳过扫描: {args.skip_scan}")
 
     if not check_prerequisites(require_notify=args.notify):
@@ -188,6 +224,8 @@ def main():
 
     steps_to_run = []
     if args.step == "all":
+        if not args.skip_factors:
+            steps_to_run.append("0")
         if not args.skip_scan:
             steps_to_run.append("1")
         steps_to_run.extend(["2", "3"])
@@ -198,7 +236,9 @@ def main():
     failed = False
 
     for step in steps_to_run:
-        if step == "1":
+        if step == "0":
+            ok = step0_compute_factors(target_date)
+        elif step == "1":
             ok = step1_scan_triggers(target_date)
         elif step == "2":
             ok = step2_weekly_select(target_date)

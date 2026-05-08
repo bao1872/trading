@@ -50,6 +50,7 @@ BULL_EVT_COLS = [
     "evt_up_move_with_vol_spike",
     "evt_cross_above_value_area_high",
     "evt_break_sell_stop_cluster",
+    "evt_vreversal",
 ]
 
 BEAR_EVT_COLS = [
@@ -69,7 +70,7 @@ SCORE_NAMES = [
     "stop_flow_score",
 ]
 
-ZSCORE_WINDOW = 20
+from market_structure_analysis._config import ZSCORE_WINDOW, MIN_INDUSTRY_SAMPLE
 
 CAP_TIERS: Dict[str, Tuple[float, float]] = {
     "mega_cap": (200e9, float("inf")),
@@ -91,7 +92,6 @@ GENERIC_CONCEPTS = {
     "央企国企改革", "地方国企改革", "预盈预增", "预亏预减",
 }
 
-MIN_INDUSTRY_SAMPLE = 20
 
 
 def _assign_cap_tier(total_market_cap: pd.Series) -> pd.Series:

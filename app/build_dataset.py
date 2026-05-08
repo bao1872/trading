@@ -45,7 +45,7 @@ import argparse
 import os
 import sys
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
 
 import pandas as pd
 from tqdm import tqdm
@@ -101,7 +101,9 @@ def _code_to_symbol(code: str) -> str:
     return f"{code}.SZ"
 
 
-def save_to_database(session, data_cache: Dict[str, Dict], freq: str, delete_before_week_start: bool = False):
+def save_to_database(session, data_cache: Dict[str, Dict], freq: str,
+                     delete_before_week_start: bool = False,
+                     confirmed_codes: Optional[set] = None):
     """
     将数据缓存保存到数据库
 
@@ -110,6 +112,7 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str, delete_bef
         data_cache: 数据字典 {code: {'name': xxx, 'data': DataFrame}}
         freq: 周期 ('d', 'w', '60m')
         delete_before_week_start: 是否删除本周的数据（本周一到下周一之前，仅对周线有效）
+        confirmed_codes: 确认有数据的 code 集合（None 表示遍历 data_cache 内部判断）
     """
     from datetime import timedelta
     from sqlalchemy import text
@@ -117,25 +120,33 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str, delete_bef
     db_freq_map = {'d': 'd', 'w': 'w', '60': '60m'}
     db_freq = db_freq_map.get(freq, freq)
 
-    # 周线更新：先删除本周的数据（用于重新插入本周最新数据）
-    if delete_before_week_start and db_freq == 'w':
+    # 先收集有数据的 code，避免 DELETE 后 INSERT 失败导致数据丢失
+    codes_with_data = confirmed_codes
+    if codes_with_data is None:
+        codes_with_data = set()
+        for code, stock_data in data_cache.items():
+            df = stock_data.get("data")
+            if df is not None and not df.empty:
+                codes_with_data.add(code)
+
+    # 周线更新：只对确认有数据的股票删除本周数据
+    if delete_before_week_start and db_freq == 'w' and codes_with_data:
         today = pd.Timestamp.now().normalize()
-        week_start = today - timedelta(days=today.weekday())  # 本周一
-        week_end = week_start + timedelta(days=7)  # 下周一
+        week_start = today - timedelta(days=today.weekday())
+        week_end = week_start + timedelta(days=7)
         week_start_str = week_start.strftime("%Y-%m-%d")
         week_end_str = week_end.strftime("%Y-%m-%d")
 
-        for code in data_cache.keys():
+        for code in codes_with_data:
             ts_code = _code_to_symbol(code)
             try:
-                # 只删除本周的数据（本周一到下周一之前）
                 delete_sql = text("""
                     DELETE FROM stock_k_data 
                     WHERE ts_code = :ts_code AND freq = 'w' 
                     AND bar_time >= :week_start AND bar_time < :week_end
                 """)
                 result = session.execute(delete_sql, {
-                    "ts_code": ts_code, 
+                    "ts_code": ts_code,
                     "week_start": week_start_str,
                     "week_end": week_end_str
                 })
@@ -148,6 +159,9 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str, delete_bef
 
     all_dfs = []
     for code, stock_data in tqdm(data_cache.items(), desc=f"整理{freq}"):
+        if code not in codes_with_data:
+            continue
+
         df = stock_data.get("data")
         if df is None or df.empty:
             continue
@@ -167,7 +181,6 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str, delete_bef
         df_for_db = df_for_db[["ts_code", "freq", "bar_time", "open", "high", "low", "close", "volume"]]
         df_for_db["bar_time"] = pd.to_datetime(df_for_db["bar_time"])
 
-        # 日线和周线只保存日期（不带时间）
         if db_freq in ('d', 'w'):
             df_for_db["bar_time"] = df_for_db["bar_time"].dt.strftime("%Y-%m-%d")
         else:
@@ -267,11 +280,13 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int, force:
     增量更新数据集：拉取从数据库最新日期到今天的所有缺失数据
 
     日线更新逻辑：
+    - 批量查询所有股票的最新 bar_time
     - 获取最近30根日线数据
     - 只保留比数据库最新的数据
     - 使用 upsert 保存
 
     周线更新逻辑（每天可运行）：
+    - 批量查询所有股票的最新 bar_time
     - 获取最近20根周线数据
     - 只保留本周开始日期（周一）及之后的数据
     - 先删除该股票本周的数据（本周一到下周一之前）
@@ -286,13 +301,27 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int, force:
     from datasource.database import query_df
     from sqlalchemy import text
     import pandas as pd
+    from datetime import timedelta
 
     db_freq_map = {'d': 'd', 'w': 'w', '60': '60m'}
     db_freq = db_freq_map.get(bar_type, bar_type)
+    freq_label = "日线" if bar_type == "d" else "周线"
 
     print(f"\n{'='*70}")
     print(f"🔄 增量更新 {bar_type} 数据")
     print(f"{'='*70}\n")
+
+    # 批量查询所有股票的最新 bar_time（一次查询替代 N 次）
+    with get_session() as session:
+        results = session.execute(
+            text("SELECT ts_code, MAX(bar_time) as max_time FROM stock_k_data WHERE freq = :freq GROUP BY ts_code"),
+            {"freq": db_freq}
+        ).fetchall()
+    max_time_map = {}
+    for r in results:
+        if r[1]:
+            code = r[0].split(".")[0]
+            max_time_map[code] = pd.to_datetime(r[1]).normalize()
 
     api = connect_pytdx()
     data_cache: Dict[str, Dict] = {}
@@ -301,38 +330,24 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int, force:
         for _, row in tqdm(cache_df.iterrows(), total=len(cache_df), desc=f"更新{bar_type}"):
             symbol = row["ts_code"].split(".")[0]
             name = row["name"]
+            stock_max_time = max_time_map.get(symbol)
 
             try:
-                # 查询该股票最后的数据日期
-                with get_session() as session:
-                    result = session.execute(
-                        text("SELECT MAX(bar_time) as max_time FROM stock_k_data WHERE ts_code = :ts_code AND freq = :freq"),
-                        {"ts_code": row["ts_code"], "freq": db_freq}
-                    ).fetchone()
-                    stock_max_time = result[0] if result and result[0] else None
-                    if stock_max_time:
-                        stock_max_time = pd.to_datetime(stock_max_time).tz_localize(None).normalize()
-
                 if bar_type == "w":
-                    # 周线：获取最近20根数据，保留本周及之后的数据
                     df = get_kline_data(api, symbol, "w", 20)
                     if df.empty:
                         continue
                     df = df.set_index("datetime")
 
-                    # 计算本周开始日期（周一）
-                    from datetime import timedelta
                     today = pd.Timestamp.now().normalize()
-                    week_start = today - timedelta(days=today.weekday())  # 本周一
+                    week_start = today - timedelta(days=today.weekday())
 
-                    # 只保留本周及之后的数据（删除本周之前的数据）
                     df = df[df.index >= week_start]
 
                     if df.empty:
                         continue
 
                 elif bar_type == "d":
-                    # 日线：获取最近30根
                     df = get_kline_data(api, symbol, "d", 30)
                     if df.empty:
                         continue
@@ -355,17 +370,25 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int, force:
     finally:
         api.disconnect()
 
+    total_stocks = len(cache_df)
+    success_count = len(data_cache)
+    success_rate = success_count / max(total_stocks, 1)
+
     if data_cache:
         total_new_bars = sum(len(d["data"]) for d in data_cache.values())
-        print(f"\n获取到 {len(data_cache)} 只股票的新数据，共 {total_new_bars} 条K线")
+        print(f"\n获取到 {success_count} 只股票的新数据，共 {total_new_bars} 条K线")
         print(f"正在保存到数据库...")
         with get_session() as session:
-            # 周线更新时，先删除本周之前的数据
             delete_before_week = (bar_type == "w")
             save_to_database(session, data_cache, bar_type, delete_before_week_start=delete_before_week)
         print(f"\n✅ 更新完成")
     else:
         print(f"\n⚠️  无新数据需要更新")
+
+    if success_rate < 0.8:
+        print(f"\n⚠️  WARNING: {freq_label}更新成功率过低: {success_rate:.1%} ({success_count}/{total_stocks})")
+    else:
+        print(f"{freq_label}更新成功率: {success_rate:.1%} ({success_count}/{total_stocks})")
 
 
 def main():

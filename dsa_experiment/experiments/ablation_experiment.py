@@ -5,6 +5,7 @@
 Purpose: 4组因子删减实验，对比基线/量能/协同/全量的模型效果
 Inputs: output/daily_factor_table.parquet
 Outputs: output/ablation_results.csv, 控制台报告
+# Usage: python -m dsa_experiment.experiments.ablation_experiment
 How to Run:
     python dsa_experiment/ablation_experiment.py
     python dsa_experiment/ablation_experiment.py --sample-limit 50000

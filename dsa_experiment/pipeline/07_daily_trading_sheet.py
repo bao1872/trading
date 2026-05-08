@@ -48,13 +48,7 @@ import lightgbm as lgb
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from features.dsa_bbmacd_24factors_viewer import (
-    compute_dsa,
-    compute_bbmacd,
-    compute_24_factors,
-    DSAConfig,
-)
-from features.volume_zscore_plotly import volume_zscore
+from dsa_experiment.pipeline.dsa_config import DSAConfig
 
 try:
     from config import DATABASE_URL
@@ -63,9 +57,14 @@ except ImportError:
 
 warnings.filterwarnings("ignore")
 
+engine = create_engine(DATABASE_URL)
+
 EXPERIMENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(EXPERIMENT_DIR, "output")
 PORTFOLIO_STATE_PATH = os.path.join(OUTPUT_DIR, "portfolio_state.json")
+
+from dsa_experiment.pipeline.factor_columns import WEEKLY_FEATURE_COLS, DAILY_SELECT_FACTORS
+from dsa_experiment.pipeline.derived_features import WEEKLY_DERIVED, DAILY_DERIVED, build_weekly_features, build_daily_features
 
 DSA_CFG = DSAConfig(prd=50, base_apt=20.0, use_adapt=False, vol_bias=10.0, atr_len=50)
 
@@ -74,50 +73,7 @@ HOLD_DAYS = 5
 STOP_LOSS_PCT = -0.05
 POSITION_WEIGHTS = {"A": 1.5, "B": 1.0, "C": 0.5}
 
-WEEKLY_FEATURE_COLS = [
-    "dsa_dir", "prev_pivot_code", "last_confirmed_high", "last_confirmed_low",
-    "dsa_pivot_pos_01", "ret_to_last_high_pct", "ret_to_last_low_pct",
-    "price_vs_dsa_vwap_pct", "current_stage_bars", "prev_stage_bars",
-    "bars_since_last_high", "bars_since_last_low", "prev_stage_amp_pct",
-    "current_stage_ret_pct", "current_stage_amp_pct",
-    "current_pullback_from_stage_extreme_pct", "bbmacd", "bbmacd_minus_avg",
-    "bbmacd_state", "bbmacd_band_pos_01", "bbmacd_bandwidth_zscore",
-    "bbmacd_cross_upper", "bbmacd_cross_lower", "trend_align_momo",
-    "vol_zscore_5", "vol_zscore_10", "vol_zscore_20", "vol_ratio_10",
-    "vol_stage_cv", "vol_prev_stage_cv", "vol_cv_ratio",
-    "price_vol_coord", "momo_vol_coord", "low_pos_break_coord", "coord_consistency",
-    "coord_stage_current", "coord_stage_prev", "coord_stage_ratio",
-]
-
-WEEKLY_DERIVED = {
-    "high_low_range": lambda df: df["last_confirmed_high"] - df["last_confirmed_low"],
-    "high_low_range_pct": lambda df: (df["last_confirmed_high"] - df["last_confirmed_low"]) / df["last_confirmed_low"].replace(0, np.nan),
-    "pivot_pos_x_trend": lambda df: df["dsa_pivot_pos_01"] * df["trend_align_momo"],
-    "stage_bars_ratio": lambda df: df["current_stage_bars"] / df["prev_stage_bars"].replace(0, np.nan),
-    "amp_x_pullback": lambda df: df["current_stage_amp_pct"] * df["current_pullback_from_stage_extreme_pct"],
-    "bbmacd_band_width": lambda df: df["bbmacd_band_pos_01"] * df["bbmacd_bandwidth_zscore"],
-}
-
-DAILY_SELECT_FACTORS = [
-    "dsa_dir", "price_vs_dsa_vwap_pct", "bbmacd_sign", "bbmacd_slope_3",
-    "dsa_pivot_pos_01", "ret_to_last_low_pct", "bars_since_last_high",
-    "bbmacd", "bbmacd_minus_avg", "bbmacd_bandwidth_zscore",
-    "vol_zscore_20", "vol_stage_cv", "vol_zscore_10", "vol_ratio_10",
-    "days_since_vol_spike", "current_stage_amp_pct", "prev_stage_amp_pct",
-    "current_stage_ret_pct", "prev_pivot_code", "trend_align_momo",
-    "price_vol_coord", "momo_vol_coord", "low_pos_break_coord",
-    "coord_consistency", "coord_stage_current", "coord_stage_prev", "coord_stage_ratio",
-]
 DAILY_EXTRA = ["weekly_return_score", "weekly_risk_score", "day_offset"]
-DAILY_DERIVED = {
-    "pivot_pos_x_trend": lambda df: df["dsa_pivot_pos_01"] * df["dsa_dir"],
-    "amp_x_pullback": lambda df: df["current_stage_amp_pct"] * df.get("current_pullback_from_stage_extreme_pct", 0),
-    "vol_x_stage_amp": lambda df: df["vol_zscore_20"] * df["current_stage_amp_pct"],
-}
-
-
-def get_engine():
-    return create_engine(DATABASE_URL)
 
 
 def load_thresholds():
@@ -143,16 +99,6 @@ def save_portfolio_state(state):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(PORTFOLIO_STATE_PATH, "w") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
-
-
-def build_weekly_features(df):
-    df = df.copy()
-    for name, func in WEEKLY_DERIVED.items():
-        try:
-            df[name] = func(df)
-        except Exception:
-            df[name] = 0
-    return df
 
 
 def get_weekly_feature_cols(df):
@@ -187,147 +133,27 @@ def apply_risk_veto(df, veto_pct=0.20):
 def fetch_stock_names(ts_codes):
     if not ts_codes:
         return {}
-    engine = get_engine()
     all_codes = []
     for code in ts_codes:
         if code.startswith(("6", "5")):
             all_codes.append(f"{code}.SH")
         else:
             all_codes.append(f"{code}.SZ")
-    placeholders = ", ".join([f"'{c}'" for c in all_codes])
     try:
-        sql = text(f"SELECT ts_code, name, industry_l2, industry_l3 FROM stock_pools WHERE ts_code IN ({placeholders})")
+        sql = text("SELECT ts_code, name, industry_l2, industry_l3 FROM stock_pools WHERE ts_code = ANY(:codes)")
         with engine.connect() as conn:
-            result = conn.execute(sql)
+            result = conn.execute(sql, {"codes": all_codes})
             return {row[0].split(".")[0]: {"name": row[1], "industry_l2": row[2], "industry_l3": row[3]} for row in result}
     except Exception:
         return {}
 
 
-def compute_daily_factors_for_stock(ts_code, daily_df, weekly_return_score, weekly_risk_score):
-    if len(daily_df) < 60:
-        return None
-    df = daily_df.copy()
-    df = df.sort_values("bar_time").reset_index(drop=True)
-    try:
-        dsa_df, _, _ = compute_dsa(df, DSA_CFG)
-        bbmacd_df = compute_bbmacd(df)
-        merged = pd.concat([df, dsa_df, bbmacd_df], axis=1)
-        factors_df = compute_24_factors(merged)
-        for col in factors_df.columns:
-            merged[col] = factors_df[col]
-    except Exception:
-        return None
-
-    if "volume" in merged.columns and merged["volume"].notna().sum() > 20:
-        vol = merged["volume"].fillna(0)
-        for win in [5, 10, 20]:
-            z, _, _ = volume_zscore(vol, win)
-            merged[f"vol_zscore_{win}"] = z
-        vol_mean = vol.rolling(10, min_periods=5).mean()
-        vol_mean_prev = vol.rolling(10, min_periods=5).mean().shift(5)
-        merged["vol_ratio_10"] = np.where(vol_mean_prev > 0, vol_mean / vol_mean_prev, np.nan)
-        if "dsa_dir" in merged.columns:
-            dsa_dir = merged["dsa_dir"].ffill()
-            if isinstance(dsa_dir, pd.DataFrame):
-                dsa_dir = dsa_dir.iloc[:, 0]
-            vol_s = merged["volume"].fillna(0)
-            if isinstance(vol_s, pd.DataFrame):
-                vol_s = vol_s.iloc[:, 0]
-            stage_changes = dsa_dir.diff().fillna(0) != 0
-            stage_ids = stage_changes.cumsum()
-            vol_cv_df = pd.DataFrame({"vol": vol_s.values, "stage": stage_ids.values})
-            vol_cv = vol_cv_df.groupby("stage")["vol"].agg(["mean", "std"])
-            vol_cv["cv"] = np.where(vol_cv["mean"] > 0, vol_cv["std"] / vol_cv["mean"], np.nan)
-            stage_cv_map = vol_cv["cv"].to_dict()
-            merged["vol_stage_cv"] = stage_ids.map(stage_cv_map)
-            if len(vol_cv) >= 2:
-                prev_stage_cv = vol_cv["cv"].shift(1)
-                prev_cv_map = prev_stage_cv.to_dict()
-                merged["vol_prev_stage_cv"] = stage_ids.map(prev_cv_map)
-                merged["vol_cv_ratio"] = np.where(
-                    merged["vol_prev_stage_cv"] > 0,
-                    merged["vol_stage_cv"] / merged["vol_prev_stage_cv"],
-                    np.nan,
-                )
-            if "high" in merged.columns and "low" in merged.columns:
-                vol_spike = vol_s > vol_s.rolling(20, min_periods=10).mean() * 2
-                days_since = vol_spike[::-1].cumsum()[::-1]
-                days_since = days_since.where(~vol_spike, 0)
-                merged["days_since_vol_spike"] = days_since
-
-    if "bbmacd" in merged.columns and "bbmacd" in bbmacd_df.columns:
-        merged["bbmacd_sign"] = np.sign(merged["bbmacd"])
-        if len(merged) >= 4:
-            merged["bbmacd_slope_3"] = merged["bbmacd"].diff(3) / 3
-
-    if "dsa_dir" in merged.columns:
-        dsa_dir = merged["dsa_dir"].ffill()
-        if isinstance(dsa_dir, pd.DataFrame):
-            dsa_dir = dsa_dir.iloc[:, 0]
-        changes = dsa_dir.diff().fillna(0) != 0
-        age = np.zeros(len(merged))
-        changes_vals = changes.values
-        for i in range(1, len(merged)):
-            age[i] = 0 if changes_vals[i] else age[i - 1] + 1
-        merged["dsa_dir_age"] = age
-
-    if all(c in merged.columns for c in ["price_vs_dsa_vwap_pct", "vol_zscore_10"]):
-        p_z = (merged["price_vs_dsa_vwap_pct"] - merged["price_vs_dsa_vwap_pct"].rolling(20, min_periods=5).mean()) / merged["price_vs_dsa_vwap_pct"].rolling(20, min_periods=5).std().replace(0, np.nan)
-        v_z = merged["vol_zscore_10"]
-        m_z = (merged["bbmacd_minus_avg"] - merged["bbmacd_minus_avg"].rolling(20, min_periods=5).mean()) / merged["bbmacd_minus_avg"].rolling(20, min_periods=5).std().replace(0, np.nan)
-        merged["price_vol_coord"] = p_z * v_z
-        merged["momo_vol_coord"] = m_z * v_z
-
-    if all(c in merged.columns for c in ["dsa_pivot_pos_01", "bbmacd_minus_avg", "vol_zscore_10"]):
-        merged["low_pos_break_coord"] = (1 - merged["dsa_pivot_pos_01"]) * merged.get("momo_vol_coord", np.nan)
-
-    if all(c in merged.columns for c in ["price_vs_dsa_vwap_pct", "bbmacd_minus_avg", "vol_zscore_10"]):
-        p_z2 = (merged["price_vs_dsa_vwap_pct"] - merged["price_vs_dsa_vwap_pct"].rolling(20, min_periods=5).mean()) / merged["price_vs_dsa_vwap_pct"].rolling(20, min_periods=5).std().replace(0, np.nan)
-        m_z2 = (merged["bbmacd_minus_avg"] - merged["bbmacd_minus_avg"].rolling(20, min_periods=5).mean()) / merged["bbmacd_minus_avg"].rolling(20, min_periods=5).std().replace(0, np.nan)
-        v_z2 = merged["vol_zscore_10"]
-        three_z = pd.DataFrame({"p": p_z2, "m": m_z2, "v": v_z2})
-        merged["coord_consistency"] = three_z.mean(axis=1) - three_z.std(axis=1)
-
-    if all(c in merged.columns for c in ["dsa_dir", "price_vs_dsa_vwap_pct", "vol_zscore_10"]):
-        dsa_dir = merged["dsa_dir"].ffill()
-        if isinstance(dsa_dir, pd.DataFrame):
-            dsa_dir = dsa_dir.iloc[:, 0]
-        stage_changes = dsa_dir.diff().fillna(0) != 0
-        stage_ids = stage_changes.cumsum()
-        pvc = merged.get("price_vol_coord", pd.Series(dtype=float))
-        if pvc.notna().sum() > 0:
-            coord_df = pd.DataFrame({"pvc": pvc.values, "stage": stage_ids.values})
-            stage_coord = coord_df.groupby("stage")["pvc"].mean()
-            coord_map = stage_coord.to_dict()
-            merged["coord_stage_current"] = stage_ids.map(coord_map)
-            prev_coord = stage_ids.map(
-                lambda x: coord_map.get(x - 1, np.nan) if x > 0 else np.nan
-            )
-            merged["coord_stage_prev"] = prev_coord
-            merged["coord_stage_ratio"] = np.where(
-                merged["coord_stage_prev"].notna() & (merged["coord_stage_prev"].abs() > 1e-8),
-                merged["coord_stage_current"] / merged["coord_stage_prev"],
-                np.nan,
-            )
-
-    last_row = merged.iloc[-1].to_dict()
-    last_row["weekly_return_score"] = weekly_return_score
-    last_row["weekly_risk_score"] = weekly_risk_score
-    last_row["day_offset"] = 0
-    last_row["ts_code"] = ts_code
-    last_row["bar_time"] = df.iloc[-1]["bar_time"]
-    last_row["close"] = df.iloc[-1]["close"]
-    last_row["open"] = df.iloc[-1]["open"]
-    last_row["high"] = df.iloc[-1]["high"]
-    last_row["low"] = df.iloc[-1]["low"]
-    last_row["volume"] = df.iloc[-1].get("volume", np.nan)
-    return last_row
-
-
 def build_daily_features_batch(watch_pool_ab, target_date):
-    engine = get_engine()
+    """从 factor_value 读取日线因子 + K线最后一行为每日特征"""
     codes = watch_pool_ab["ts_code"].unique().tolist()
+    if not codes:
+        return pd.DataFrame()
+
     all_codes_db = []
     for code in codes:
         if code.startswith(("6", "5")):
@@ -335,44 +161,72 @@ def build_daily_features_batch(watch_pool_ab, target_date):
         else:
             all_codes_db.append(f"{code}.SZ")
 
-    end_date = target_date.strftime("%Y-%m-%d")
-    start_date = (target_date - timedelta(days=250)).strftime("%Y-%m-%d")
+    end_date_str = target_date.strftime("%Y-%m-%d")
 
-    sql = text("""
-        SELECT ts_code, bar_time, open, high, low, close, volume
-        FROM stock_k_data
-        WHERE freq = 'd' AND bar_time >= :start AND bar_time <= :end
-        ORDER BY ts_code, bar_time
+    factor_sql = text("""
+        SELECT ts_code, factor_name, factor_value
+        FROM factor_value
+        WHERE ts_code = ANY(:codes) AND freq = '1d' AND as_of_date = :as_of
     """)
     with engine.connect() as conn:
-        daily_all = pd.read_sql(sql, conn, params={"start": start_date, "end": end_date})
-    daily_all["raw_code"] = daily_all["ts_code"].str[:6]
-    daily_all["bar_time"] = pd.to_datetime(daily_all["bar_time"])
+        factor_long = pd.read_sql(factor_sql, conn,
+                                  params={"codes": all_codes_db, "as_of": end_date_str})
+
+    if factor_long.empty:
+        return pd.DataFrame()
+
+    factors_wide = factor_long.pivot(index="ts_code", columns="factor_name",
+                                     values="factor_value").reset_index()
+    factors_wide["raw_code"] = factors_wide["ts_code"].str[:6]
+    factors_wide = factors_wide.set_index("raw_code", drop=False)
+
+    k_sql = text("""
+        SELECT ts_code, bar_time, open, high, low, close, volume
+        FROM stock_k_data
+        WHERE ts_code = ANY(:codes) AND freq = 'd' AND bar_time = :bar_time
+    """)
+    with engine.connect() as conn:
+        last_klines = pd.read_sql(k_sql, conn,
+                                  params={"codes": all_codes_db, "bar_time": end_date_str})
+    if not last_klines.empty:
+        last_klines["raw_code"] = last_klines["ts_code"].str[:6]
+        last_klines = last_klines.set_index("raw_code")
 
     results = []
-    code_map = dict(zip(watch_pool_ab["ts_code"], zip(watch_pool_ab["weekly_opportunity_score"], watch_pool_ab["weekly_risk_score"])))
+    code_map = dict(zip(
+        watch_pool_ab["ts_code"],
+        zip(watch_pool_ab["weekly_opportunity_score"], watch_pool_ab["weekly_risk_score"]),
+    ))
 
-    for raw_code, grp in daily_all.groupby("raw_code"):
-        if raw_code not in code_map:
+    for raw_code in codes:
+        if raw_code not in code_map or raw_code not in factors_wide.index:
             continue
         w_opp, w_risk = code_map[raw_code]
-        row = compute_daily_factors_for_stock(raw_code, grp, w_opp, w_risk)
-        if row is not None:
-            results.append(row)
+        fac_row = factors_wide.loc[raw_code].to_dict()
+        fac_row["ts_code"] = raw_code
+        fac_row["weekly_return_score"] = w_opp
+        fac_row["weekly_risk_score"] = w_risk
+        fac_row["day_offset"] = 0
+        if raw_code in last_klines.index:
+            krow = last_klines.loc[raw_code]
+            fac_row["bar_time"] = krow["bar_time"]
+            fac_row["close"] = krow["close"]
+            fac_row["open"] = krow["open"]
+            fac_row["high"] = krow["high"]
+            fac_row["low"] = krow["low"]
+            fac_row["volume"] = krow["volume"]
+        else:
+            fac_row["bar_time"] = np.nan
+            fac_row["close"] = np.nan
+            fac_row["open"] = np.nan
+            fac_row["high"] = np.nan
+            fac_row["low"] = np.nan
+            fac_row["volume"] = np.nan
+        results.append(fac_row)
 
     if not results:
         return pd.DataFrame()
     return pd.DataFrame(results)
-
-
-def build_daily_derived_features(df):
-    df = df.copy()
-    for name, func in DAILY_DERIVED.items():
-        try:
-            df[name] = func(df)
-        except Exception:
-            df[name] = 0
-    return df
 
 
 def get_daily_feature_cols(df):
@@ -383,14 +237,34 @@ def get_daily_feature_cols(df):
 # ============================================================
 # 模块1：周线观察池总表
 # ============================================================
+WATCH_POOL_LOOKBACK_DAYS = 14  # 无当日触发点时，回溯最近N天内的触发点
+
+
 def generate_watch_pool(target_date):
-    engine = get_engine()
+    # 优先查当天触发点
     sql = text("SELECT * FROM stock_dsa_vreversal_results WHERE selection_date = :sel_date")
     with engine.connect() as conn:
         triggers = pd.read_sql(sql, conn, params={"sel_date": target_date.strftime("%Y-%m-%d")})
 
     if triggers.empty:
-        return pd.DataFrame()
+        # 当天无触发点，回溯最近 N 天内的触发点
+        lookback = (target_date - timedelta(days=WATCH_POOL_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        today_str = target_date.strftime("%Y-%m-%d")
+        sql_lb = text("""
+            SELECT * FROM stock_dsa_vreversal_results
+            WHERE selection_date >= :lookback AND selection_date < :today
+            ORDER BY selection_date DESC
+        """)
+        with engine.connect() as conn:
+            triggers = pd.read_sql(sql_lb, conn, params={"lookback": lookback, "today": today_str})
+
+        if triggers.empty:
+            return pd.DataFrame()
+
+        # 同一股票保留最近日期的触发记录（去重）
+        triggers = triggers.sort_values("selection_date", ascending=False)
+        triggers = triggers.drop_duplicates(subset=["ts_code"], keep="first")
+        print(f"  [回溯] 使用近{WATCH_POOL_LOOKBACK_DAYS}天触发点: {len(triggers)} 只")
 
     triggers = build_weekly_features(triggers)
     feature_cols = get_weekly_feature_cols(triggers)
@@ -410,7 +284,14 @@ def generate_watch_pool(target_date):
     triggers["industry_l2"] = triggers["ts_code"].map(lambda c: names_map.get(c, {}).get("industry_l2", ""))
     triggers["industry_l3"] = triggers["ts_code"].map(lambda c: names_map.get(c, {}).get("industry_l3", ""))
 
-    triggers["trigger_weeks_ago"] = 0
+    # trigger_weeks_ago: 距离选股日的周数（0=当天触发，>0为历史触发点）
+    if "selection_date" in triggers.columns:
+        triggers["trigger_weeks_ago"] = triggers["selection_date"].apply(
+            lambda d: (target_date - datetime.strptime(str(d)[:10], "%Y-%m-%d").date()).days // 7
+            if pd.notna(d) else 0
+        )
+    else:
+        triggers["trigger_weeks_ago"] = 0
 
     output_cols = [
         "ts_code", "stock_name", "industry_l2", "industry_l3",
@@ -436,7 +317,7 @@ def generate_daily_candidates(watch_pool, target_date, thresholds):
     if daily_factors.empty:
         return pd.DataFrame()
 
-    daily_factors = build_daily_derived_features(daily_factors)
+    daily_factors = build_daily_features(daily_factors)
     feature_cols = get_daily_feature_cols(daily_factors)
 
     daily_return_model = lgb.Booster(model_file=os.path.join(OUTPUT_DIR, "daily_return_model", "model.txt"))
@@ -487,6 +368,42 @@ def generate_daily_candidates(watch_pool, target_date, thresholds):
 def generate_trading_orders(daily_candidates, target_date, portfolio):
     orders = []
 
+    # 即使 daily_candidates 为空，有持仓也需检查止损/到期
+    if not portfolio:
+        return pd.DataFrame()
+
+    # 获取持仓股票的当前价格（优先从 daily_candidates 取，否则从K线取）
+    price_map = {}
+    for ts_code in portfolio:
+        if not daily_candidates.empty and ts_code in daily_candidates["ts_code"].values:
+            row = daily_candidates[daily_candidates["ts_code"] == ts_code].iloc[0]
+            price_map[ts_code] = row.get("close", np.nan)
+
+    missing_codes = [c for c in portfolio if c not in price_map or np.isnan(price_map.get(c, np.nan))]
+    if missing_codes:
+        all_codes_db = []
+        for code in missing_codes:
+            if code.startswith(("6", "5")):
+                all_codes_db.append(f"{code}.SH")
+            else:
+                all_codes_db.append(f"{code}.SZ")
+        try:
+            k_sql = text("""
+                SELECT ts_code, close FROM stock_k_data
+                WHERE freq = 'd' AND ts_code = ANY(:codes) AND bar_time = :bar_time
+            """)
+            with engine.connect() as conn:
+                k_df = pd.read_sql(k_sql, conn, params={
+                    "codes": all_codes_db,
+                    "bar_time": target_date.strftime("%Y-%m-%d"),
+                })
+            if not k_df.empty:
+                for _, row in k_df.iterrows():
+                    raw_code = row["ts_code"][:6]
+                    price_map[raw_code] = row["close"]
+        except Exception:
+            pass
+
     for ts_code, pos in portfolio.items():
         buy_date = datetime.strptime(pos["buy_date"], "%Y-%m-%d").date()
         buy_price = pos["buy_price"]
@@ -494,10 +411,7 @@ def generate_trading_orders(daily_candidates, target_date, portfolio):
         exit_date = datetime.strptime(pos["exit_date"], "%Y-%m-%d").date()
         hold_days = (target_date - buy_date).days
 
-        current_price = np.nan
-        if ts_code in daily_candidates["ts_code"].values:
-            row = daily_candidates[daily_candidates["ts_code"] == ts_code].iloc[0]
-            current_price = row.get("close", np.nan)
+        current_price = price_map.get(ts_code, np.nan)
 
         pnl_pct = (current_price / buy_price - 1) if not np.isnan(current_price) and buy_price > 0 else np.nan
         hit_stop = (pnl_pct is not np.nan and pnl_pct <= STOP_LOSS_PCT) or (not np.isnan(current_price) and current_price <= stop_price)
@@ -529,7 +443,7 @@ def generate_trading_orders(daily_candidates, target_date, portfolio):
             "weekly_risk": pos.get("weekly_risk", np.nan),
         })
 
-    new_signals = daily_candidates[daily_candidates["is_new_signal"]].copy()
+    new_signals = daily_candidates[daily_candidates["is_new_signal"]].copy() if ("is_new_signal" in daily_candidates.columns) else pd.DataFrame()
     if not new_signals.empty:
         tier_order = {"A": 0, "B": 1, "C": 2, "D": 3}
         new_signals["tier_sort"] = new_signals["watch_tier"].map(tier_order).fillna(4)
@@ -577,7 +491,6 @@ def generate_portfolio_monitor(portfolio, target_date, watch_pool):
     if not portfolio:
         return pd.DataFrame()
 
-    engine = get_engine()
     codes = list(portfolio.keys())
     all_codes_db = []
     for code in codes:
@@ -586,16 +499,18 @@ def generate_portfolio_monitor(portfolio, target_date, watch_pool):
         else:
             all_codes_db.append(f"{code}.SZ")
 
-    placeholders = ", ".join([f"'{c}'" for c in all_codes_db])
-    sql = text(f"""
+    sql = text("""
         SELECT ts_code, bar_time, open, high, low, close
         FROM stock_k_data
-        WHERE freq = 'd' AND ts_code IN ({placeholders})
+        WHERE freq = 'd' AND ts_code = ANY(:codes)
           AND bar_time <= :end_date
         ORDER BY ts_code, bar_time
     """)
     with engine.connect() as conn:
-        prices = pd.read_sql(sql, conn, params={"end_date": target_date.strftime("%Y-%m-%d")})
+        prices = pd.read_sql(sql, conn, params={
+            "codes": all_codes_db,
+            "end_date": target_date.strftime("%Y-%m-%d"),
+        })
 
     if prices.empty:
         return pd.DataFrame()
@@ -654,6 +569,9 @@ def generate_portfolio_monitor(portfolio, target_date, watch_pool):
 # ============================================================
 def generate_trading_sheet(watch_pool, daily_candidates, trading_orders, portfolio, target_date):
     rows = []
+
+    if trading_orders.empty:
+        return pd.DataFrame(rows)
 
     sell_orders = trading_orders[trading_orders["action"] == "SELL"]
     for _, order in sell_orders.iterrows():
@@ -735,6 +653,11 @@ def generate_trading_sheet(watch_pool, daily_candidates, trading_orders, portfol
 
 def update_portfolio_state(portfolio, trading_orders, target_date, daily_candidates, dry_run=False):
     new_portfolio = dict(portfolio)
+
+    if trading_orders.empty:
+        if not dry_run:
+            save_portfolio_state(new_portfolio)
+        return new_portfolio
 
     sell_orders = trading_orders[trading_orders["action"] == "SELL"]
     for _, order in sell_orders.iterrows():
@@ -1040,17 +963,23 @@ def main():
     print(f"\n[1/5] 生成周线观察池...")
     watch_pool = generate_watch_pool(target_date)
     if watch_pool.empty:
-        print(f"  {target_date} 无触发点，退出")
-        return
-    tier_counts = watch_pool["watch_tier"].value_counts().to_dict()
-    n_ab = tier_counts.get("A", 0) + tier_counts.get("B", 0)
-    n_vetoed = watch_pool["vetoed"].sum()
-    print(f"  触发点: {len(watch_pool)}, A档: {tier_counts.get('A', 0)}, B档: {tier_counts.get('B', 0)}, C档: {tier_counts.get('C', 0)}, D档: {tier_counts.get('D', 0)}")
-    print(f"  A+B档: {n_ab}, vetoed: {n_vetoed}")
+        print(f"  {target_date} 无触发点")
+        if not portfolio:
+            print(f"  无持仓，退出")
+            return
+        print(f"  有持仓 {len(portfolio)} 只，继续执行持仓监控")
+    else:
+        tier_counts = watch_pool["watch_tier"].value_counts().to_dict()
+        n_ab = tier_counts.get("A", 0) + tier_counts.get("B", 0)
+        n_vetoed = watch_pool["vetoed"].sum()
+        print(f"  触发点: {len(watch_pool)}, A档: {tier_counts.get('A', 0)}, B档: {tier_counts.get('B', 0)}, C档: {tier_counts.get('C', 0)}, D档: {tier_counts.get('D', 0)}")
+        print(f"  A+B档: {n_ab}, vetoed: {n_vetoed}")
 
     # 模块2：日线候选
     print(f"\n[2/5] 生成日线信号候选（A+B档）...")
-    daily_candidates = generate_daily_candidates(watch_pool, target_date, thresholds)
+    daily_candidates = pd.DataFrame()
+    if not watch_pool.empty:
+        daily_candidates = generate_daily_candidates(watch_pool, target_date, thresholds)
     if daily_candidates.empty:
         print(f"  无日线候选")
     else:
@@ -1058,11 +987,15 @@ def main():
         n_new = daily_candidates["is_new_signal"].sum()
         print(f"  A+B档股票: {len(daily_candidates)}, 满足入场: {n_meets}, 新信号: {n_new}")
 
-    # 模块3：交易指令
+    # 模块3：交易指令（即使无新触发点，仍需检查持仓止损/到期）
     print(f"\n[3/5] 生成交易指令...")
     trading_orders = generate_trading_orders(daily_candidates, target_date, portfolio)
-    n_buy = len(trading_orders[trading_orders["action"] == "BUY"])
-    n_sell = len(trading_orders[trading_orders["action"] == "SELL"])
+    if trading_orders.empty:
+        n_buy = 0
+        n_sell = 0
+    else:
+        n_buy = len(trading_orders[trading_orders["action"] == "BUY"])
+        n_sell = len(trading_orders[trading_orders["action"] == "SELL"])
     print(f"  买入: {n_buy}, 卖出: {n_sell}")
 
     # 模块4：持仓监控

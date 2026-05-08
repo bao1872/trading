@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datasource.database import get_session, query_df
 from market_structure_analysis.event_detector import CORE_EVENTS
+from market_structure_analysis._config import CONFIDENCE_LOW_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -583,10 +584,10 @@ def validate_score_distribution(
         lines.append(f"    建议阈值: 强(>{strong_thresh:+.2f}, 占{strong_pct:.0f}%) 弱(<{weak_thresh:+.2f}, 占{weak_pct:.0f}%)")
 
     if "main_label" in labeled_df.columns and "confidence" in labeled_df.columns:
-        low_conf = labeled_df[labeled_df["confidence"] < 0.3]
+        low_conf = labeled_df[labeled_df["confidence"] < CONFIDENCE_LOW_THRESHOLD]
         low_conf_pct = len(low_conf) / len(labeled_df) * 100
         lines.append(f"")
-        lines.append(f"  置信度 < 0.3 的占比: {low_conf_pct:.1f}% ({len(low_conf)}/{len(labeled_df)})")
+        lines.append(f"  置信度 < {CONFIDENCE_LOW_THRESHOLD} 的占比: {low_conf_pct:.1f}% ({len(low_conf)}/{len(labeled_df)})")
         if low_conf_pct > 40:
             lines.append(f"  → 标签阈值偏松，建议引入中性层（强/弱/中性）")
         elif low_conf_pct > 20:
@@ -631,7 +632,7 @@ def validate_group_stability(
 
     ind_sub = grouped_df[grouped_df["group_type"] == "industry_l2"]
     if not ind_sub.empty and "trade_date" in ind_sub.columns:
-        from market_structure_analysis.market_aggregator import MIN_INDUSTRY_SAMPLE
+        from market_structure_analysis._config import MIN_INDUSTRY_SAMPLE
 
         ind_filtered = ind_sub[ind_sub["stock_count"] >= MIN_INDUSTRY_SAMPLE]
 

@@ -16,6 +16,7 @@ Outputs:
     - 量能广度 DataFrame（逐日）
     - 分组量能 DataFrame（逐日）
     - 指数-个股背离 DataFrame（逐日）
+    - 成交额结构 DataFrame（逐日）: 金额变化率/放量占比/强势组占比/大小盘占比变化
     - 量能背景解读文本
 
 How to Run:
@@ -220,10 +221,143 @@ def compute_index_volume_divergence(
     return result
 
 
+def compute_turnover_structure(
+    daily_agg: pd.DataFrame,
+    lightweight_events: pd.DataFrame,
+    grouped_df: pd.DataFrame,
+    stock_attrs: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """
+    计算成交额结构 4 项指标。
+
+    输出列:
+      total_amount:            全市场估算成交额（volume * close）
+      amount_change_pct:       成交额日环比变化率
+      up_vol_amount_pct:       放量上涨股票成交额占比
+      down_vol_amount_pct:     放量下跌股票成交额占比
+      top5_industry_amount_pct: Top5 强势行业成交额占比
+      small_cap_amount_pct:    小盘股成交额占比
+      large_cap_amount_pct:    大盘股（含超大盘）成交额占比
+      cap_amount_spread:       小盘-大盘成交额占比差值
+
+    Parameters
+    ----------
+    daily_agg : pd.DataFrame
+        batch_processor 输出的日级计数表，含 total_stocks
+    lightweight_events : pd.DataFrame
+        batch_processor 输出的轻量事件表，含 ts_code/trade_date/evt_*
+    grouped_df : pd.DataFrame
+        market_aggregator 按行业分组后的聚合表
+    stock_attrs : pd.DataFrame, optional
+        含 ts_code/cap_tier 列，用于大小盘分组
+
+    Returns
+    -------
+    pd.DataFrame
+        index=trade_date, 含上述 8 列
+    """
+    import pandas as pd
+    import numpy as np
+
+    events = lightweight_events.copy()
+
+    # 估算每只股票每日成交额: amount ≈ volume * close
+    if "amount" not in events.columns:
+        events = events.rename(columns={"volume": "amount"}, errors="ignore") if "volume" in events.columns else events
+        if "amount" not in events.columns:
+            logger.info("成交额结构: 从 DB 补充 amount 数据...")
+            events = _attach_amount_from_db(events)
+            if "amount" not in events.columns:
+                logger.warning("成交额结构: 无法获取 amount 数据，返回空 DataFrame")
+                empty_cols = [
+                    "total_amount", "amount_change_pct",
+                    "up_vol_amount_pct", "down_vol_amount_pct",
+                    "top5_industry_amount_pct",
+                    "small_cap_amount_pct", "large_cap_amount_pct",
+                    "cap_amount_spread",
+                ]
+                if "trade_date" in events.columns:
+                    trade_dates = events["trade_date"].drop_duplicates().sort_values()
+                    result = pd.DataFrame(index=trade_dates, columns=empty_cols, dtype=float)
+                    result.index.name = "trade_date"
+                    return result
+                return pd.DataFrame(columns=empty_cols)
+
+    # A. 全市场成交额变化
+    daily_amount = events.groupby("trade_date")["amount"].sum().sort_index()
+    daily_amount = daily_amount.rename("total_amount")
+    amount_change = daily_amount.pct_change().rename("amount_change_pct")
+
+    # B. 放量股票成交额占比
+    mask_up = events.get("evt_up_move_with_vol_spike", pd.Series(0, index=events.index)).astype(bool)
+    mask_down = events.get("evt_down_move_with_vol_spike", pd.Series(0, index=events.index)).astype(bool)
+
+    up_amount = events.loc[mask_up.values].groupby("trade_date")["amount"].sum()
+    down_amount = events.loc[mask_down.values].groupby("trade_date")["amount"].sum()
+
+    up_vol_pct = (up_amount / daily_amount).rename("up_vol_amount_pct").fillna(0)
+    down_vol_pct = (down_amount / daily_amount).rename("down_vol_amount_pct").fillna(0)
+
+    # C. 强势组（Top5 行业）成交额占比
+    top5_amount_pct = pd.Series(np.nan, index=daily_amount.index, name="top5_industry_amount_pct")
+    if grouped_df is not None and not grouped_df.empty and "group_type" in grouped_df.columns:
+        ind_df = grouped_df[grouped_df["group_type"] == "industry_l2"].copy()
+        if not ind_df.empty and "trade_date" in ind_df.columns:
+            for dt in daily_amount.index:
+                sub = ind_df[ind_df["trade_date"] == dt]
+                if sub.empty:
+                    continue
+                top5 = sub.nlargest(5, "structure_score")
+                top5_industries = top5["group_name"].unique()
+                # 匹配 lightweight_events 中的 ts_code → 行业映射
+                # 简化处理: 取当日所有股票中对应 Top5 行业的成交额占比
+                # 精确实现需 stock_attrs + industry 映射
+                top5_amount_pct.loc[dt] = np.nan  # 占位，需行业映射
+        else:
+            top5_amount_pct = pd.Series(np.nan, index=daily_amount.index, name="top5_industry_amount_pct")
+
+    # D. 大小盘成交额占比
+    if stock_attrs is not None and not stock_attrs.empty and "cap_tier" in stock_attrs.columns:
+        events_with_tier = events.merge(
+            stock_attrs[["ts_code", "cap_tier"]], on="ts_code", how="left"
+        )
+        is_small = events_with_tier["cap_tier"].isin(["small_cap"])
+        is_large = events_with_tier["cap_tier"].isin(["large_cap", "mega_cap"])
+
+        small_amount = events_with_tier.loc[is_small.values].groupby("trade_date")["amount"].sum()
+        large_amount = events_with_tier.loc[is_large.values].groupby("trade_date")["amount"].sum()
+
+        small_pct = (small_amount / daily_amount).rename("small_cap_amount_pct").fillna(0)
+        large_pct = (large_amount / daily_amount).rename("large_cap_amount_pct").fillna(0)
+        spread = (small_pct - large_pct).rename("cap_amount_spread")
+    else:
+        small_pct = pd.Series(np.nan, index=daily_amount.index, name="small_cap_amount_pct")
+        large_pct = pd.Series(np.nan, index=daily_amount.index, name="large_cap_amount_pct")
+        spread = pd.Series(np.nan, index=daily_amount.index, name="cap_amount_spread")
+
+    result = pd.concat(
+        [
+            daily_amount,
+            amount_change,
+            up_vol_pct,
+            down_vol_pct,
+            top5_amount_pct,
+            small_pct,
+            large_pct,
+            spread,
+        ],
+        axis=1,
+    )
+    result.index.name = "trade_date"
+    logger.info("成交额结构计算完成: %d 行, %d 列", len(result), len(result.columns))
+    return result
+
+
 def generate_volume_context_report(
     volume_breadth: pd.DataFrame,
     volume_style: Optional[pd.DataFrame] = None,
     divergence: Optional[pd.DataFrame] = None,
+    turnover_structure: Optional[pd.DataFrame] = None,
     date: Optional[str] = None,
 ) -> str:
     """
@@ -237,6 +371,8 @@ def generate_volume_context_report(
         compute_volume_by_style() 输出
     divergence : pd.DataFrame, optional
         compute_index_volume_divergence() 输出
+    turnover_structure : pd.DataFrame, optional
+        compute_turnover_structure() 输出
     date : str, optional
         目标日期 YYYY-MM-DD
 
@@ -280,10 +416,68 @@ def generate_volume_context_report(
             name = dc.replace("_dvg", "").upper()
             lines.append(f"  {name}背离: {val}")
 
+    if turnover_structure is not None and not turnover_structure.empty:
+        ts_target = _get_row(turnover_structure, date)
+        amt_chg = ts_target.get("amount_change_pct", np.nan)
+        up_amt = ts_target.get("up_vol_amount_pct", np.nan)
+        down_amt = ts_target.get("down_vol_amount_pct", np.nan)
+        small_amt = ts_target.get("small_cap_amount_pct", np.nan)
+        large_amt = ts_target.get("large_cap_amount_pct", np.nan)
+        spread = ts_target.get("cap_amount_spread", np.nan)
+        if pd.notna(amt_chg):
+            lines.append(f"  成交额: 环比变化 {amt_chg:+.1%}")
+        if pd.notna(up_amt) and pd.notna(down_amt):
+            lines.append(f"  放量成交额占比: 上涨 {up_amt:.1%} | 下跌 {down_amt:.1%}")
+        if pd.notna(small_amt) and pd.notna(large_amt):
+            direction = "小盘" if spread > 0 else "大盘"
+            lines.append(f"  大小盘成交额: 小盘 {small_amt:.1%} | 大盘 {large_amt:.1%} ({direction}主导)")
+
     interp = _interpret_volume(upr, dwr, nbr)
     lines.append(f"  解读: {interp}")
 
     return "\n".join(lines)
+
+
+def _attach_amount_from_db(events: pd.DataFrame) -> pd.DataFrame:
+    """从 stock_k_data 表加载 volume*close 作为估算 amount 并 attach 到 events"""
+    from datasource.database import get_session, query_df
+
+    if "ts_code" not in events.columns or "trade_date" not in events.columns:
+        return events
+
+    ts_codes = events["ts_code"].drop_duplicates().tolist()
+    trade_dates = [str(d) for d in events["trade_date"].dt.date.drop_duplicates()]
+    date_min = min(trade_dates)
+    date_max = max(trade_dates)
+
+    try:
+        with get_session() as session:
+            df = query_df(
+                session,
+                "stock_k_data",
+                columns=["ts_code", "bar_time", "volume", "close"],
+                filters={
+                    "freq": "d",
+                    "bar_time >= ": date_min,
+                    "bar_time <= ": date_max,
+                },
+            )
+        if df is not None and not df.empty:
+            df["trade_date"] = pd.to_datetime(df["bar_time"]).dt.date.astype(str)
+            df["amount"] = df["volume"] * df["close"]
+            df = df[df["ts_code"].isin(ts_codes) & df["trade_date"].isin(trade_dates)]
+            keep_cols = ["ts_code", "trade_date", "amount"]
+            result = events.copy()
+            result["trade_date"] = result["trade_date"].dt.date.astype(str)
+            result = result.merge(df[keep_cols], on=["ts_code", "trade_date"], how="left")
+            result["trade_date"] = pd.to_datetime(result["trade_date"])
+            valid_count = result["amount"].notna().sum()
+            logger.info("从 DB 附加 amount: %d 条 -> %d 条有效", len(events), valid_count)
+            return result
+    except Exception as exc:
+        logger.warning("从 DB 加载 amount 失败: %s", exc)
+
+    return events
 
 
 def _get_row(df: pd.DataFrame, date: Optional[str]) -> pd.Series:
@@ -339,7 +533,7 @@ def main():
         return
 
     logger.info("Step 2: 计算量能广度...")
-    vb = compute_volume_breadth(lightweight_events, daily_agg)
+    vb = compute_volume_breadth(daily_agg)
     print(f"\n量能广度: {vb.shape}")
     print(vb.tail(5).to_string())
 

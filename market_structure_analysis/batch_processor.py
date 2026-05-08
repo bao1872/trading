@@ -53,6 +53,9 @@ from market_structure_analysis.event_detector import detect_events, CORE_EVENTS,
 
 logger = logging.getLogger(__name__)
 
+# CORE_EVENTS already contains full evt_* names
+EVT_COLS = CORE_EVENTS
+
 
 def _get_stock_codes(freq: str = "d") -> list:
     """从 stock_pools 表获取股票代码列表（0.03s，替代 get_all_codes 的 8s 全量扫描）"""
@@ -155,24 +158,6 @@ def process_stock_pool(
     success_count = 0
     fail_count = 0
 
-    _existing_chunks = sorted([f for f in _os.listdir(_cache_dir) if f.startswith("stream_chunk_") and f.endswith(".pkl")])
-    if _existing_chunks:
-        _last_chunk = _pickle.load(open(_os.path.join(_cache_dir, _existing_chunks[-1]), "rb"))
-        if not _last_chunk.empty:
-            _already_processed = set(_last_chunk["ts_code"].unique())
-            _skip_count = len(_already_processed)
-            logger.info("断点恢复: 发现 %d 个增量文件，跳过已处理 %d 只股票",
-                        len(_existing_chunks), _skip_count)
-            codes = [c for c in codes if c not in _already_processed]
-            del _last_chunk
-        else:
-            _skip_count = 0
-            for _f in _existing_chunks:
-                _os.remove(_os.path.join(_cache_dir, _f))
-            logger.info("清理无效增量缓存")
-    else:
-        _skip_count = 0
-
     if tqdm is not None:
         iterator = tqdm(codes, desc="Processing", position=0, leave=True)
     else:
@@ -226,9 +211,6 @@ def process_stock_pool(
         logger.info("已输出到: %s", output_path)
 
     return combined
-
-
-EVT_COLS = [f"evt_{e}" for e in CORE_EVENTS]
 
 
 def process_stock_pool_streaming(

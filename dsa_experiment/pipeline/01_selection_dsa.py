@@ -53,14 +53,6 @@ from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Tuple
 from tqdm import tqdm
 
-from features.dsa_bbmacd_24factors_viewer import (
-    compute_dsa,
-    compute_bbmacd,
-    compute_24_factors,
-    DSAConfig,
-)
-from features.volume_zscore_plotly import volume_zscore
-
 try:
     from config import DATABASE_URL
 except ImportError:
@@ -70,48 +62,8 @@ engine = create_engine(DATABASE_URL)
 
 SELECTION_TABLE = "stock_dsa_vreversal_results"
 WEEKLY_BARS = 600
-DSA_CFG = DSAConfig(prd=50, base_apt=20.0, use_adapt=False, vol_bias=10.0, atr_len=50)
 
-FACTOR_COLUMNS = [
-    "dsa_dir",
-    "prev_pivot_code",
-    "last_confirmed_high",
-    "last_confirmed_low",
-    "dsa_pivot_pos_01",
-    "ret_to_last_high_pct",
-    "ret_to_last_low_pct",
-    "price_vs_dsa_vwap_pct",
-    "current_stage_bars",
-    "prev_stage_bars",
-    "bars_since_last_high",
-    "bars_since_last_low",
-    "prev_stage_amp_pct",
-    "current_stage_ret_pct",
-    "current_stage_amp_pct",
-    "current_pullback_from_stage_extreme_pct",
-    "bbmacd",
-    "bbmacd_minus_avg",
-    "bbmacd_state",
-    "bbmacd_band_pos_01",
-    "bbmacd_bandwidth_zscore",
-    "bbmacd_cross_upper",
-    "bbmacd_cross_lower",
-    "trend_align_momo",
-    "vol_zscore_5",
-    "vol_zscore_10",
-    "vol_zscore_20",
-    "vol_ratio_10",
-    "vol_stage_cv",
-    "vol_prev_stage_cv",
-    "vol_cv_ratio",
-    "price_vol_coord",
-    "momo_vol_coord",
-    "low_pos_break_coord",
-    "coord_consistency",
-    "coord_stage_current",
-    "coord_stage_prev",
-    "coord_stage_ratio",
-]
+from dsa_experiment.pipeline.factor_columns import FACTOR_COLUMNS
 
 
 def normalize_ts_code(ts_code: str) -> str:
@@ -206,10 +158,9 @@ def batch_get_stock_names(ts_codes: List[str]) -> Dict[str, str]:
     """批量获取股票名称"""
     if not ts_codes:
         return {}
-    placeholders = ", ".join([f"'{c}'" for c in ts_codes])
-    sql = text(f"SELECT ts_code, name FROM stock_pools WHERE ts_code IN ({placeholders})")
+    sql = text("SELECT ts_code, name FROM stock_pools WHERE ts_code = ANY(:codes)")
     with engine.connect() as conn:
-        result = conn.execute(sql)
+        result = conn.execute(sql, {"codes": ts_codes})
         return {row[0]: row[1] for row in result}
 
 
@@ -270,123 +221,55 @@ def compute_future_labels(
     return result
 
 
+def load_factors_from_db(ts_code: str, freq: str = "1w") -> pd.DataFrame:
+    """从 factor_value 长表读取因子，转为宽表格式"""
+    symbol = normalize_ts_code(ts_code)
+    sql = text("""
+        SELECT as_of_date, factor_name, factor_value
+        FROM factor_value
+        WHERE ts_code = :ts_code AND freq = :freq
+        ORDER BY as_of_date
+    """)
+    df = pd.read_sql(sql, engine, params={"ts_code": symbol, "freq": freq})
+    if df.empty:
+        return pd.DataFrame()
+    # 长表转宽表
+    wide = df.pivot(index="as_of_date", columns="factor_name", values="factor_value")
+    wide.index = pd.to_datetime(wide.index)
+    return wide
+
+
 def process_stock(ts_code: str, end_date: Optional[date] = None) -> List[Dict]:
     """处理单只股票，返回触发点记录列表
 
-    始终用完整历史数据计算24因子和未来标签，end_date仅用于筛选触发点范围。
+    新逻辑：从 factor_value 读取已计算因子，只保留 V型反转检测和未来标签计算
     """
+    # 1. 读取 K线（用于未来标签和 close 价格）
     df = get_kline_data_db(ts_code, freq="w", bars=WEEKLY_BARS, end_date=None)
     if df.empty or len(df) < 50:
         return []
 
-    try:
-        dsa_df, _, _ = compute_dsa(df, DSA_CFG)
-    except Exception:
+    # 2. 从 factor_value 读取因子（宽表格式）
+    factors_wide = load_factors_from_db(ts_code, freq="1w")
+    if factors_wide.empty:
         return []
 
-    if dsa_df.empty:
+    # 3. 对齐 K线和因子（按日期 join）
+    merged = df.join(factors_wide, how="inner")
+    if merged.empty or len(merged) < 50:
         return []
 
-    try:
-        bb_df = compute_bbmacd(df)
-    except Exception:
+    # 4. 检测 V型反转触发点
+    if "bbmacd" not in merged.columns:
         return []
-
-    merged = pd.concat([df, dsa_df, bb_df], axis=1)
-    try:
-        factors_df = compute_24_factors(merged)
-    except Exception:
-        return []
-
-    for col in factors_df.columns:
-        merged[col] = factors_df[col]
-
-    if "volume" in merged.columns and merged["volume"].notna().sum() > 20:
-        vol = merged["volume"].fillna(0)
-        for win in [5, 10, 20]:
-            z, mu, sd = volume_zscore(vol, win)
-            merged[f"vol_zscore_{win}"] = z
-        merged["vol_ratio_10"] = np.where(
-            vol.rolling(10, min_periods=10).mean() > 0,
-            vol / vol.rolling(10, min_periods=10).mean().replace(0, np.nan),
-            np.nan,
-        )
-
-    if "dsa_dir" in merged.columns and "volume" in merged.columns:
-        dsa_dir = merged["dsa_dir"].ffill()
-        if isinstance(dsa_dir, pd.DataFrame):
-            dsa_dir = dsa_dir.iloc[:, 0]
-        vol = merged["volume"].fillna(0)
-        if isinstance(vol, pd.DataFrame):
-            vol = vol.iloc[:, 0]
-        stage_changes = dsa_dir.diff().fillna(0) != 0
-        stage_ids = stage_changes.cumsum()
-
-        vol_cv_df = pd.DataFrame({"vol": vol.values, "stage": stage_ids.values})
-        vol_cv = vol_cv_df.groupby("stage")["vol"].agg(["mean", "std"])
-        vol_cv["cv"] = np.where(
-            vol_cv["mean"] > 0,
-            vol_cv["std"] / vol_cv["mean"],
-            np.nan,
-        )
-        cv_map = vol_cv["cv"].to_dict()
-        merged["vol_stage_cv"] = stage_ids.map(cv_map)
-
-        prev_cv = stage_ids.map(
-            lambda x: cv_map.get(x - 1, np.nan) if x > 0 else np.nan
-        )
-        merged["vol_prev_stage_cv"] = prev_cv
-        merged["vol_cv_ratio"] = np.where(
-            merged["vol_prev_stage_cv"].notna() & (merged["vol_prev_stage_cv"] > 0),
-            merged["vol_stage_cv"] / merged["vol_prev_stage_cv"],
-            np.nan,
-        )
-
-    if all(c in merged.columns for c in ["price_vs_dsa_vwap_pct", "vol_zscore_10"]):
-        p_z = (merged["price_vs_dsa_vwap_pct"] - merged["price_vs_dsa_vwap_pct"].rolling(20, min_periods=5).mean()) / merged["price_vs_dsa_vwap_pct"].rolling(20, min_periods=5).std().replace(0, np.nan)
-        v_z = merged["vol_zscore_10"]
-        m_z = (merged["bbmacd_minus_avg"] - merged["bbmacd_minus_avg"].rolling(20, min_periods=5).mean()) / merged["bbmacd_minus_avg"].rolling(20, min_periods=5).std().replace(0, np.nan)
-        merged["price_vol_coord"] = p_z * v_z
-        merged["momo_vol_coord"] = m_z * v_z
-
-    if all(c in merged.columns for c in ["dsa_pivot_pos_01", "bbmacd_minus_avg", "vol_zscore_10"]):
-        merged["low_pos_break_coord"] = (1 - merged["dsa_pivot_pos_01"]) * merged.get("momo_vol_coord", np.nan)
-
-    if all(c in merged.columns for c in ["price_vs_dsa_vwap_pct", "bbmacd_minus_avg", "vol_zscore_10"]):
-        p_z2 = (merged["price_vs_dsa_vwap_pct"] - merged["price_vs_dsa_vwap_pct"].rolling(20, min_periods=5).mean()) / merged["price_vs_dsa_vwap_pct"].rolling(20, min_periods=5).std().replace(0, np.nan)
-        m_z2 = (merged["bbmacd_minus_avg"] - merged["bbmacd_minus_avg"].rolling(20, min_periods=5).mean()) / merged["bbmacd_minus_avg"].rolling(20, min_periods=5).std().replace(0, np.nan)
-        v_z2 = merged["vol_zscore_10"]
-        three_z = pd.DataFrame({"p": p_z2, "m": m_z2, "v": v_z2})
-        merged["coord_consistency"] = three_z.mean(axis=1) - three_z.std(axis=1)
-
-    if all(c in merged.columns for c in ["dsa_dir", "price_vs_dsa_vwap_pct", "vol_zscore_10"]):
-        dsa_dir = merged["dsa_dir"].ffill()
-        if isinstance(dsa_dir, pd.DataFrame):
-            dsa_dir = dsa_dir.iloc[:, 0]
-        stage_changes = dsa_dir.diff().fillna(0) != 0
-        stage_ids = stage_changes.cumsum()
-        pvc = merged.get("price_vol_coord", pd.Series(dtype=float))
-        if pvc.notna().sum() > 0:
-            coord_df = pd.DataFrame({"pvc": pvc.values, "stage": stage_ids.values})
-            stage_coord = coord_df.groupby("stage")["pvc"].mean()
-            coord_map = stage_coord.to_dict()
-            merged["coord_stage_current"] = stage_ids.map(coord_map)
-            prev_coord = stage_ids.map(
-                lambda x: coord_map.get(x - 1, np.nan) if x > 0 else np.nan
-            )
-            merged["coord_stage_prev"] = prev_coord
-            merged["coord_stage_ratio"] = np.where(
-                merged["coord_stage_prev"].notna() & (merged["coord_stage_prev"].abs() > 1e-8),
-                merged["coord_stage_current"] / merged["coord_stage_prev"],
-                np.nan,
-            )
 
     triggers = detect_vreversal_triggers(merged["bbmacd"])
     trigger_indices = np.where(triggers)[0]
     if len(trigger_indices) == 0:
         return []
 
-    dsa_dir_arr = factors_df["dsa_dir"].to_numpy(float)
+    # 5. 计算未来标签
+    dsa_dir_arr = merged["dsa_dir"].to_numpy(float)
     high_arr = merged["high"].to_numpy(float)
     low_arr = merged["low"].to_numpy(float)
 

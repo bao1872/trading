@@ -36,7 +36,12 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from market_structure_analysis.market_aggregator import SCORE_NAMES, CAP_TIER_LABELS, MIN_INDUSTRY_SAMPLE
+from market_structure_analysis.market_aggregator import SCORE_NAMES, CAP_TIER_LABELS
+from market_structure_analysis._config import (
+    MIN_INDUSTRY_SAMPLE,
+    V2_CONFIDENCE_THRESHOLD,
+    CONFIDENCE_LOW_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +80,6 @@ def _classify_main_label(row: pd.Series) -> str:
     return "防守"
 
 
-V2_CONFIDENCE_THRESHOLD = 0.4
 
 
 def _classify_main_label_v2(row: pd.Series, v1_label: str) -> str:
@@ -107,13 +111,13 @@ def _classify_size_style(
 ) -> str:
     """基于大小盘 structure_score 对比判定风格副标签"""
     if large_cap_scores is None or small_cap_scores is None:
-        return "大票占优"
+        return "未知"
 
     large_struct = large_cap_scores.get("structure_score", 0)
     small_struct = small_cap_scores.get("structure_score", 0)
 
     if pd.isna(large_struct) or pd.isna(small_struct):
-        return "大票占优"
+        return "未知"
 
     if small_struct > large_struct:
         return "小票占优"
@@ -412,7 +416,7 @@ def export_daily_summary(
     risk_notes = []
     for _, row in result.iterrows():
         notes = []
-        if "confidence" in row.index and pd.notna(row.get("confidence")) and row["confidence"] < 0.3:
+        if "confidence" in row.index and pd.notna(row.get("confidence")) and row["confidence"] < CONFIDENCE_LOW_THRESHOLD:
             notes.append("低置信度")
         if "breadth_diff" in row.index and pd.notna(row.get("breadth_diff")) and row["breadth_diff"] < 0:
             notes.append("广度偏弱")
@@ -429,6 +433,91 @@ def export_daily_summary(
         logger.info("已输出到: %s", output_path)
 
     return result
+
+
+def smooth_industry_ranking(
+    grouped_df: pd.DataFrame,
+    window: int = 3,
+    alpha: float = 0.6,
+) -> pd.DataFrame:
+    """
+    对行业 structure_score 做指数平滑后重新排名。
+
+    公式: smoothed[t] = alpha * score[t] + (1-alpha) * mean(score[t-window+1:t-1])
+
+    目的: 减少单日噪音导致的排名跳变，使日报中的行业主线更稳定。
+    原始评分保留，仅追加 smoothed_score 和 smoothed_rank 列。
+
+    Parameters
+    ----------
+    grouped_df : pd.DataFrame
+        含 group_type='industry_l2', trade_date, structure_score, stock_count 的聚合表
+    window : int
+        平滑回看窗口（交易日数），默认 3
+    alpha : float
+        当日权重，默认 0.6
+
+    Returns
+    -------
+    pd.DataFrame
+        添加了 smoothed_score 和 smoothed_rank 列的新 DataFrame
+    """
+    if grouped_df is None or grouped_df.empty:
+        return grouped_df
+
+    from market_structure_analysis._config import SMOOTH_ALPHA, SMOOTH_WINDOW
+
+    if alpha is None:
+        alpha = SMOOTH_ALPHA
+    if window is None:
+        window = SMOOTH_WINDOW
+
+    df = grouped_df.copy()
+    ind_df = df[df["group_type"] == "industry_l2"].copy()
+    if ind_df.empty or "trade_date" not in ind_df.columns:
+        df["smoothed_score"] = df["structure_score"]
+        df["smoothed_rank"] = -1
+        return df
+
+    ind_df = ind_df.sort_values(["group_name", "trade_date"])
+    smoothed_list = []
+
+    for name, group in ind_df.groupby("group_name"):
+        group = group.sort_values("trade_date")
+        scores = group["structure_score"].values
+        smoothed = np.full(len(scores), np.nan)
+        for i in range(len(scores)):
+            if i == 0:
+                smoothed[i] = scores[i]
+            else:
+                start = max(0, i - window + 1)
+                if start < i:
+                    past_mean = np.nanmean(scores[start:i])
+                    smoothed[i] = alpha * scores[i] + (1 - alpha) * past_mean
+                else:
+                    smoothed[i] = scores[i]
+        group = group.copy()
+        group["smoothed_score"] = smoothed
+        smoothed_list.append(group)
+
+    smoothed_ind = pd.concat(smoothed_list)
+    smoothed_ind["smoothed_rank"] = smoothed_ind.groupby("trade_date")["smoothed_score"].rank(
+        ascending=False, method="min"
+    )
+
+    result_cols = ["trade_date", "group_type", "group_name", "smoothed_score", "smoothed_rank"]
+    avail_cols = [c for c in result_cols if c in smoothed_ind.columns]
+    df = df.merge(
+        smoothed_ind[avail_cols],
+        on=["trade_date", "group_name"] if "trade_date" in smoothed_ind.columns else ["group_name"],
+        how="left",
+        suffixes=("", "_s"),
+    )
+    df["smoothed_score"] = df["smoothed_score"].fillna(df["structure_score"])
+    df["smoothed_rank"] = df["smoothed_rank"].fillna(-1)
+
+    logger.info("行业排名平滑完成: alpha=%.2f, window=%d", alpha, window)
+    return df
 
 
 def main():

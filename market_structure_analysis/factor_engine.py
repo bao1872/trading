@@ -41,6 +41,9 @@ from features.volume_zscore_plotly import volume_zscore
 from features.pavp_tv_fixed_params_factors import compute_pavp
 from features.stop_loss_clustering_with_factors import StopLossClusteringEngine
 
+# 导入 factor_lib 统一入口（自动注册所有因子）
+from factor_lib import compute_panel
+
 logger = logging.getLogger(__name__)
 
 
@@ -100,31 +103,18 @@ def compute_all_factors(
 
     result = df.copy()
 
-    # 1. DSA
-    logger.debug("计算 DSA 因子...")
-    dsa_out, _, _ = compute_dsa(result, dsa_cfg)
-    result = pd.concat([result, dsa_out], axis=1)
+    # 1. 通过 factor_lib 计算所有已注册因子（趋势/位置/动量/量能/结构/节奏/协同/风险）
+    logger.debug("通过 factor_lib 计算核心因子...")
+    result = compute_panel(result)
 
-    # 2. BBMACD
-    logger.debug("计算 BBMACD 因子...")
-    bbmacd_out = compute_bbmacd(
-        result,
-        rapida=bbmacd_rapida,
-        lenta=bbmacd_lenta,
-        stdv=bbmacd_stdv,
-        signal_len=bbmacd_signal_len,
-        width_z_window=bbmacd_width_z_window,
-    )
-    result = pd.concat([result, bbmacd_out], axis=1)
-
-    # 3. Volume Z-score
+    # 2. 补充 vol_zscore 列（event_detector 兼容用）
     logger.debug("计算 Volume Z-score...")
     vol_z, vol_mu, vol_sd = volume_zscore(result["volume"], vol_z_window)
     result["vol_zscore"] = vol_z
     result["vol_zscore_mu"] = vol_mu
     result["vol_zscore_sd"] = vol_sd
 
-    # 4. PAVP
+    # 3. PAVP（不在 factor_lib 中，保留原有调用）
     if not skip_pavp:
         logger.debug("计算 PAVP 因子...")
         pavp_out, _, _ = compute_pavp(result)
@@ -135,7 +125,7 @@ def compute_all_factors(
         if pavp_factor_cols:
             result = pd.concat([result, pavp_out[pavp_factor_cols]], axis=1)
 
-    # 5. Stop Cluster
+    # 4. Stop Cluster（不在 factor_lib 中，保留原有调用）
     logger.debug("计算 Stop Cluster 因子...")
     df_for_stop = result.rename(columns={"volume": "vol"})
     stop_args = argparse.Namespace(

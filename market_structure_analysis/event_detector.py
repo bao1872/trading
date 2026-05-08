@@ -1,11 +1,10 @@
 """
 event_detector.py
-事件检测器 — 基于 advicement.txt 定义的 12 核心事件 + 6 辅助状态
+事件检测器 — 基于 event_lib 注册表统一检测 + 本地状态列补充
 
 Purpose:
-    基于因子 DataFrame 检测结构性事件，包括：
-    - 12 个核心事件（触发型，0/1 标记）
-    - 6 个辅助状态（背景型，0/1 或分桶值）
+    1. 通过 event_lib.detect_panel() 统一检测所有已注册事件（evt_* 列）
+    2. 补充本地状态列：PAVP inside_value_area、StopCluster near_stop、DSA above/below VWAP
     所有检测逻辑为纯 pandas 向量化计算，无外部依赖。
 
 Inputs:
@@ -27,40 +26,45 @@ Side Effects:
 import logging
 import os
 import sys
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from event_lib import detect_panel as event_detect_panel
+from event_lib.registry import list_all as list_registered_events
+
 logger = logging.getLogger(__name__)
 
-VOL_SPIKE_THRESHOLD = 2.0
-NEAR_STOP_ATR_THRESHOLD = 1.0
+from market_structure_analysis._config import (
+    VOL_ZSCORE_SPIKE_THRESHOLD,
+    NEAR_STOP_ATR_THRESHOLD,
+)
+
 PIVOT_POS_BINS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 PIVOT_POS_LABELS = [1, 2, 3, 4, 5]
 
-CORE_EVENTS: List[str] = [
-    "dsa_dir_flip_up",
-    "dsa_dir_flip_down",
-    "cross_above_dsa_vwap",
-    "cross_below_dsa_vwap",
-    "bbmacd_cross_upper",
-    "bbmacd_cross_lower",
-    "up_move_with_vol_spike",
-    "down_move_with_vol_spike",
-    "cross_above_value_area_high",
-    "cross_below_value_area_low",
-    "break_sell_stop_cluster",
-    "break_buy_stop_cluster",
-]
+
+def _get_core_events() -> List[str]:
+    """从 event_lib 动态获取所有 is_core=True 的事件名列表。"""
+    core = []
+    for meta in list_registered_events():
+        if meta.get("is_core", False):
+            core.append(meta["name"])
+    return sorted(core)
+
+
+CORE_EVENTS = _get_core_events()
 
 AUX_STATES: List[str] = [
-    "dsa_above_vwap",
-    "dsa_below_vwap",
-    "dsa_pivot_pos_01_bucket",
-    "inside_value_area",
-    "near_sell_stop_cluster",
-    "near_buy_stop_cluster",
+    "state_dsa_above_vwap",
+    "state_dsa_below_vwap",
+    "state_dsa_pivot_pos_01_bucket",
+    "state_inside_value_area",
+    "state_near_sell_stop_cluster",
+    "state_near_buy_stop_cluster",
 ]
 
 
@@ -92,78 +96,13 @@ def _flip_down(dir_series: pd.Series) -> pd.Series:
     return (prev_ge0 & curr_is_neg1).astype(float)
 
 
-def _detect_dsa_events(df: pd.DataFrame) -> pd.DataFrame:
-    """检测 DSA 相关事件和状态"""
-    out = pd.DataFrame(index=df.index)
-
-    if "dsa_dir" in df.columns:
-        out["evt_dsa_dir_flip_up"] = _flip_up(df["dsa_dir"])
-        out["evt_dsa_dir_flip_down"] = _flip_down(df["dsa_dir"])
-
-    if "DSA_VWAP" in df.columns and "close" in df.columns:
-        vwap = df["DSA_VWAP"]
-        close = df["close"]
-        out["evt_cross_above_dsa_vwap"] = _crossover(close, vwap)
-        out["evt_cross_below_dsa_vwap"] = _crossunder(close, vwap)
-        out["state_dsa_above_vwap"] = (close > vwap).astype(float)
-        out["state_dsa_below_vwap"] = (close < vwap).astype(float)
-
-    if "dsa_pivot_pos_01" in df.columns:
-        out["state_dsa_pivot_pos_01_bucket"] = pd.cut(
-            df["dsa_pivot_pos_01"],
-            bins=PIVOT_POS_BINS,
-            labels=PIVOT_POS_LABELS,
-            include_lowest=True,
-        ).astype(float)
-
-    return out
-
-
-def _detect_bbmacd_events(df: pd.DataFrame) -> pd.DataFrame:
-    """检测 BBMACD 相关事件"""
-    out = pd.DataFrame(index=df.index)
-
-    if "bbmacd_cross_upper" in df.columns:
-        out["evt_bbmacd_cross_upper"] = df["bbmacd_cross_upper"].fillna(0)
-
-    if "bbmacd_cross_lower" in df.columns:
-        out["evt_bbmacd_cross_lower"] = df["bbmacd_cross_lower"].fillna(0)
-
-    return out
-
-
-def _detect_volume_events(df: pd.DataFrame) -> pd.DataFrame:
-    """检测 Volume Z-score 相关事件"""
-    out = pd.DataFrame(index=df.index)
-
-    if "vol_zscore" in df.columns and "close" in df.columns:
-        close_up = df["close"] > df["close"].shift(1)
-        close_down = df["close"] < df["close"].shift(1)
-        vol_spike = df["vol_zscore"] > VOL_SPIKE_THRESHOLD
-
-        out["evt_up_move_with_vol_spike"] = (close_up & vol_spike).astype(float)
-        out["evt_down_move_with_vol_spike"] = (close_down & vol_spike).astype(float)
-
-    return out
-
-
-def _detect_pavp_events(df: pd.DataFrame) -> pd.DataFrame:
-    """检测 PAVP 相关事件和状态"""
+def _compute_pavp_states(df: pd.DataFrame) -> pd.DataFrame:
+    """计算 PAVP 相关状态列（仅状态列，不产出 evt_*）。"""
     out = pd.DataFrame(index=df.index)
 
     has_vah = "vah_price" in df.columns
     has_val = "val_price" in df.columns
     has_close = "close" in df.columns
-
-    if has_vah and has_close:
-        vah = df["vah_price"]
-        close = df["close"]
-        out["evt_cross_above_value_area_high"] = _crossover(close, vah)
-
-    if has_val and has_close:
-        val = df["val_price"]
-        close = df["close"]
-        out["evt_cross_below_value_area_low"] = _crossunder(close, val)
 
     if has_vah and has_val and has_close:
         vah = df["vah_price"]
@@ -176,15 +115,9 @@ def _detect_pavp_events(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _detect_stop_cluster_events(df: pd.DataFrame) -> pd.DataFrame:
-    """检测 Stop Cluster 相关事件和状态"""
+def _compute_stop_cluster_states(df: pd.DataFrame) -> pd.DataFrame:
+    """计算 Stop Cluster 相关状态列（仅状态列，不产出 evt_*）。"""
     out = pd.DataFrame(index=df.index)
-
-    if "sell_stop_triggered" in df.columns:
-        out["evt_break_sell_stop_cluster"] = (df["sell_stop_triggered"] == 1).astype(float)
-
-    if "buy_stop_triggered" in df.columns:
-        out["evt_break_buy_stop_cluster"] = (df["buy_stop_triggered"] == 1).astype(float)
 
     if "dist_to_nearest_sell_stop_atr" in df.columns:
         out["state_near_sell_stop_cluster"] = (
@@ -194,6 +127,27 @@ def _detect_stop_cluster_events(df: pd.DataFrame) -> pd.DataFrame:
     if "dist_to_nearest_buy_stop_atr" in df.columns:
         out["state_near_buy_stop_cluster"] = (
             df["dist_to_nearest_buy_stop_atr"] < NEAR_STOP_ATR_THRESHOLD
+        ).astype(float)
+
+    return out
+
+
+def _compute_dsa_states(df: pd.DataFrame) -> pd.DataFrame:
+    """计算 DSA 相关状态列（仅状态列，不产出 evt_*）。"""
+    out = pd.DataFrame(index=df.index)
+
+    if "DSA_VWAP" in df.columns and "close" in df.columns:
+        vwap = df["DSA_VWAP"]
+        close = df["close"]
+        out["state_dsa_above_vwap"] = (close > vwap).astype(float)
+        out["state_dsa_below_vwap"] = (close < vwap).astype(float)
+
+    if "dsa_pivot_pos_01" in df.columns:
+        out["state_dsa_pivot_pos_01_bucket"] = pd.cut(
+            df["dsa_pivot_pos_01"],
+            bins=PIVOT_POS_BINS,
+            labels=PIVOT_POS_LABELS,
+            include_lowest=True,
         ).astype(float)
 
     return out
@@ -215,22 +169,26 @@ def detect_events(factors_df: pd.DataFrame) -> pd.DataFrame:
 
     Notes
     -----
-    事件列命名: evt_{event_name}, 值为 0.0/1.0
+    事件列命名: evt_{event_name}, 值为 0/1
     状态列命名: state_{state_name}, 值为 0.0/1.0 或分桶整数
-    缺少依赖因子列时，对应事件/状态列不会生成（而非填 NaN）
+    检测逻辑分层：
+      1. event_lib.detect_panel() 检测所有注册事件
+      2. 本地计算状态列（PAVP/StopCluster/DSA）
     """
-    dsa_events = _detect_dsa_events(factors_df)
-    bbmacd_events = _detect_bbmacd_events(factors_df)
-    volume_events = _detect_volume_events(factors_df)
-    pavp_events = _detect_pavp_events(factors_df)
-    stop_events = _detect_stop_cluster_events(factors_df)
+    result = factors_df.copy()
 
-    all_events = pd.concat(
-        [dsa_events, bbmacd_events, volume_events, pavp_events, stop_events],
-        axis=1,
-    )
+    logger.debug("Step 1: 通过 event_lib 检测注册事件...")
+    result = event_detect_panel(result)
 
-    result = pd.concat([factors_df, all_events], axis=1)
+    logger.debug("Step 2: 计算本地状态列...")
+    pavp_states = _compute_pavp_states(result)
+    stop_states = _compute_stop_cluster_states(result)
+    dsa_states = _compute_dsa_states(result)
+
+    all_states = pd.concat([pavp_states, stop_states, dsa_states], axis=1)
+    new_cols = [c for c in all_states.columns if c not in result.columns]
+    if new_cols:
+        result = pd.concat([result, all_states[new_cols]], axis=1)
 
     evt_cols = [c for c in result.columns if c.startswith("evt_")]
     state_cols = [c for c in result.columns if c.startswith("state_")]

@@ -31,22 +31,12 @@ except ImportError:
 
 engine = create_engine(DATABASE_URL)
 
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+OUTPUT_DIR = output_dir  # 保持原变量名兼容
 
-FACTOR_COLS = [
-    "dsa_dir", "prev_pivot_code", "last_confirmed_high", "last_confirmed_low",
-    "dsa_pivot_pos_01", "ret_to_last_high_pct", "ret_to_last_low_pct",
-    "price_vs_dsa_vwap_pct", "current_stage_bars", "prev_stage_bars",
-    "bars_since_last_high", "bars_since_last_low", "prev_stage_amp_pct",
-    "current_stage_ret_pct", "current_stage_amp_pct",
-    "current_pullback_from_stage_extreme_pct", "bbmacd", "bbmacd_minus_avg",
-    "bbmacd_state", "bbmacd_band_pos_01", "bbmacd_bandwidth_zscore",
-    "bbmacd_cross_upper", "bbmacd_cross_lower", "trend_align_momo",
-    "vol_zscore_5", "vol_zscore_10", "vol_zscore_20", "vol_ratio_10",
-    "vol_stage_cv", "vol_prev_stage_cv", "vol_cv_ratio",
-    "price_vol_coord", "momo_vol_coord", "low_pos_break_coord", "coord_consistency",
-    "coord_stage_current", "coord_stage_prev", "coord_stage_ratio",
-]
+from dsa_experiment.pipeline.factor_columns import FACTOR_COLUMNS
+
+FACTOR_COLS = FACTOR_COLUMNS
 
 
 def build_trade_calendar() -> pd.DatetimeIndex:
@@ -63,6 +53,7 @@ def find_next_trade_day(cal: pd.DatetimeIndex, target_date) -> pd.Timestamp:
 
 
 def load_selection_records(start_date=None, sample_limit=0) -> pd.DataFrame:
+    # 列名来自 factor_columns.FACTOR_COLUMNS 白名单，f-string 构建 SELECT 子句是安全的
     sql = text(f"""
         SELECT selection_date, ts_code, stock_name, trigger_bar_time, trigger_close,
                {', '.join(FACTOR_COLS)}
@@ -96,26 +87,21 @@ def _append_suffix(code: str) -> str:
 def load_daily_prices(ts_codes: list, min_date: str, max_date: str) -> pd.DataFrame:
     if not ts_codes:
         return pd.DataFrame()
-    chunk_size = 500
-    frames = []
-    for i in range(0, len(ts_codes), chunk_size):
-        chunk = ts_codes[i : i + chunk_size]
-        codes_str = ",".join(f"'{c}'" for c in chunk)
-        sql = text(f"""
-            SELECT ts_code, bar_time, open, high, low, close, volume
-            FROM stock_k_data
-            WHERE freq='d'
-              AND ts_code IN ({codes_str})
-              AND bar_time >= :min_date
-              AND bar_time <= :max_date
-            ORDER BY ts_code, bar_time
-        """)
-        with engine.connect() as conn:
-            chunk_df = pd.read_sql(sql, conn, params={"min_date": min_date, "max_date": max_date})
-        frames.append(chunk_df)
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+    sql = text("""
+        SELECT ts_code, bar_time, open, high, low, close, volume
+        FROM stock_k_data
+        WHERE freq = 'd'
+          AND ts_code = ANY(:codes)
+          AND bar_time >= :min_date
+          AND bar_time <= :max_date
+        ORDER BY ts_code, bar_time
+    """)
+    with engine.connect() as conn:
+        return pd.read_sql(sql, conn, params={
+            "codes": ts_codes,
+            "min_date": min_date,
+            "max_date": max_date,
+        })
 
 
 def load_stock_pools() -> pd.DataFrame:
