@@ -1,86 +1,938 @@
-我建议你现在补的功能
-1）在 daily inference 里加一个保存步骤
+先结论。
 
-每次推理后，把这些字段保存：
+你现在不要急着继续调策略参数，先把框架修干净。
+我建议你把这轮工作分成两个目标：
 
-trade_date / obs_date
-ts_code
-signal_id
-obs_day
-pred_sell_reg
-pred_sell_cls
-pred_buy_reg
-pred_buy_cls
-model_version
-feature_version
-generated_at
+1. **修复时间混乱**：明确所有脚本都遵守“**T日收盘后预测，T+1开盘执行**”
+2. **排查并消除潜在前视偏差**：尤其是“**按 selection_date 切分、按 obs_date 取特征**”这个风险
 
-这一步是必须的。
+下面我给你一份可以直接执行的完整修改和测试建议。
 
-2）保存方式建议 append-only
+---
 
-不要覆盖写，建议：
+# 一、先统一一套不可动摇的时间定义
 
-按日期追加
-或按日期分文件保存
+这个必须先定死，否则后面越改越乱。
+
+## 1.1 统一字段语义
+
+以后全项目只保留这几个核心时间概念：
+
+* `signal_date`：原始信号生成日
+* `obs_date`：模型观察/决策日，也就是 **T**
+* `decision_date`：建议直接等于 `obs_date`
+* `execution_date`：下一个交易日，也就是 **T+1**
+* `entry_date`：实际买入执行日，等于 `execution_date`
+* `exit_date`：实际卖出执行日，也是某个决策日的下一交易日
+
+### 明确规定
+
+* **模型输入特征只能用到 `obs_date` 当日收盘后可见信息**
+* **模型输出是 `obs_date=T` 收盘后的决策依据**
+* **任何买卖都只能在 `execution_date=T+1` 开盘执行**
+
+---
+
+## 1.2 禁止模糊用词
+
+建议你在代码里逐步废弃或者少用这些模糊名字：
+
+* `trade_date`
+* `current_date`
+* `selection_date`（可以保留在样本构造里，但不要拿来做回测主时钟）
+
+### 推荐做法
+
+在回测/推理主流程里统一用：
+
+* `decision_date`
+* `execution_date`
+
+这样你以后再看代码，不会混淆：
+
+* 这是信号发生日？
+* 还是模型观测日？
+* 还是第二天执行日？
+
+---
+
+# 二、先修“前视偏差最大嫌疑点”：切分口径
+
+这是最优先修改项。
+
+---
+
+## 2.1 当前问题
+
+你现在训练/验证/测试切分，是按：
+
+* `selection_date`
+
+但样本特征是按：
+
+* `obs_date`
+
+来取的。
+
+这意味着：
+
+* 训练集里可能包含 `obs_date` 已经进入验证期的样本
+* 验证集里可能包含 `obs_date` 已经进入测试期的样本
+
+这是最危险的地方。
+
+---
+
+## 2.2 必改建议：切分必须以 `obs_date` 为主
+
+### 推荐修改原则
+
+在 `02_train_gbdt_models.py` 里，把当前：
+
+```python
+train_mask = df["selection_date"] <= train_cutoff
+val_mask = ...
+test_mask = ...
+```
+
+改成：
+
+```python
+train_mask = df["obs_date"] <= train_cutoff
+val_mask = (df["obs_date"] > train_cutoff) & (df["obs_date"] <= val_cutoff)
+test_mask = df["obs_date"] > val_cutoff
+```
+
+如果你还想保留 embargo，就写成：
+
+```python
+train_end = ...
+val_start = train_end + embargo_days
+val_end = ...
+test_start = val_end + embargo_days
+```
+
+然后按 `obs_date` 做切分。
+
+---
+
+## 2.3 更稳妥的版本
+
+如果你担心同一个 `signal_id` 的多个 `obs_day` 横跨不同集合，建议再加一条限制：
+
+### 同一个 `signal_id` 不允许跨 train/val/test
+
+实现方式有两种：
+
+#### 方案 A：按 `signal_id` 的最早 `obs_date` 归属
 
 例如：
 
-predictions/2026-05-08.parquet
-predictions/2026-05-09.parquet
+* 某个 `signal_id` 第一次 `obs_date` 落在 train
+* 那它整个 signal 的所有样本都归 train
 
-或者一个总表 append。
+#### 方案 B：直接按 `signal_id` 的 `signal_date` 预切，再要求对应 `obs_date` 不越界
 
-3）replay 读取逻辑改成“优先读真实预测”
+这个更复杂一点，但也更严格。
 
-比如：
+### 我的建议
 
-若目标日期有真实保存预测
+先上 **按 `obs_date` 切分** 就够了。
+先把最大的风险消掉，再看要不要进一步做 signal 级别封锁。
 
-→ 用真实预测 replay
+---
 
-若目标日期没有真实保存预测
+# 三、预测文件体系要彻底分家
 
-→ 明确标记：
+这个是修复“时间混乱”的核心。
 
-NO_REAL_PREDICTION_DATA
-如需要，再退回 projection 模式
+---
 
-这样语义就清楚了。
+## 3.1 你现在的问题
 
-最小改法 vs 最优改法
-最小改法
+现在系统里至少混着两种预测来源：
 
-直接在当前 daily inference 结束后：
+### A. 离线研究预测
 
-append 到一个 daily_predictions.parquet
+* `candidate_with_scores.parquet`
+* `full_test_predictions.parquet`
+
+### B. 真实每日预测
+
+* `predictions/YYYY-MM-DD.parquet`
+
+但目前：
+
+* 回测在吃 `full_test_predictions.parquet`
+* 日报/推理又时不时回退到 `full_test_predictions.parquet`
+
+所以生产口径和研究口径没分开。
+
+---
+
+## 3.2 你应该建立两个世界
+
+### 世界 1：研究世界
+
+文件：
+
+* `candidate_with_scores.parquet`
+* `full_test_predictions.parquet`
+
+用途：
+
+* 只用于研究
+* 只用于历史对照
+* 不允许生产脚本默认读取
+
+---
+
+### 世界 2：生产/准生产世界
+
+文件：
+
+* `predictions/YYYY-MM-DD.parquet`
+
+用途：
+
+* 只记录 **T 日收盘后真实生成并冻结的预测**
+* append-only
+* 一旦写出，不允许回写覆盖历史日期
+
+---
+
+## 3.3 明确规定
+
+### 规则 1
+
+`08_daily_inference_report.py` 和 replay 脚本：
+
+* **如果目标日期属于 live/replay 范围**
+* 只能读 `predictions/T.parquet`
+* 没有就报错，不允许静默回退 `full_test_predictions.parquet`
+
+### 规则 2
+
+`full_test_predictions.parquet` 只能给：
+
+* 研究回测
+* 对照实验
+* 历史离线 replay
+
+### 规则 3
+
+生产日报不能再依赖回测 snapshot 来恢复状态
+
+---
+
+# 四、回测、replay、日报必须共用一个决策内核
+
+你现在最大的问题之一，是三套口径并不完全一致。
+
+---
+
+## 4.1 当前不一致点
+
+### 回测里
+
+`model_exit` 允许：
+
+* 先精确匹配 `(signal_id, prev_date)`
+* 找不到再回退到 `<= prev_date` 的最近预测
+
+### replay 里
+
+只允许：
+
+* 精确匹配
+* 不允许回退
+
+这会导致：
+
+* 同一天回测说卖
+* replay 说没信号不卖
+
+所以永远对不齐。
+
+---
+
+## 4.2 必改建议：统一成一个纯函数
+
+建议抽出一个文件，比如：
+
+* `engine/decision_core.py`
+
+核心函数：
+
+```python
+decide_eod(
+    decision_date,
+    holdings,
+    candidate_preds_today,
+    exit_preds_lookup,
+    config
+)
+```
+
+输入：
+
+* 当日持仓
+* 当日候选买入预测
+* 当日用于退出的预测引用
+* 配置参数
+
+输出：
+
+* `pending_buys_for_next_open`
+* `pending_sells_for_next_open`
+* `decision_log`
+
+---
+
+## 4.3 统一退出口径
+
+你要明确选一种，不能再两边不一样。
+
+### 推荐方案：严格精确匹配
+
+只允许 `(signal_id, decision_date)` 或 `(signal_id, prev_date)` 的明确预测。
+没有就视为“模型无新意见”。
 
 优点：
 
-改动小
-很快就能让 replay 有真实输入
-最优改法
+* 时间边界最干净
+* 和生产一致性最好
 
-建一个统一的预测结果表/仓库，例如：
+缺点：
 
-model_predictions 数据库表
-或
-分区 parquet 仓库
+* 某些长持仓场景下，模型退出覆盖率会降低
 
-字段里带上：
+---
 
-日期
-模型版本
-生成时间
-数据来源
+### 可选方案：显式冻结最后一次预测
 
-优点：
+如果你业务上确实想允许沿用历史预测，那就必须显式化：
 
-后面更稳
-更适合长期模拟盘 / 实盘
-一句话结论
+持仓记录里增加字段：
 
-对，你缺的就是“推理后顺便保存预测结果”的能力；有了这个能力，replay 才能对新日期做真实回放。
-但我不建议直接把所有新结果都混写进当前那个冻结的 full_test_predictions.parquet。更合理的是：
+* `last_pred_date`
+* `last_pred_buy_cls`
+* `last_pred_sell_reg`
+* `last_pred_score`
 
-保留 full_test_predictions.parquet 作为历史 test 快照，再新增一个增量预测结果仓库，供未来 replay 和日报使用。
+然后退出逻辑明确写：
+
+* 若今日无新预测，则继续使用持仓内冻结的上一版预测
+
+注意：
+这不是“隐式回退查表”，而是“显式持仓状态机”。
+
+### 我的建议
+
+现在先选 **严格精确匹配**。
+先把时间口径搞干净，再考虑增强版本。
+
+---
+
+# 五、持仓恢复不能再靠 snapshot
+
+这是另一个大坑。
+
+---
+
+## 5.1 当前问题
+
+你现在部分脚本会通过：
+
+* 回测 snapshots
+* 或 run_backtest 的状态快照
+
+来恢复生产/日报视角下的持仓。
+
+这会导致：
+
+* 生产状态依赖研究状态
+* 真实执行链和模拟链缠在一起
+
+---
+
+## 5.2 正确做法：建账本
+
+最少要有三本账。
+
+### 账本 1：预测账本
+
+目录：
+
+* `predictions/YYYY-MM-DD.parquet`
+
+字段建议：
+
+* `decision_date`
+* `obs_date`
+* `signal_id`
+* `ts_code`
+* `obs_day`
+* `pred_buy_cls`
+* `pred_sell_cls`
+* `pred_buy_reg`
+* `pred_sell_reg`
+* `score`
+* `model_version`
+* `feature_version`
+* `generated_at`
+
+---
+
+### 账本 2：决策账本
+
+目录：
+
+* `decisions/YYYY-MM-DD.parquet`
+
+字段建议：
+
+* `decision_date`
+* `signal_id`
+* `ts_code`
+* `action` (`buy` / `sell` / `hold`)
+* `reason`
+* `score`
+* `rank`
+* `position_size_suggested`
+* `execution_date`
+
+---
+
+### 账本 3：执行账本
+
+目录：
+
+* `executions/YYYY-MM-DD.parquet`
+
+字段建议：
+
+* `execution_date`
+* `decision_date`
+* `signal_id`
+* `ts_code`
+* `action`
+* `executed_price_open`
+* `shares`
+* `amount`
+* `status`
+
+---
+
+### 账本 4：持仓快照账本
+
+目录：
+
+* `holdings/YYYY-MM-DD.parquet`
+
+字段建议：
+
+* `date`
+* `signal_id`
+* `ts_code`
+* `entry_date`
+* `entry_price`
+* `shares`
+* `holding_days`
+* `last_pred_date`
+* `last_score`
+
+---
+
+## 5.3 状态恢复原则
+
+以后所有脚本恢复持仓，只允许：
+
+* 上一交易日 `holdings`
+* 上一交易日 `executions`
+
+推出来今天开盘后的持仓。
+
+**不允许再通过回测 snapshot 反推出生产状态。**
+
+---
+
+# 六、建议你重构主流程
+
+---
+
+## 6.1 真实/准真实日常流程
+
+### Step 1：T 日开盘前
+
+读取：
+
+* `holdings/T-1`
+* `executions/T`
+
+执行 T 日开盘成交后的持仓更新
+
+---
+
+### Step 2：T 日收盘后
+
+基于 T 日收盘数据构建模型输入样本
+
+只允许使用：
+
+* 截止 T 日收盘可见数据
+
+生成：
+
+* `predictions/T.parquet`
+
+---
+
+### Step 3：T 日收盘后决策
+
+调用统一 `decide_eod()`：
+
+输入：
+
+* 开盘执行后的当前持仓
+* `predictions/T.parquet`
+
+输出：
+
+* `decisions/T.parquet`
+* `pending orders for T+1 open`
+
+---
+
+### Step 4：T+1 日开盘
+
+执行前一日晚上的 pending orders
+写入：
+
+* `executions/T+1.parquet`
+
+---
+
+## 6.2 历史回测流程
+
+历史回测不能再是一条完全不同的脑回路。
+应该只是“历史版的同一流程重放”。
+
+也就是：
+
+* 对每个历史 T 日
+* 只读取该日可见预测
+* T 日决策
+* T+1 开盘执行
+* 写持仓/执行/收益
+
+研究模式只是在数据准备上更方便，不代表逻辑可以不同。
+
+---
+
+# 七、我建议你先做的修改顺序
+
+下面这个顺序最稳。
+
+---
+
+## 第一阶段：先修时间口径，不改策略规则
+
+### 任务 1：训练切分改成按 `obs_date`
+
+这是优先级最高的。
+
+**目标**
+
+* train/val/test 不再按 `selection_date`
+* 改成按 `obs_date`
+* 加 embargo
+
+**通过标准**
+
+* train 的 `obs_date.max() <= train_end`
+* val 的 `obs_date.min() > train_end + embargo`
+* val 的 `obs_date.max() <= val_end`
+* test 的 `obs_date.min() > val_end + embargo`
+
+---
+
+### 任务 2：生产脚本不再回退 `full_test_predictions.parquet`
+
+**目标**
+
+* `08_daily_inference_report.py`
+* `06_daily_inference_replay.py`
+
+对 live/replay 日期：
+
+* 没有 `predictions/T.parquet` 就报错
+
+**通过标准**
+
+* 删除/禁用静默 fallback
+* 日报状态完全由预测账本+持仓账本恢复
+
+---
+
+### 任务 3：统一退出预测查找规则
+
+**目标**
+
+* backtest / replay / report 全部共用同一个函数
+* 先采用严格精确匹配
+
+**通过标准**
+
+* 同一输入数据下，backtest/replay 对同一天输出完全一致
+
+---
+
+### 任务 4：持仓恢复改成账本驱动
+
+**目标**
+
+* 不再读取 snapshot
+* 只读 holdings + executions
+
+**通过标准**
+
+* 删除 `_get_start_holdings()` 内对回测 snapshot 的依赖
+
+---
+
+## 第二阶段：再修研究与生产解耦
+
+### 任务 5：建立独立 `generate_daily_predictions.py`
+
+例如：
+
+* `pipeline/07_generate_daily_predictions.py`
+
+职责只做一件事：
+
+* 对指定 `decision_date=T`
+* 生成并冻结 `predictions/T.parquet`
+
+**通过标准**
+
+* 日报/决策脚本不再内嵌推理
+* 推理和报告职责分开
+
+---
+
+### 任务 6：抽离 `decision_core.py`
+
+**目标**
+
+* 回测、replay、生产日报共用同一个决策内核
+
+**通过标准**
+
+* 三条链路没有各自私有版买卖判断代码
+
+---
+
+# 八、修改后必须做的测试清单
+
+这是最重要的部分。
+
+---
+
+## 测试 A：时间边界审计
+
+先做静态检查。
+
+### 要检查的内容
+
+#### A1. 样本切分审计
+
+输出表格：
+
+* train / val / test 各自样本数
+* `obs_date.min/max`
+* `selection_date.min/max`
+* `signal_id` 数量
+* 是否有跨边界 signal
+
+#### A2. 越界计数
+
+重点统计：
+
+* `train` 中 `obs_date > train_end` 的样本数
+* `val` 中 `obs_date > val_end` 的样本数
+* `train` 中 `obs_date >= val_start` 的样本数
+* `val` 中 `obs_date >= test_start` 的样本数
+
+### 通过标准
+
+全部应为 0。
+
+---
+
+## 测试 B：严格时间切分重跑
+
+这是最关键的真实性测试。
+
+### 操作
+
+用修改后的：
+
+* 按 `obs_date` 切分
+* 严格 embargo
+
+重新训练 + 重新生成 test predictions + 重新回测。
+
+### 你要比较的结果
+
+和旧版本对比：
+
+* 年化收益
+* Sharpe
+* 最大回撤
+* 胜率
+* 平均持仓天数
+* 每日交易数
+* 单笔收益分布
+
+### 解读
+
+* 如果结果只小幅下降，说明之前问题不算大
+* 如果结果大幅塌陷，说明原来存在明显时间污染
+
+---
+
+## 测试 C：预测打乱 sanity check
+
+这个非常有用。
+
+### C1. 随机打乱 test 预测
+
+把 test 内的：
+
+* `pred_buy_cls`
+* `pred_sell_reg`
+* `score`
+
+随机重排，再回测。
+
+### 正常结果
+
+收益应明显塌，Sharpe 应显著下降。
+
+如果打乱后还很好，那框架肯定有问题。
+
+---
+
+### C2. 预测平移测试
+
+把 test 预测整体：
+
+* 向后平移 5 天
+* 向后平移 20 天
+
+再回测。
+
+### 正常结果
+
+表现应显著恶化。
+
+如果不怎么变，说明模型预测可能不是主要收益来源，或者框架存在错位问题。
+
+---
+
+## 测试 D：极简策略对照测试
+
+目的是防止你把“框架红利”误当成“模型能力”。
+
+### D1. 只用 `obs_day=1`
+
+现在你可能用 `[1,2,3]`。
+先只保留 `obs_day=1` 回测一次。
+
+### D2. 只用简单排序
+
+例如不用复合 score，只用一个单因子或固定规则。
+
+### 比较
+
+* `obs_day=1`
+* `obs_day in [1,2,3]`
+* 简单排序
+* 模型排序
+
+### 正常预期
+
+模型版应该更好，但不能夸张离谱。
+
+---
+
+## 测试 E：生产链路一致性测试
+
+目的是验证“回测=重放生产”。
+
+### 操作
+
+选一小段历史，例如 20 个交易日：
+
+1. 用新回测引擎跑一遍
+2. 用“逐日生成 predictions + 逐日决策 + 逐日执行”的 replay 再跑一遍
+
+### 比较
+
+逐日核对：
+
+* 当天候选池
+* 当天 buy/sell 决策
+* 次日执行价格
+* 持仓列表
+* 净值曲线
+
+### 通过标准
+
+应 100% 一致。
+
+只要不一致，就说明仍有两套逻辑。
+
+---
+
+## 测试 F：缺失预测鲁棒性测试
+
+这个是生产很容易出问题的点。
+
+### 场景
+
+故意删除某一天 `predictions/T.parquet`
+
+### 检查系统行为
+
+应当：
+
+* 明确报错
+* 或明确标记 NO_REAL_PREDICTION_DATA
+* 不允许偷偷回退到 `full_test_predictions.parquet`
+
+### 通过标准
+
+生产链路必须显式失败或显式标记，不允许静默替代。
+
+---
+
+# 九、建议你输出的测试报告格式
+
+每次改完，别只看一个总收益，建议固定输出这几张表。
+
+---
+
+## 表 1：数据边界审计表
+
+| split | samples | signals | obs_date_min | obs_date_max | violation_count |
+| ----- | ------: | ------: | ------------ | ------------ | --------------: |
+
+---
+
+## 表 2：版本对比表
+
+| version | split_rule | fallback | exit_match_rule | annual_return | sharpe | max_dd | trades |
+| ------- | ---------- | -------- | --------------- | ------------: | -----: | -----: | -----: |
+
+---
+
+## 表 3：sanity check 表
+
+| test_name           | expected         | actual | pass/fail |
+| ------------------- | ---------------- | ------ | --------- |
+| shuffle_predictions | performance_drop | ...    | ...       |
+| shift_5_days        | performance_drop | ...    | ...       |
+| obs_day_1_only      | moderate_drop    | ...    | ...       |
+| replay_vs_backtest  | exact_match      | ...    | ...       |
+
+---
+
+# 十、我建议你的最小落地方案
+
+你不一定要一次性大重构。
+可以先做一个“最小可信版本”。
+
+---
+
+## 最小可信版本的范围
+
+### 必改
+
+1. `02_train_gbdt_models.py`
+
+   * 改成按 `obs_date` 切分
+
+2. `dynamic_exit_backtest_v2.py`
+
+   * 退出预测查找规则固定为严格精确匹配
+   * 不再隐式回退
+
+3. `06_daily_inference_replay.py`
+
+   * 和回测共用同一个 `decision_core`
+
+4. `08_daily_inference_report.py`
+
+   * 不再回退 `full_test_predictions.parquet`
+
+5. 新增或明确：
+
+   * `predictions/T.parquet` 为唯一真实预测来源
+
+---
+
+## 暂时可以不动
+
+* 模型本身
+* 特征工程
+* 仓位映射
+* 买卖阈值
+
+先别碰这些，不然你很难判断到底是框架问题还是策略问题。
+
+---
+
+# 十一、我对你测试顺序的建议
+
+你可以按这个顺序来：
+
+### 第一步
+
+只改：
+
+* `obs_date` 切分
+* 禁止生产 fallback
+* 统一退出匹配规则
+
+### 第二步
+
+跑 4 个测试：
+
+* 时间边界审计
+* 严格时间切分回测
+* shuffle test
+* replay vs backtest 对账
+
+### 第三步
+
+如果这一步结果仍然不错，再继续优化策略。
+如果这一步明显塌了，先别怀疑模型，先承认旧结果掺了时间污染。
+
+---
+
+# 十二、最后给你一个判断标准
+
+修完后，你要敢于接受一种可能：
+
+> **结果变差，不代表你改错了，反而可能代表你终于把结果变真实了。**
+
+你现在最需要的不是更漂亮的回测，而是**可信的回测**。
+只要通过下面这三条，就说明方向对了：
+
+1. 切分边界干净
+2. 回测与 replay 完全一致
+3. shuffle / shift 后结果明显失效
+
+这时哪怕收益下降，你也终于站在实盘可落地的地面上了。

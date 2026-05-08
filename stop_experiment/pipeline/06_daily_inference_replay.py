@@ -59,6 +59,9 @@ from stop_experiment.pipeline.stop_config import (
 from stop_experiment.backtest.dynamic_exit_backtest_v2 import (
     _load_data, run_backtest,
 )
+from stop_experiment.backtest.decision_core import (
+    find_exit_pred,
+)
 from stop_experiment.backtest.simple_backtest import score_stocks
 
 DYNAMIC_DIR = os.path.join(BACKTEST_DIR, "dynamic")
@@ -129,26 +132,6 @@ def build_daily_candidate_snapshot(date, df_all, score_col="composite_score"):
     sub = sub.drop_duplicates(subset=["ts_code"], keep="first")
 
     return sub.reset_index(drop=True)
-
-
-def _find_latest_pred_for_signal(signal_id, prev_date, pred_lookup):
-    """
-    查找某信号在 prev_date 的精确匹配预测。
-
-    不再使用回退逻辑，因为使用过期预测做决策是危险的。
-    如果 (signal_id, prev_date) 不存在，返回 None。
-
-    Input:
-        signal_id:    信号 ID
-        prev_date:    当前决策日的前一个交易日
-        pred_lookup:  {(signal_id, obs_date): pred_dict}
-
-    Output:
-        pred_dict 或 None
-    """
-    sid_int = int(signal_id)
-    # 只返回精确匹配，不允许回退
-    return pred_lookup.get((sid_int, prev_date))
 
 
 def decide_daily_actions(date, holdings, candidates, pred_lookup, prev_date,
@@ -225,7 +208,7 @@ def decide_daily_actions(date, holdings, candidates, pred_lookup, prev_date,
         if not should_sell and prev_date is not None and h["days_held"] > 1:
             sid = h.get("signal_id")
             if sid is not None:
-                pred = _find_latest_pred_for_signal(sid, prev_date, pred_lookup)
+                pred = find_exit_pred(sid, prev_date, pred_lookup)
                 if pred is not None:
                     bc = pred.get("pred_buy_cls", np.nan)
                     if not np.isnan(bc) and bc > exit_threshold:

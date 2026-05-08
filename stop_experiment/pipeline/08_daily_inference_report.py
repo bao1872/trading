@@ -82,11 +82,13 @@ _six_mod = importlib.util.module_from_spec(_six_spec)
 _six_spec.loader.exec_module(_six_mod)
 decide_daily_actions = _six_mod.decide_daily_actions
 build_daily_candidate_snapshot = _six_mod.build_daily_candidate_snapshot
-_find_latest_pred = _six_mod._find_latest_pred_for_signal
+# find_exit_pred 从 decision_core 直接导入（SSOT），不再从 replay 模块间接引用
+from stop_experiment.backtest.decision_core import find_exit_pred
 
 # ==================== 常量 ====================
 
 REPORT_DIR = os.path.join(OUTPUT_DIR, "daily_report")
+HOLDINGS_DIR = os.path.join(OUTPUT_DIR, "holdings")
 DEFAULT_MAX_STOCKS = V1_PARAMS.get("max_stocks_default", 10)
 
 # Tier 仓位映射配置（与 tier_weight_mapping.py 保持一致）
@@ -121,6 +123,71 @@ def load_real_predictions_for_date(target_date):
         print(f"  [真实预测] 已加载: {day_path} ({len(df)} 行)")
         return df
     return None
+
+
+def save_holdings(date, holdings, pending_buys=None, pending_sells=None):
+    """
+    保存当日决策后持仓到 holdings/YYYY-MM-DD.parquet（账本驱动）。
+
+    Input:
+        date:          决策日
+        holdings:      dict {code: {ts_code, buy_date, buy_price, weight, days_held, signal_id, score, ...}}
+        pending_buys:  [(code, buy_price, ts_code, score, signal_id), ...] T+1 待买入
+        pending_sells: [{"code": ..., "holding": {...}, "reason": ...}, ...] T+1 待卖出
+    """
+    os.makedirs(HOLDINGS_DIR, exist_ok=True)
+    if isinstance(date, str):
+        date = pd.to_datetime(date)
+
+    rows = []
+    for code, h in holdings.items():
+        rows.append({
+            "date": date,
+            "code": code,
+            "ts_code": h.get("ts_code", code),
+            "entry_date": h.get("buy_date"),
+            "entry_price": h.get("buy_price"),
+            "weight": h.get("weight"),
+            "days_held": h.get("days_held"),
+            "signal_id": h.get("signal_id"),
+            "score": h.get("score"),
+        })
+
+    df = pd.DataFrame(rows)
+    path = os.path.join(HOLDINGS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
+    df.to_parquet(path, index=False)
+    print(f"  [持仓保存] {path} ({len(df)} 只)")
+
+
+def load_holdings(date):
+    """
+    从 holdings/YYYY-MM-DD.parquet 读取持仓。
+
+    Input:
+        date: 目标日期
+
+    Output:
+        holdings dict 或 None
+    """
+    if isinstance(date, str):
+        date = pd.to_datetime(date)
+    path = os.path.join(HOLDINGS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
+    if not os.path.exists(path):
+        return None
+    df = pd.read_parquet(path)
+    holdings = {}
+    for _, row in df.iterrows():
+        code = row["code"]
+        holdings[code] = {
+            "buy_date": row.get("entry_date"),
+            "buy_price": row.get("entry_price"),
+            "weight": row.get("weight", 1.0 / DEFAULT_MAX_STOCKS),
+            "days_held": row.get("days_held", 0),
+            "ts_code": row.get("ts_code", code),
+            "signal_id": row.get("signal_id"),
+            "score": row.get("score", 0),
+        }
+    return holdings if holdings else None
 
 
 def persist_predictions_for_date(target_date, df_pred):
@@ -797,38 +864,28 @@ def _build_candidate_pool(target_date, df_all_raw, pred_indexed, trading_days):
             real_pred = _annotate_tier_for_report(real_pred)
         return real_pred, prev_date
 
-    # ② 直接命中: target_date 必须在 full_test_predictions.parquet 范围内
-    # 逻辑：T日收盘后运行，应该有T日的数据。
-    # 如果 target_date 不在范围内，说明数据过期，应该更新，而不是回退到 prev_date。
-    all_obs_dates = sorted(df_all_raw["obs_date"].unique())
-    if target_date in all_obs_dates:
-        raw_candidates = build_daily_candidate_snapshot(target_date, df_all_raw, score_col="score")
-        if not raw_candidates.empty:
-            if "tier" not in raw_candidates.columns:
-                raw_candidates = _annotate_tier_for_report(raw_candidates)
-            print(f"  [候选] 直接命中: {target_date.strftime('%Y-%m-%d')} 候选池, 去重后 {len(raw_candidates)} 只")
-            return raw_candidates, prev_date
-
-    # ③ 数据过期: target_date 不在 full_test_predictions.parquet 范围内
-    # 不再回退到 prev_date，因为会导致使用过期数据做决策
-    # 也不再使用合成逻辑，因为会导致不同日期的 top10 完全相同（bug）
-    latest_src_date = all_obs_dates[-1] if all_obs_dates else "未知"
+    # ② 无真实预测 → 报错，不再回退到 full_test_predictions.parquet
+    #    依 advicement.txt 建议：生产链路必须显式失败，不允许静默替代
     raise ValueError(
-        f"数据过期：full_test_predictions.parquet 最多到 {latest_src_date.strftime('%Y-%m-%d')}，"
-        f"但目标决策日（T日）是 {target_date.strftime('%Y-%m-%d')}。"
-        f"请先运行上游流水线更新数据："
-        f"python stop_experiment/pipeline/01_selection_dsa.py"
+        f"NO_REAL_PREDICTION_DATA: predictions/{target_date.strftime('%Y-%m-%d')}.parquet 不存在。"
+        f"请先运行 python stop_experiment/pipeline/07_generate_daily_predictions.py "
+        f"--date {target_date.strftime('%Y-%m-%d')} 生成当日预测，"
+        f"或运行 python stop_experiment/backtest/generate_full_predictions.py 生成全量历史预测。"
     )
 
 
 def _get_start_holdings(target_date, snapshots_map, trading_days, price_pivot, pred_indexed):
     """
-    从 snapshots_map 获取 target_date 决策前的持仓状态。
-    如果 snapshots_map 不包含 target_date 前一日，则从最新 snapshot 手动推进。
+    获取 target_date 决策前的持仓状态。
+
+    优先级:
+    1. holdings/prev_date.parquet（账本驱动，真实持仓历史）
+    2. snapshots_map[prev_date]（回测快照，deprecated，兼容旧数据）
+    3. 手动推进（从最新 holdings/snapshot 推进到 prev_date）
 
     Input:
         target_date:    目标决策日（T日）
-        snapshots_map:  {date: snapshot}
+        snapshots_map:  {date: snapshot}（deprecated 兼容）
         trading_days:   交易日列表
         price_pivot:    价格宽表
         pred_indexed:   预测查找表
@@ -845,13 +902,20 @@ def _get_start_holdings(target_date, snapshots_map, trading_days, price_pivot, p
         print(f"  [持仓] 无法确定前一日: target={target_date}")
         return {}, [], [], None
 
+    # ① 优先从 holdings 账本恢复
+    from_snapshots = load_holdings(prev_date)
+    if from_snapshots is not None:
+        print(f"  [持仓] 来源: holdings/{prev_date.strftime('%Y-%m-%d')}.parquet, "
+              f"持仓 {len(from_snapshots)} 只")
+        return from_snapshots, [], [], prev_date
+
+    # ② 回退到 snapshots_map（deprecated）
     if prev_date in snapshots_map:
+        print(f"  [持仓] 来源: {prev_date.strftime('%Y-%m-%d')} snapshot (deprecated)")
         snap = snapshots_map[prev_date]
         holdings = {k: dict(v) for k, v in snap.get("holdings_after", {}).items()}
         buys = snap.get("buys", [])
         pending_buys = [(b["code"], b["buy_price"], b["ts_code"], b["score"], b["signal_id"]) for b in buys]
-        # 从 snapshot 恢复 pending_sells（T-1日决策、T日开盘执行的卖出）
-        # 注意：snapshot 中字段名是 to_sell（仅含 code 列表），需结合 holdings_after 重建完整结构
         to_sell_codes = snap.get("to_sell", [])
         sell_reasons_map = snap.get("sell_reasons", {})
         pending_sells = []
@@ -862,25 +926,38 @@ def _get_start_holdings(target_date, snapshots_map, trading_days, price_pivot, p
                 "holding": dict(holding),
                 "reason": sell_reasons_map.get(holding.get("ts_code", code), ""),
             })
-
-        print(f"  [持仓] 来源: {prev_date.strftime('%Y-%m-%d')} snapshot holdings_after, "
-              f"持仓 {len(holdings)} 只, pending_buys {len(pending_buys)} 只, "
-              f"pending_sells {len(pending_sells)} 只")
         return holdings, pending_buys, pending_sells, prev_date
 
-    # 手动推进（从最新 snapshot 推进到 prev_date）
-    latest_snap_date = max(snapshots_map.keys())
-    snap = snapshots_map[latest_snap_date]
-    holdings = {k: dict(v) for k, v in snap.get("holdings_after", {}).items()}
-    pending_from_snap = [(b["code"], b["buy_price"], b["ts_code"], b["score"], b["signal_id"])
-                         for b in snap.get("buys", [])]
-    pending_sells_from_snap = []  # 手动推进时不考虑 sells（简化处理）
+    # ③ 手动推进（从最新 holdings 或 snapshot）
+    latest_holdings = None
+    # 先尝试从最新的 holdings 文件恢复
+    for d in sorted(trading_days, reverse=True):
+        h = load_holdings(d)
+        if h is not None:
+            latest_holdings = h
+            latest_snap_date = d
+            break
+
+    if latest_holdings is None and snapshots_map:
+        # 回退到最新 snapshot
+        latest_snap_date = max(snapshots_map.keys())
+        snap = snapshots_map[latest_snap_date]
+        latest_holdings = {k: dict(v) for k, v in snap.get("holdings_after", {}).items()}
+        print(f"  [持仓] 推进起点: {latest_snap_date.strftime('%Y-%m-%d')} snapshot (deprecated)")
+    elif latest_holdings is None:
+        print(f"  [持仓] 无可用持仓数据: target={target_date}")
+        return {}, [], [], prev_date
+    else:
+        print(f"  [持仓] 推进起点: holdings/{latest_snap_date.strftime('%Y-%m-%d')}.parquet")
+
+    holdings = latest_holdings
+    pending_from_snap = []
+    pending_sells_from_snap = []
 
     advance_steps = sorted([d for d in trading_days if latest_snap_date < d <= prev_date])
-    print(f"  [持仓] 来源: {latest_snap_date.strftime('%Y-%m-%d')} snapshot → 推进 {len(advance_steps)} 天到 {prev_date.strftime('%Y-%m-%d')}")
+    print(f"  [持仓] 推进 {len(advance_steps)} 天到 {prev_date.strftime('%Y-%m-%d')}")
 
     for step_date in advance_steps:
-        # 执行 pending_buys（step_date 开盘）
         for code, bp_val, ts_code_val, sc_val, sid_val in pending_from_snap:
             holdings[code] = {
                 "buy_date": step_date, "buy_price": bp_val,
@@ -890,7 +967,6 @@ def _get_start_holdings(target_date, snapshots_map, trading_days, price_pivot, p
             }
         pending_from_snap = []
 
-        # 执行 pending_sells（step_date 开盘）— 简化处理：直接删除持仓
         for sell_item in pending_sells_from_snap:
             code = sell_item["code"]
             if code in holdings:
@@ -1623,6 +1699,9 @@ def main():
     # 将 pending_sells_new 转换为便于打印的格式
     sells = [item["holding"]["ts_code"] for item in pending_sells_new]
     sell_reasons = {item["holding"]["ts_code"]: item["reason"] for item in pending_sells_new}
+
+    # ---- 保存决策后持仓到 holdings 账本 ----
+    save_holdings(target_date, holdings_after, pending_buys_new, pending_sells_new)
 
     # ---- 构建股票名称映射（在决策之后，收集所有涉及的 ts_code）----
     all_ts_codes = set()

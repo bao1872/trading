@@ -76,6 +76,11 @@ from stop_experiment.backtest.simple_backtest import (
     score_stocks, compute_summary,
 )
 
+from stop_experiment.backtest.decision_core import (
+    find_exit_pred,
+    evaluate_model_exit,
+)
+
 DYNAMIC_DIR = os.path.join(BACKTEST_DIR, "dynamic")
 
 # ---- 固定参数 (网格搜索确定) ----
@@ -122,58 +127,8 @@ def _load_data(candidate_obs_days=None):
 
 
 # ---- 退出评估函数 ----
-
-def _find_latest_pred_for_signal(signal_id, prev_date, pred_lookup):
-    """
-    查找某信号在 prev_date 及之前的最新可用预测。
-
-    当 (signal_id, prev_date) 不存在时，回退到该信号所有日期中 <= prev_date 的最大日期对应的预测。
-    这确保持仓股票在超过 obs_day=3 后仍能用最新模型输出做退出判断。
-
-    Input:
-        signal_id:    信号 ID
-        prev_date:    当前决策日的前一个交易日
-        pred_lookup:  {(signal_id, obs_date): pred_dict}
-
-    Output:
-        pred_dict 或 None
-    """
-    sid_int = int(signal_id)
-    # 先尝试精确匹配
-    exact = pred_lookup.get((sid_int, prev_date))
-    if exact is not None:
-        return exact
-
-    # 回退: 找该信号所有 <= prev_date 的日期中最大的那个
-    candidates = [
-        dt for (sid, dt) in pred_lookup if sid == sid_int and dt <= prev_date
-    ]
-    if not candidates:
-        return None
-    latest_date = max(candidates)
-    return pred_lookup.get((sid_int, latest_date))
-
-
-def evaluate_model_exit(holding, code, prev_date, pred_lookup, threshold=None):
-    """
-    buy-only 模型退出:
-    - pred_buy_cls_prev > threshold → model_risk
-    - current_ret < -7% → stop_loss (由调用方处理)
-    - days_held > 20 → max_hold (由调用方处理)
-
-    当精确 (signal_id, prev_date) 无预测时，自动回退到该信号最新可用预测。
-    """
-    days_held = holding["days_held"]
-    signal_id = holding.get("signal_id")
-    _threshold = threshold if threshold is not None else BUY_CLS_EXIT_THRESHOLD
-
-    if signal_id is not None and days_held > 1 and prev_date is not None:
-        pred = _find_latest_pred_for_signal(signal_id, prev_date, pred_lookup)
-        if pred is not None:
-            bc = pred.get("pred_buy_cls", np.nan)
-            if not np.isnan(bc) and bc > _threshold:
-                return True, "model_risk"
-    return False, ""
+# find_exit_pred / evaluate_model_exit 从 decision_core.py 导入
+# 严格精确匹配（无回退），保证回测和 replay 口径一致
 
 
 def evaluate_rule_exit(holding, code, day_close, take_profit):

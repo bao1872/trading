@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import pandas as pd
 
 from stop_experiment.pipeline.stop_config import (
-    OUTPUT_DIR, VAL_END,
+    OUTPUT_DIR, OBS_VAL_END,
 )
 
 
@@ -49,12 +49,12 @@ def main():
     print(f"\n[1/3] 加载: {input_path}")
     df = pd.read_parquet(input_path)
     df["selection_date"] = pd.to_datetime(df["selection_date"])
+    df["obs_date"] = pd.to_datetime(df["obs_date"])
     print(f"  总行数: {len(df)}, 列数: {len(df.columns)}")
-
-    val_end_ts = pd.Timestamp(VAL_END)
-    test_mask = df["selection_date"] > val_end_ts
+    val_end_ts = pd.Timestamp(OBS_VAL_END)
+    test_mask = df["obs_date"] > val_end_ts
     test_df = df[test_mask].copy()
-    print(f"  test集 (selection_date > {VAL_END}): {len(test_df)} 行")
+    print(f"  test集 (obs_date > {OBS_VAL_END}): {len(test_df)} 行")
 
     print(f"\n[2/3] 预测列检查...")
     pred_cols = [c for c in test_df.columns if c.startswith("pred_")]

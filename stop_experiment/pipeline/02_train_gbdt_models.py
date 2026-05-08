@@ -57,7 +57,7 @@ warnings.filterwarnings("ignore")
 from stop_experiment.pipeline.stop_config import (
     EMBARGO_DAYS, LGB_PARAMS, MODEL_SPECS,
     OUTPUT_DIR, DATASET_PATH, MODELS_DIR,
-    TRAIN_END, VAL_END,
+    OBS_TRAIN_END, OBS_VAL_END,
 )
 from stop_experiment.pipeline.factor_columns import (
     ALL_FEATURE_COLS, ALL_LABELS, META_COLS,
@@ -78,35 +78,39 @@ class DataSplit:
 
 def build_train_val_test_split(df: pd.DataFrame) -> DataSplit:
     """
-    基于 selection_date 的 train/val/test 分割。
-    
-    - train: selection_date <= TRAIN_END
-    - val:   TRAIN_END < selection_date <= VAL_END
-    - test:  selection_date > VAL_END
+    基于 obs_date 的 train/val/test 分割（修复前视偏差）。
+
+    旧版按 selection_date 切分，但特征来自 obs_date，导致 train 中混入 obs_date 已进入 val/test 期的样本。
+    新版按 obs_date 切分，确保训练时不使用未来信息。
+
+    - train: obs_date <= OBS_TRAIN_END - EMBARGO_DAYS
+    - val:   OBS_TRAIN_END < obs_date <= OBS_VAL_END
+    - test:  obs_date > OBS_VAL_END
     - 中间加 EMBARGO_DAYS 隔离防止数据泄漏
     """
-    df["selection_date"] = pd.to_datetime(df["selection_date"])
-    train_end_ts = pd.Timestamp(TRAIN_END)
-    val_end_ts = pd.Timestamp(VAL_END)
+    df["obs_date"] = pd.to_datetime(df["obs_date"])
+    obs_train_end_ts = pd.Timestamp(OBS_TRAIN_END)
+    obs_val_end_ts = pd.Timestamp(OBS_VAL_END)
     embargo_td = pd.Timedelta(days=EMBARGO_DAYS)
 
-    # train: selection_date <= TRAIN_END - embargo（避免train末尾泄漏到val）
-    train_cutoff = train_end_ts - embargo_td
-    train_mask = df["selection_date"] <= train_cutoff
+    train_cutoff = obs_train_end_ts - embargo_td
+    train_mask = df["obs_date"] <= train_cutoff
 
-    # val: TRAIN_END < selection_date <= VAL_END
-    val_mask = (df["selection_date"] > train_end_ts) & (df["selection_date"] <= val_end_ts)
+    val_mask = (df["obs_date"] > obs_train_end_ts) & (df["obs_date"] <= obs_val_end_ts)
 
-    # test: selection_date > VAL_END
-    test_mask = df["selection_date"] > val_end_ts
+    test_mask = df["obs_date"] > obs_val_end_ts
 
     train_idx = df.index[train_mask].values
     val_idx = df.index[val_mask].values
     test_idx = df.index[test_mask].values
 
-    print(f"  train: selection_date <= {train_cutoff.date()} (embargo), n={len(train_idx)}")
-    print(f"  val:   {train_end_ts.date()} < date <= {val_end_ts.date()}, n={len(val_idx)}")
-    print(f"  test:  date > {val_end_ts.date()}, n={len(test_idx)}")
+    print(f"  train: obs_date <= {train_cutoff.date()} (embargo), n={len(train_idx)}")
+    print(f"  val:   {obs_train_end_ts.date()} < obs_date <= {obs_val_end_ts.date()}, n={len(val_idx)}")
+    print(f"  test:  obs_date > {obs_val_end_ts.date()}, n={len(test_idx)}")
+
+    if obs_train_end_ts in df["obs_date"].values:
+        gap_count = ((df["obs_date"] > train_cutoff) & (df["obs_date"] <= obs_train_end_ts)).sum()
+        print(f"  embargo_gap (rejected): {gap_count} 样本")
 
     if len(train_idx) < 100:
         raise ValueError(f"训练集过小: {len(train_idx)}")
@@ -119,8 +123,8 @@ def build_train_val_test_split(df: pd.DataFrame) -> DataSplit:
         train_idx=train_idx,
         val_idx=val_idx,
         test_idx=test_idx,
-        train_end=TRAIN_END,
-        val_end=VAL_END,
+        train_end=OBS_TRAIN_END,
+        val_end=OBS_VAL_END,
     )
 
 

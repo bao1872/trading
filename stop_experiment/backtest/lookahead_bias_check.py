@@ -43,83 +43,120 @@ import numpy as np
 import pandas as pd
 
 from stop_experiment.pipeline.stop_config import (
-    OUTPUT_DIR, DATASET_PATH, TRAIN_END, VAL_END, EMBARGO_DAYS, OBS_DAYS
+    OUTPUT_DIR, DATASET_PATH, OBS_TRAIN_END, OBS_VAL_END, TRAIN_END, VAL_END, EMBARGO_DAYS, OBS_DAYS
 )
 
 
 def check_data_split():
-    """检查数据分割是否正确"""
+    """
+    检查数据分割是否正确。
+
+    同时检查 selection_date 和 obs_date 两个维度：
+    - selection_date 维度：确认旧口径分割结果
+    - obs_date 维度：确认新口径（修复前视偏差后）的分割结果
+    - 越界统计：旧口径下 train/val 中 obs_date 是否越界到后续集合
+    """
     print("\n" + "=" * 80)
-    print("【检查1】数据分割边界检查")
+    print("【检查1】数据分割边界检查（selection_date + obs_date 双维度）")
     print("=" * 80)
-    
+
     df = pd.read_parquet(DATASET_PATH)
     df["selection_date"] = pd.to_datetime(df["selection_date"])
-    
-    train_end_ts = pd.Timestamp(TRAIN_END)
-    val_end_ts = pd.Timestamp(VAL_END)
+    df["obs_date"] = pd.to_datetime(df["obs_date"])
+
+    old_train_end = pd.Timestamp(TRAIN_END)
+    old_val_end = pd.Timestamp(VAL_END)
+    obs_train_end = pd.Timestamp(OBS_TRAIN_END)
+    obs_val_end = pd.Timestamp(OBS_VAL_END)
     embargo_td = pd.Timedelta(days=EMBARGO_DAYS)
-    train_cutoff = train_end_ts - embargo_td
-    
-    # 统计各集合的日期范围
-    train_mask = df["selection_date"] <= train_cutoff
-    val_mask = (df["selection_date"] > train_end_ts) & (df["selection_date"] <= val_end_ts)
-    test_mask = df["selection_date"] > val_end_ts
-    
+
     print(f"\n配置参数:")
-    print(f"  TRAIN_END: {TRAIN_END}")
-    print(f"  VAL_END: {VAL_END}")
+    print(f"  旧口径 (selection_date): TRAIN_END={TRAIN_END}, VAL_END={VAL_END}")
+    print(f"  新口径 (obs_date):      OBS_TRAIN_END={OBS_TRAIN_END}, OBS_VAL_END={OBS_VAL_END}")
     print(f"  EMBARGO_DAYS: {EMBARGO_DAYS}")
-    print(f"  train_cutoff (TRAIN_END - embargo): {train_cutoff.date()}")
-    
-    print(f"\n实际分割:")
-    if train_mask.any():
-        train_dates = df.loc[train_mask, "selection_date"]
-        print(f"  Train: {train_dates.min().date()} ~ {train_dates.max().date()}, n={train_mask.sum()}")
-    if val_mask.any():
-        val_dates = df.loc[val_mask, "selection_date"]
-        print(f"  Val:   {val_dates.min().date()} ~ {val_dates.max().date()}, n={val_mask.sum()}")
-    if test_mask.any():
-        test_dates = df.loc[test_mask, "selection_date"]
-        print(f"  Test:  {test_dates.min().date()} ~ {test_dates.max().date()}, n={test_mask.sum()}")
-    
-    # 检查是否有重叠
-    train_max = df.loc[train_mask, "selection_date"].max() if train_mask.any() else None
-    val_min = df.loc[val_mask, "selection_date"].min() if val_mask.any() else None
-    val_max = df.loc[val_mask, "selection_date"].max() if val_mask.any() else None
-    test_min = df.loc[test_mask, "selection_date"].min() if test_mask.any() else None
-    
+
+    # ========== 旧口径：按 selection_date 分割 ==========
+    print(f"\n--- 旧口径分割 (selection_date) ---")
+    old_train_cutoff = old_train_end - embargo_td
+    o_train_mask = df["selection_date"] <= old_train_cutoff
+    o_val_mask = (df["selection_date"] > old_train_end) & (df["selection_date"] <= old_val_end)
+    o_test_mask = df["selection_date"] > old_val_end
+
+    for name, mask in [("train", o_train_mask), ("val", o_val_mask), ("test", o_test_mask)]:
+        if mask.any():
+            dates = df.loc[mask, "selection_date"]
+            print(f"  {name}: selection_date {dates.min().date()} ~ {dates.max().date()}, n={mask.sum()}")
+
+    # 关键检查：旧口径下 train/val 的 obs_date 是否越界
+    print(f"\n--- 旧口径 obs_date 越界检查 (前视偏差风险) ---")
+    if o_train_mask.any():
+        train_obs = df.loc[o_train_mask, "obs_date"]
+        viol = (train_obs > old_train_end).sum()
+        print(f"  train obs_date > {old_train_end.date()}: {viol} 样本 {'⚠️ 越界!' if viol > 0 else '✅'}")
+    if o_val_mask.any():
+        val_obs = df.loc[o_val_mask, "obs_date"]
+        viol = (val_obs > old_val_end).sum()
+        print(f"  val obs_date > {old_val_end.date()}: {viol} 样本 {'⚠️ 越界!' if viol > 0 else '✅'}")
+    if o_train_mask.any() and o_val_mask.any():
+        train_obs_max = df.loc[o_train_mask, "obs_date"].max()
+        val_obs_min = df.loc[o_val_mask, "obs_date"].min()
+        print(f"  train obs_date max: {train_obs_max.date()}, val obs_date min: {val_obs_min.date()}")
+        if train_obs_max >= val_obs_min:
+            print(f"  ❌ 严重: train obs_date 和 val obs_date 重叠!")
+
+    # ========== 新口径：按 obs_date 分割 ==========
+    print(f"\n--- 新口径分割 (obs_date, 修复后) ---")
+    train_cutoff = obs_train_end - embargo_td
+    n_train_mask = df["obs_date"] <= train_cutoff
+    n_val_mask = (df["obs_date"] > obs_train_end) & (df["obs_date"] <= obs_val_end)
+    n_test_mask = df["obs_date"] > obs_val_end
+
     issues = []
-    
-    if train_max and val_min and train_max >= val_min:
-        issues.append(f"❌ Train 和 Val 有重叠: train_max={train_max.date()} >= val_min={val_min.date()}")
-    elif train_max and val_min:
-        gap = (val_min - train_max).days
-        print(f"\n✅ Train 和 Val 无重叠，间隔 {gap} 天")
-        
-    if val_max and test_min and val_max >= test_min:
-        issues.append(f"❌ Val 和 Test 有重叠: val_max={val_max.date()} >= test_min={test_min.date()}")
-    elif val_max and test_min:
-        gap = (test_min - val_max).days
-        print(f"✅ Val 和 Test 无重叠，间隔 {gap} 天")
-    
-    # 检查 embargo 是否足够
-    if train_max and train_end_ts:
-        actual_embargo = (train_end_ts - train_max).days
-        print(f"\n  实际 embargo: {actual_embargo} 天 (配置: {EMBARGO_DAYS} 天)")
-        if actual_embargo < EMBARGO_DAYS:
-            issues.append(f"⚠️ 实际 embargo ({actual_embargo}) 小于配置 ({EMBARGO_DAYS})")
-        else:
-            print(f"✅ embargo 充足")
-    
+    for name, mask in [("train", n_train_mask), ("val", n_val_mask), ("test", n_test_mask)]:
+        if mask.any():
+            obs_dates = df.loc[mask, "obs_date"]
+            n_signals = df.loc[mask, "signal_id"].nunique()
+            print(f"  {name}: obs_date {obs_dates.min().date()} ~ {obs_dates.max().date()}, n={mask.sum()}, signals={n_signals}")
+
+    # 新口径越界检查
+    print(f"\n--- 新口径越界检查 ---")
+    if n_train_mask.any():
+        viol = (df.loc[n_train_mask, "obs_date"] > obs_train_end).sum()
+        print(f"  train obs_date > {obs_train_end.date()}: {viol} 样本 {'✅' if viol == 0 else '❌'}")
+        if viol > 0:
+            issues.append(f"train 有 {viol} 个越界样本")
+    if n_val_mask.any():
+        viol = (df.loc[n_val_mask, "obs_date"] > obs_val_end).sum()
+        print(f"  val obs_date > {obs_val_end.date()}: {viol} 样本 {'✅' if viol == 0 else '❌'}")
+        if viol > 0:
+            issues.append(f"val 有 {viol} 个越界样本")
+
+    # 同 signal_id 跨集合检查
+    print(f"\n--- 同 signal_id 跨集合检查 ---")
+    n_train_sids = set(df.loc[n_train_mask, "signal_id"].unique())
+    n_val_sids = set(df.loc[n_val_mask, "signal_id"].unique())
+    n_test_sids = set(df.loc[n_test_mask, "signal_id"].unique())
+    for a, b, s1, s2 in [("train∩val", "train", "val", n_train_sids & n_val_sids),
+                           ("val∩test", "val", "test", n_val_sids & n_test_sids),
+                           ("train∩test", "train", "test", n_train_sids & n_test_sids)]:
+        status = "⚠️" if len(s2) > 0 else "✅"
+        print(f"  {a}: {len(s2)} signals {status}")
+        if len(s2) > 0:
+            issues.append(f"{len(s2)} 个 signal_id 同时出现在 {a}")
+
     if issues:
         print("\n❌ 发现的问题:")
         for issue in issues:
             print(f"  {issue}")
     else:
-        print("\n✅ 数据分割检查通过")
-    
-    return len(issues) == 0
+        print("\n✅ 新口径数据分割检查通过（按 obs_date 无越界）")
+
+    # 返回 True 表示新口径无严重问题
+    n_severe = sum(viol > 0 for viol in [
+        (df.loc[n_train_mask, "obs_date"] > obs_train_end).sum() if n_train_mask.any() else 0,
+        (df.loc[n_val_mask, "obs_date"] > obs_val_end).sum() if n_val_mask.any() else 0,
+    ])
+    return n_severe == 0
 
 
 def check_feature_label_timing():
@@ -185,14 +222,14 @@ def check_backtest_predictions():
     print(f"  总行数: {len(pred_df)}")
     print(f"  selection_date 范围: {pred_df['selection_date'].min().date()} ~ {pred_df['selection_date'].max().date()}")
     print(f"  obs_date 范围: {pred_df['obs_date'].min().date()} ~ {pred_df['obs_date'].max().date()}")
-    
-    # 检查预测是否只来自 test 集
-    val_end_ts = pd.Timestamp(VAL_END)
-    test_mask = pred_df["selection_date"] > val_end_ts
+
+    # 检查预测是否只来自 test 集（按 obs_date 口径）
+    obs_val_end = pd.Timestamp(OBS_VAL_END)
+    test_mask = pred_df["obs_date"] > obs_val_end
     test_count = test_mask.sum()
     non_test_count = (~test_mask).sum()
-    
-    print(f"\n  Test 集预测: {test_count} 行")
+
+    print(f"\n  Test 集预测 (obs_date > {OBS_VAL_END}): {test_count} 行")
     print(f"  非 Test 集预测: {non_test_count} 行")
     
     if non_test_count > 0:
@@ -227,10 +264,10 @@ def check_feature_leakage():
     
     print(f"\n检查 {len(feature_cols)} 个数值特征与标签的相关性:")
     
-    # 只检查 test 集
-    val_end_ts = pd.Timestamp(VAL_END)
-    df["selection_date"] = pd.to_datetime(df["selection_date"])
-    test_df = df[df["selection_date"] > val_end_ts]
+    # 只检查 test 集（按 obs_date 口径）
+    obs_val_end = pd.Timestamp(OBS_VAL_END)
+    df["obs_date"] = pd.to_datetime(df["obs_date"])
+    test_df = df[df["obs_date"] > obs_val_end]
     
     if len(test_df) == 0:
         print("❌ Test 集为空")
@@ -350,10 +387,10 @@ def main():
     
     # 关键结论
     print("\n【关键结论】")
-    print("1. 数据分割: train/val/test 按 selection_date 分割，有 embargo 隔离")
+    print("1. 数据分割: 修复后按 obs_date 分割，有 25 天 embargo 隔离（旧口径有前视偏差风险）")
     print("2. 特征计算: 所有特征基于 obs_date 当日或之前数据")
     print("3. 标签计算: 使用 obs_date 后 20 天数据（监督学习目标，正常）")
-    print("4. 回测预测: 使用 prev_date 的预测值决定当日退出（无未来信息）")
+    print("4. 回测预测: 使用 prev_date 的预测值决定当日退出（严格精确匹配，无回退）")
     print("5. 模型训练: val 用于早停，test 仅用于最终评估")
     
     return all_passed
