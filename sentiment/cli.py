@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Purpose: 舆情抓取命令行入口，支持雪球/东方财富/同花顺三平台全量/增量/dry-run
+         （雪球和东方财富已迁移到 Scrapling，同花顺页面结构异常待修复）
 Inputs:   命令行参数
 Outputs:  终端打印进度与结果，数据写入数据库
 How to Run:
@@ -13,7 +14,7 @@ Examples:
 
     # 增量更新东方财富
     python -m sentiment.cli --ts-code SH688615 --source eastmoney --incremental
-Side Effects: 读写数据库 stock_sentiment_posts 表；启动 Selenium WebDriver
+Side Effects: 读写数据库 stock_sentiment_posts 表；启动 Playwright 浏览器
 """
 
 import argparse
@@ -50,7 +51,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="xueqiu",
         choices=["xueqiu", "eastmoney", "tonghuashun", "all"],
-        help="来源平台：xueqiu / eastmoney / tonghuashun / all，默认 xueqiu",
+        help="来源平台：xueqiu/eastmoney/tonghuashun/all（tonghuashun 页面结构异常，已知返回空）",
     )
     parser.add_argument(
         "--start-time",
@@ -71,8 +72,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-pages",
         type=int,
-        default=10,
-        help="东方财富最大翻页数，默认10",
+        default=5,
+        help="东方财富最大翻页数，默认5（每页约60s）",
+    )
+    parser.add_argument(
+        "--page-delay",
+        type=float,
+        default=0.5,
+        help="东方财富翻页间隔秒数，默认0.5",
     )
     parser.add_argument(
         "--max-scrolls",
@@ -84,7 +91,7 @@ def parse_args() -> argparse.Namespace:
         "--scroll-delay",
         type=float,
         default=2.0,
-        help="每次滚动等待秒数，默认2.0",
+        help="雪球每次滚动等待秒数，默认2.0",
     )
     return parser.parse_args()
 
@@ -117,7 +124,7 @@ def scrape_single_stock(
     fetch_fn = SCRAPER_MAP[source]
 
     if source == "eastmoney":
-        posts = fetch_fn(ts_code, start_time, max_pages=args.max_pages)
+        posts = fetch_fn(ts_code, start_time, max_pages=args.max_pages, page_delay=args.page_delay)
     else:
         posts = fetch_fn(ts_code, start_time, max_scrolls=args.max_scrolls, scroll_delay=args.scroll_delay)
 
@@ -153,9 +160,12 @@ def main() -> int:
     for ts_code in ts_codes:
         for source in sources:
             start_time = resolve_start_time(ts_code, source, args.start_time, args.incremental)
-            count = scrape_single_stock(ts_code, source, start_time, args, args.dry_run)
-            total += count
-            logger.info("Stock %s/%s done: %d posts", ts_code, source, count)
+            try:
+                count = scrape_single_stock(ts_code, source, start_time, args, args.dry_run)
+                total += count
+                logger.info("Stock %s/%s done: %d posts", ts_code, source, count)
+            except Exception as e:
+                logger.error("Stock %s/%s FAILED: %s", ts_code, source, e)
 
     logger.info("All done. Total posts: %d", total)
     return 0

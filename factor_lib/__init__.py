@@ -40,6 +40,7 @@ Category-level batch functions:
     compute_risk_factors(df) -> DataFrame
     compute_fundamental_factors(df) -> DataFrame
     compute_raw_features(df, dsa_result=None, bb_result=None) -> DataFrame
+    compute_quantity_price_factors(df) -> DataFrame
 """
 from factor_lib.registry import (
     FACTOR_REGISTRY,
@@ -61,6 +62,7 @@ from factor_lib.categories.structure import compute_structure_factors
 from factor_lib.categories.risk import compute_risk_factors
 from factor_lib.categories.fundamental import compute_fundamental_factors
 from factor_lib.categories.raw_features import compute_raw_features
+from factor_lib.categories.quantity_price import compute_quantity_price_factors
 
 compute_all_factors_v2 = compute_panel_v2
 
@@ -83,4 +85,5 @@ __all__ = [
     "compute_risk_factors",
     "compute_fundamental_factors",
     "compute_raw_features",
+    "compute_quantity_price_factors",
 ]

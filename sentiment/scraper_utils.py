@@ -1,57 +1,21 @@
 #!/usr/bin/env python3
 """
-Purpose: 舆情抓取公共工具（SSOT）：Selenium 驱动管理、时间解析、安全 DOM 提取
+Purpose: 舆情抓取公共工具（SSOT）：中文相对时间解析
 Inputs:   无
-Outputs:  create_driver, parse_relative_time, safe_find_text 等公共函数
+Outputs:  parse_relative_time 公共函数
 How to Run:
     本模块不直接运行，由各平台 scraper 导入使用
 Examples:
-    from sentiment.scraper_utils import create_driver, parse_relative_time
-    driver = create_driver()
+    from sentiment.scraper_utils import parse_relative_time
     dt = parse_relative_time("05-03 19:11")
-Side Effects: 启动 Selenium WebDriver
+Side Effects: 无
 """
 
 import re
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
-
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.common.by import By
 
 logger = logging.getLogger(__name__)
-
-
-def create_driver() -> webdriver.Chrome:
-    """创建并返回配置好反检测的 Chrome WebDriver。"""
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--remote-debugging-port=0")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    )
-
-    service = ChromeService("/usr/bin/chromedriver")
-    driver = webdriver.Chrome(service=service, options=options)
-    driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument",
-        {
-            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        },
-    )
-    return driver
 
 
 def parse_relative_time(text: str) -> datetime:
@@ -113,27 +77,8 @@ def parse_relative_time(text: str) -> datetime:
     return now
 
 
-def safe_find_text(element, selector: str, by: By = By.CSS_SELECTOR) -> str:
-    """安全提取 DOM 元素的 textContent，失败返回空字符串。"""
-    try:
-        el = element.find_element(by, selector)
-        return el.get_attribute("textContent") or ""
-    except Exception:
-        return ""
-
-
-def safe_find_attr(element, selector: str, attr: str, by: By = By.CSS_SELECTOR) -> str:
-    """安全提取 DOM 元素的属性值，失败返回空字符串。"""
-    try:
-        el = element.find_element(by, selector)
-        return el.get_attribute(attr) or ""
-    except Exception:
-        return ""
-
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    # 自测时间解析
     test_cases = [
         "05-03 19:11",
         "昨天 08:14",

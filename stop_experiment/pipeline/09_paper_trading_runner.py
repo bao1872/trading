@@ -116,38 +116,56 @@ def save_holdings(date, holdings):
 
 # ==================== 决策/执行账本 ====================
 
-def save_decisions(date, holdings_after, pending_buys, pending_sells):
-    """T日决策后保存决策账本到 decisions/YYYY-MM-DD.parquet"""
+def save_decisions(date, holdings, pending_buys, pending_sells, sell_reasons, extra=None):
+    """T日收盘后保存决策账本到 decisions/YYYY-MM-DD.parquet"""
     os.makedirs(DECISIONS_DIR, exist_ok=True)
     if isinstance(date, str):
         date = pd.to_datetime(date)
+    buy_details = extra.get("buy_details", []) if extra else []
+    sell_details = extra.get("sell_details", []) if extra else []
+    hold_details = extra.get("hold_details", []) if extra else []
+    buy_detail_map = {d["ts_code"]: d for d in buy_details}
+    sell_detail_map = {d["ts_code"]: d for d in sell_details}
+    hold_detail_map = {d["ts_code"]: d for d in hold_details}
     rows = []
-    rank = 0
-    for code, h in holdings_after.items():
+    for code, h in holdings.items():
+        detail = hold_detail_map.get(code, {})
         rows.append({
             "decision_date": date, "ts_code": h.get("ts_code", code),
             "signal_id": h.get("signal_id"), "action": "hold",
-            "reason": "", "rank": rank, "score": h.get("score", 0),
-            "planned_price": None, "planned_weight": h.get("weight"),
+            "reason": detail.get("why", "held"),
+            "score": h.get("score", 0),
+            "days_held": h.get("days_held", 0),
+            "cur_ret": h.get("cur_ret"),
+            "threshold_value": detail.get("threshold_value"),
+            "why": detail.get("why", ""),
         })
-        rank += 1
-    for item in pending_sells:
-        code = item["code"]
-        h = item.get("holding", {})
+    for code, reason in sell_reasons.items():
+        detail = sell_detail_map.get(code, {})
+        h = holdings.get(code, {})
         rows.append({
             "decision_date": date, "ts_code": h.get("ts_code", code),
             "signal_id": h.get("signal_id"), "action": "sell",
-            "reason": item.get("reason", ""), "rank": -1,
-            "score": h.get("score", 0), "planned_price": None,
-            "planned_weight": 0,
+            "reason": reason,
+            "score": h.get("score", 0),
+            "days_held": h.get("days_held", 0),
+            "cur_ret": h.get("cur_ret"),
+            "threshold_value": detail.get("threshold_value"),
+            "why": detail.get("why", ""),
         })
     rank = 0
     for code, bp_val, ts_code_val, sc_val, sid_val in pending_buys:
+        detail = buy_detail_map.get(code, {})
         rows.append({
             "decision_date": date, "ts_code": ts_code_val,
             "signal_id": sid_val, "action": "buy",
-            "reason": "candidate_top", "rank": rank,
-            "score": sc_val, "planned_price": bp_val,
+            "reason": detail.get("why", "candidate_top"),
+            "score": sc_val,
+            "days_held": 0, "cur_ret": None,
+            "threshold_value": detail.get("threshold_value"),
+            "why": detail.get("why", ""),
+            "rank": rank, "obs_day": detail.get("obs_day"),
+            "planned_price": bp_val,
             "planned_weight": 1.0 / DEFAULT_MAX_STOCKS,
         })
         rank += 1
@@ -412,7 +430,7 @@ def run_single_day(target_date, df_all, price_pivot, trading_days, prev_close_ma
         exit_threshold=V1_PARAMS.get("buy_cls_exit_threshold", 0.70),
     )
 
-    save_decisions(target_date, holdings, pending_buys, pending_sells)
+    save_decisions(target_date, holdings, pending_buys, pending_sells, sell_reasons, extra=_extra)
 
     # Step 5: 保存持仓
     save_holdings(target_date, holdings)
@@ -474,7 +492,9 @@ def main():
     parser = argparse.ArgumentParser(description="模拟盘主入口 — 单入口 5 步日流程")
     parser.add_argument("--date", type=str, default=None, help="单日 YYYY-MM-DD")
     parser.add_argument("--batch-first-10", action="store_true", help="10 日批量回放")
-    parser.add_argument("--batch-all", action="store_true", help="全量回放")
+    parser.add_argument("--batch-all", action="store_true", help="遍历全部交易日")
+    parser.add_argument("--mode", choices=["replay", "live"], default="replay",
+                        help="replay=读全量预测(默认) | live=只读真实预测账本")
     parser.add_argument("--fault-inject", type=str, default=None,
                         choices=["MISSING_PREDICTION", "MISSING_HOLDINGS", "MISSING_OPEN_PRICE"],
                         help="故障注入测试")
@@ -482,15 +502,39 @@ def main():
 
     print("=" * 70)
     print("  模拟盘主入口 — 5 步日流程")
+    print(f"  模式: {args.mode}")
     print("=" * 70)
 
-    # 加载数据
-    cand_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
-    df_all = pd.read_parquet(cand_path)
-    df_all["obs_date"] = pd.to_datetime(df_all["obs_date"])
-    candidate_obs_days = V1_PARAMS.get("candidate_obs_days", [1, 2, 3])
-    df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
-    df_all = score_stocks(df_all, V1_PARAMS.get("strategy_default", "sell_score"))
+    # 加载候选池数据
+    if args.mode == "replay":
+        cand_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
+        if not os.path.exists(cand_path):
+            raise FileNotFoundError(f"replay 模式需要 {cand_path}，请先生成全量预测")
+        df_all = pd.read_parquet(cand_path)
+        df_all["obs_date"] = pd.to_datetime(df_all["obs_date"])
+        candidate_obs_days = V1_PARAMS.get("candidate_obs_days", [1, 2, 3])
+        df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
+        df_all = score_stocks(df_all, V1_PARAMS.get("strategy_default", "sell_score"))
+        print(f"  候选: {len(df_all)} 行 (全量预测)")
+    else:
+        # live 模式：只读当日预测账本
+        if not args.date:
+            raise RuntimeError("live 模式必须指定 --date (单日)")
+        pred_path = os.path.join(PREDICTIONS_DIR, f"{args.date}.parquet")
+        if not os.path.exists(pred_path):
+            raise FileNotFoundError(f"live 模式缺少预测账本: {pred_path}")
+        df_all = pd.read_parquet(pred_path)
+        if "obs_date" not in df_all.columns and "pred_date" in df_all.columns:
+            df_all["obs_date"] = pd.to_datetime(df_all["pred_date"])
+        elif "obs_date" not in df_all.columns:
+            df_all["obs_date"] = pd.to_datetime(args.date)
+        if "obs_day" not in df_all.columns:
+            df_all["obs_day"] = 1
+        candidate_obs_days = V1_PARAMS.get("candidate_obs_days", [1, 2, 3])
+        df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
+        if "score" not in df_all.columns:
+            df_all = score_stocks(df_all, V1_PARAMS.get("strategy_default", "sell_score"))
+        print(f"  候选: {len(df_all)} 行 (实时预测账本)")
 
     test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data(
         candidate_obs_days=V1_PARAMS["candidate_obs_days"]

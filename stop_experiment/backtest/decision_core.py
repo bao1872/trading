@@ -262,7 +262,7 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
     if n_avail > 0 and not candidates.empty and day_open_next is not None:
         score_col = "score" if "score" in candidates.columns else "composite_score"
         if score_col in candidates.columns:
-            cand_sorted = candidates.sort_values(score_col, ascending=False)
+            cand_sorted = candidates.sort_values([score_col, "ts_code"], ascending=[False, True])
         else:
             cand_sorted = candidates
 

@@ -638,7 +638,7 @@ def run_replay(args):
                 V1_PARAMS, args.strategy,
             )
 
-        new_holdings, pending_buys, pending_sells, sell_reasons = decide_daily_actions(
+        new_holdings, pending_buys, pending_sells, sell_reasons, _extra = decide_daily_actions(
             tdate, holdings, candidates, pred_indexed, prev_date,
             price_pivot=price, trading_dates=td,
         )

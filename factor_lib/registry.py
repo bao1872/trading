@@ -128,6 +128,7 @@ def compute_panel_v2(
     from factor_lib.categories.risk import compute_risk_factors
     from factor_lib.categories.fundamental import compute_fundamental_factors
     from factor_lib.categories.raw_features import compute_raw_features
+    from factor_lib.categories.quantity_price import compute_quantity_price_factors
     from features.dsa_bbmacd_24factors_viewer import compute_dsa, compute_bbmacd, DSAConfig
 
     result = df.copy()
@@ -145,6 +146,7 @@ def compute_panel_v2(
         "风险类": ("risk", compute_risk_factors),
         "财务类": ("fundamental", compute_fundamental_factors),
         "原始特征": ("raw_features", compute_raw_features),
+        "量价类": ("quantity_price", compute_quantity_price_factors),
     }
 
     dsanf, bbnf, volnf = False, False, False

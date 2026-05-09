@@ -356,7 +356,7 @@ def run_backtest(
                 "candidates_df": day_candidates.reset_index(drop=True) if not day_candidates.empty else day_candidates,
                 "holdings_before": holdings_beginning_of_day,
                 "to_sell": [item["code"] for item in pending_sells],  # 决策卖出，下一日执行
-                "sell_reasons": sell_reasons_new,  # decide_eod 当日决策的卖出原因
+                "sell_reasons": sell_reasons,  # decide_eod 当日决策的卖出原因
                 "buys": [{
                     "ts_code": o[2], "code": o[0], "buy_price": o[1],
                     "score": o[3], "signal_id": o[4],

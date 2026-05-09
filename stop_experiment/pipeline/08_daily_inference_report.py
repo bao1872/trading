@@ -16,39 +16,38 @@ Purpose:
     - W1 (轻分层 A:1.3, C:0.7): 低风险基准版，模拟盘主用
     - W3 (强分层 A:2.0, C:0.3): 高收益实验版，对照组跟踪
 
-    真实预测持久化：
-    - 每日推理后自动保存预测结果到 predictions/YYYY-MM-DD.parquet (append-only)
-    - 必须使用 up-to-date 数据，不允许使用合成或回退数据
+    职责声明（P1.8 收口）：
+    - 08 是纯报告生成器：只读四本账 (predictions/holdings/decisions/executions) + DB + full_test_predictions
+    - 不写预测账本（预测账本由上游 09_paper_trading_runner 生成）
+    - 不写其他账本（决策/执行/持仓由 09 生成）
 
 Pipeline Position:
-    生产流水线第二步（每日，重复）。
-    上游: 06_daily_inference_replay.py, full_test_predictions.parquet, DB, predictions/
+    生产流水线第四步（每日，重复）。
+    上游: 09_paper_trading_runner.py, full_test_predictions.parquet, DB, predictions/
     下游: —
 
 Inputs:
     - stop_experiment/output/full_test_predictions.parquet (全量预测)
-    - stop_experiment/output/predictions/YYYY-MM-DD.parquet (真实预测，若存在)
+    - stop_experiment/output/predictions/YYYY-MM-DD.parquet (真实预测)
+    - stop_experiment/output/live/holdings/YYYY-MM-DD.parquet (持仓账本)
+    - stop_experiment/output/live/decisions/YYYY-MM-DD.parquet (决策账本)
+    - stop_experiment/output/live/executions/YYYY-MM-DD.parquet (执行账本)
     - DB: stock_k_data (K线数据)
 
 Outputs:
     - Console: 8 段结构化报告（含 Section 5C 双轨仓位映射对比）
     - stop_experiment/output/daily_report/YYYY-MM-DD.md (Markdown 报告)
-    - stop_experiment/output/predictions/YYYY-MM-DD.parquet (预测结果，首次生成时)
 
 How to Run:
-    # 默认跑最新日期
-    python stop_experiment/pipeline/08_daily_inference_report.py
-
     # 指定日期
-    python stop_experiment/pipeline/08_daily_inference_report.py --date 2026-05-08
+    python -m stop_experiment.pipeline.08_daily_inference_report --date 2026-05-08
 
     # dry-run (仅 console，不写文件)
-    python stop_experiment/pipeline/08_daily_inference_report.py --date 2026-05-08 --dry-run
+    python -m stop_experiment.pipeline.08_daily_inference_report --date 2026-05-08 --dry-run
 
 Side Effects:
     - 只读 parquet 和 DB
-    - 写 Markdown 报告文件
-    - 首次运行时写 predictions/YYYY-MM-DD.parquet (append-only，不覆盖)
+    - 写 Markdown 报告文件（reports/ 目录）
 """
 
 from __future__ import annotations
@@ -288,45 +287,6 @@ def load_holdings(date):
             "score": row.get("score", 0),
         }
     return holdings if holdings else None
-
-
-def persist_predictions_for_date(target_date, df_pred):
-    """
-    保存当日真实推理结果到 predictions/YYYY-MM-DD.parquet (append-only，按天分文件)。
-
-    Input:
-        target_date: 目标日期 (datetime 或 str)
-        df_pred:     候选池 DataFrame (含 obs_date, ts_code, signal_id, obs_day, pred_*, score)
-    """
-    if isinstance(target_date, str):
-        target_date = pd.to_datetime(target_date)
-
-    os.makedirs(PREDICTIONS_DIR, exist_ok=True)
-    day_path = os.path.join(PREDICTIONS_DIR, f"{target_date.strftime('%Y-%m-%d')}.parquet")
-
-    if os.path.exists(day_path):
-        print(f"  [警告] 预测文件已存在，跳过覆盖: {day_path}")
-        return
-
-    # 补充必要元字段
-    df_save = df_pred.copy()
-    if "trade_date" not in df_save.columns:
-        df_save["trade_date"] = target_date
-    if "model_version" not in df_save.columns:
-        df_save["model_version"] = V1_BASELINE
-    if "generated_at" not in df_save.columns:
-        df_save["generated_at"] = datetime.now()
-
-    # 只保存核心字段，减少存储
-    keep_cols = [
-        "trade_date", "obs_date", "ts_code", "signal_id", "obs_day",
-        "pred_sell_reg", "pred_sell_cls", "pred_buy_reg", "pred_buy_cls",
-        "score", "model_version", "generated_at",
-    ]
-    available_cols = [c for c in keep_cols if c in df_save.columns]
-    df_save = df_save[available_cols].copy()
-    df_save.to_parquet(day_path, index=False)
-    print(f"  [保存预测] {day_path} ({len(df_save)} 行)")
 
 
 # ==================== 工具函数 ====================
@@ -767,7 +727,7 @@ def _check_and_update_full_test_predictions(target_date):
 
     if not os.path.exists(candidate_path):
         print(f"  [警告] candidate_with_scores.parquet 不存在，无法自动更新")
-        print(f"  [提示] 请运行上游流水线获取新数据: python stop_experiment/pipeline/01_selection_dsa.py")
+        print(f"  [提示] 请先生成当日预测账本: python -m stop_experiment.pipeline.07_generate_daily_predictions --date {target_date.strftime('%Y-%m-%d')}")
         return False
 
     # ④ 检查 candidate_with_scores.parquet 的日期范围
@@ -777,7 +737,7 @@ def _check_and_update_full_test_predictions(target_date):
 
     if cand_date_max <= obs_date_max:
         print(f"  [警告] candidate_with_scores.parquet 也没有更新数据 (最多到 {cand_date_max.strftime('%Y-%m-%d')})")
-        print(f"  [提示] 请运行上游流水线获取新数据: python stop_experiment/pipeline/01_selection_dsa.py")
+        print(f"  [提示] 请先生成当日预测账本: python -m stop_experiment.pipeline.07_generate_daily_predictions --date {target_date.strftime('%Y-%m-%d')}")
         return False
 
     # ⑤ 有更新数据，运行 generate_full_predictions.py
@@ -921,8 +881,8 @@ def _ensure_pred_coverage(target_date, pred_indexed, trading_days):
     raise ValueError(
         f"pred_lookup 数据过期：最新数据到 {latest_date}，"
         f"但目标决策日 {target_date.strftime('%Y-%m-%d')} 的前一日 {prev_date.strftime('%Y-%m-%d')} 无覆盖。"
-        f"请先运行上游流水线更新数据："
-        f"python stop_experiment/pipeline/01_selection_dsa.py"
+        f"请先生成当日预测账本："
+        f"python -m stop_experiment.pipeline.07_generate_daily_predictions --date {target_date.strftime('%Y-%m-%d')}"
     )
 
 
@@ -1085,7 +1045,7 @@ def _get_start_holdings(target_date, snapshots_map, trading_days, price_pivot, p
                         h["cur_ret"] = (close_p - h["buy_price"]) / h["buy_price"]
 
         with redirect_stdout(StringIO()):
-            holdings, pending_from_snap, pending_sells_from_snap, sell_reasons = decide_daily_actions(
+            holdings, pending_from_snap, pending_sells_from_snap, sell_reasons, _extra = decide_daily_actions(
                 step_date, holdings, pd.DataFrame(), pred_indexed, step_prev_date,
                 price_pivot=price_pivot, trading_dates=trading_days,
             )
@@ -1401,8 +1361,7 @@ def _print_section_4_exit_scan(holdings, sells, sell_reasons, prev_date, pred_in
                 raise ValueError(
                     f"预测数据过期：signal_id={sid}, prev_date={prev_date}，"
                     f"但 pred_indexed 中无此日期的预测数据。"
-                    f"请先运行上游流水线更新数据："
-                    f"python stop_experiment/pipeline/01_selection_dsa.py"
+                    f"请先运行上游流水线更新研究数据（01_build_dataset → 02_train_gbdt_models → 07_generate_daily_predictions）"
                 )
 
         if sold and actual_reason == "model_risk":
@@ -1864,7 +1823,7 @@ def main():
     holdings_before_decision = {k: dict(v) for k, v in holdings_start.items()}
 
     with redirect_stdout(StringIO()):
-        holdings_after, pending_buys_new, pending_sells_new, sell_reasons = decide_daily_actions(
+        holdings_after, pending_buys_new, pending_sells_new, sell_reasons, _extra = decide_daily_actions(
             target_date, holdings_start, candidates, pred_indexed, prev_date_decision,
             price_pivot=price_pivot, trading_dates=trading_days,
         )

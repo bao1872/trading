@@ -61,6 +61,48 @@ ACTION_PLANS_DIR = os.path.join(OUTPUT_DIR, "live", "action_plans")
 DEFAULT_MAX_STOCKS = 10
 
 
+# ==================== 交易日历 ====================
+
+_TRADING_DAYS_CACHE = None
+
+
+def _get_trading_days():
+    """加载交易日列表（缓存，只加载一次）"""
+    global _TRADING_DAYS_CACHE
+    if _TRADING_DAYS_CACHE is not None:
+        return _TRADING_DAYS_CACHE
+    from stop_experiment.backtest.simple_backtest import load_daily_prices, build_price_pivot
+    daily_prices = load_daily_prices("2025-01-01", "2027-01-01")
+    _, trading_days, _ = build_price_pivot(daily_prices)
+    _TRADING_DAYS_CACHE = sorted(trading_days)
+    return _TRADING_DAYS_CACHE
+
+
+def _next_trading_day(date_str):
+    """返回 date_str 之后的下一个交易日，无则返回 None"""
+    trading_days = _get_trading_days()
+    target = pd.to_datetime(date_str)
+    for d in trading_days:
+        if d > target:
+            return d
+    return None
+
+
+def _prev_trading_day_exists(date_str):
+    """检查 date_str 前一日是否有 holdings 文件（用于判断是否首日运行）"""
+    trading_days = _get_trading_days()
+    target = pd.to_datetime(date_str)
+    prev_d = None
+    for d in trading_days:
+        if d >= target:
+            break
+        prev_d = d
+    if prev_d is None:
+        return False
+    prev_path = os.path.join(HOLDINGS_DIR, f"{prev_d.strftime('%Y-%m-%d')}.parquet")
+    return os.path.exists(prev_path)
+
+
 # ==================== 数据加载 ====================
 
 def _safe_read_parquet(dir_path, date_str, label):
@@ -121,13 +163,14 @@ def _fmt_float(v):
     return f"{v:.4f}"
 
 
-def _generate_empty_plan(date_str):
+def _generate_empty_plan(date_str, execution_date_str, allow_missing_predictions=False):
     """当日无决策数据时生成精简报告"""
     lines = [
-        f"# 📋 T+1 行动计划 — {date_str}",
+        f"# 📋 T+1 行动计划",
         "",
         f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"> 执行日期: T+1={date_str} (下一个交易日)",
+        f"> 决策日期: {date_str}",
+        f"> 执行日期: {execution_date_str} (T+1 下一个交易日)",
         "",
         "## ⚠️ 今日无交易信号",
         "",
@@ -137,18 +180,26 @@ def _generate_empty_plan(date_str):
         "> ℹ️ 系统运行正常，等待下一个交易日信号",
     ]
     md_content = "\n".join(lines)
-    json_data = {"decision_date": date_str, "generated_at": datetime.now().isoformat(),
-                 "status": "no_signal", "overview": {},
+    json_data = {"decision_date": date_str, "execution_date": execution_date_str,
+                 "generated_at": datetime.now().isoformat(),
+                 "plan_status": "degraded" if allow_missing_predictions else "no_signal",
+                 "overview": {},
                  "buy_list": [], "sell_list": [], "hold_list": [], "skipped_list": []}
     summary = f"[{date_str}] 无信号 ⏭️"
     return md_content, json_data, summary
 
 
-def generate_action_plan(date_str):
+def generate_action_plan(date_str, allow_missing_predictions=False):
     """
     读四本账 → 生成 T+1 行动计划的 MD + JSON 两份文件。
     返回 (md_content, json_data, summary_text)
     """
+    execution_date = _next_trading_day(date_str)
+    if execution_date is None:
+        execution_date_str = "T+1 (交易日历暂无，待数据更新后确定)"
+        print(f"  [警告] 无法确定 {date_str} 的下一个交易日（可能为最新数据日），使用占位符")
+    else:
+        execution_date_str = execution_date.strftime("%Y-%m-%d")
 
     # 加载数据
     dec_df = _safe_read_parquet(DECISIONS_DIR, date_str, "决策账本")
@@ -156,12 +207,27 @@ def generate_action_plan(date_str):
     hold_df = _safe_read_parquet(HOLDINGS_DIR, date_str, "持仓账本")
     pred_df = _safe_read_parquet(PREDICTIONS_DIR, date_str, "预测账本")
 
-    if dec_df is None or len(dec_df) == 0:
-        if dec_df is None:
-            raise RuntimeError(f"缺少决策账本: {date_str}，无法生成行动计划。请先运行 09_paper_trading_runner.py")
-        # 空 decisions: 生成精简报告
+    # 严格模式检查
+    if dec_df is None:
+        raise RuntimeError(f"缺少决策账本: {date_str}，无法生成行动计划。请先运行 09_paper_trading_runner.py")
+    if exec_df is None:
+        raise RuntimeError(f"缺少执行账本: {date_str}，无法生成行动计划。请先运行 09_paper_trading_runner.py")
+    if hold_df is None:
+        raise RuntimeError(f"缺少持仓账本: {date_str}，无法生成行动计划。请先运行 09_paper_trading_runner.py")
+    if pred_df is None:
+        if allow_missing_predictions:
+            print(f"  [降级] 缺少预测账本 ({date_str})，以 degraded 状态继续生成")
+        else:
+            raise RuntimeError(
+                f"缺少预测账本: {date_str}，无法生成正式行动计划。"
+                f"使用 --allow-missing-predictions 可降级生成"
+            )
+
+    if len(dec_df) == 0:
         print(f"  [信息] 决策账本为空 ({date_str})，可能当日无候选或无交易")
-        md_content, json_data, summary = _generate_empty_plan(date_str)
+        md_content, json_data, summary = _generate_empty_plan(
+            date_str, execution_date_str, allow_missing_predictions,
+        )
         return md_content, json_data, summary
 
     # 分类
@@ -174,18 +240,20 @@ def generate_action_plan(date_str):
         skipped_df = exec_df[exec_df["status"] == "skipped"].copy()
 
     system_anomalies = []
-    if dec_df is None:
-        system_anomalies.append("missing_decisions")
-    if exec_df is None:
-        system_anomalies.append("missing_executions")
     if hold_df_dec is None or (isinstance(hold_df_dec, pd.DataFrame) and hold_df_dec.empty):
-        system_anomalies.append("holdings_empty")
+        if _prev_trading_day_exists(date_str):
+            system_anomalies.append("holdings_missing_unexpectedly")
+        else:
+            # 首日/初始化空仓，非异常
+            system_anomalies.append("holdings_empty_initial")
+    if pred_df is None:
+        system_anomalies.append("missing_predictions")
 
     n_buy = len(buy_df)
     n_sell = len(sell_df)
     n_hold = len(hold_df_dec)
     n_skip = len(skipped_df)
-    n_anomaly = len(system_anomalies)
+    n_anomaly = sum(1 for a in system_anomalies if a not in ("holdings_empty_initial",))
 
     # 获取股票名称
     all_codes = set()
@@ -201,11 +269,16 @@ def generate_action_plan(date_str):
             name_map[c] = _get_stock_name(c)
 
     # --- 构建 MD ---
+    plan_status = "degraded" if (allow_missing_predictions or pred_df is None) else "formal"
     lines = []
-    lines.append(f"# 📋 T+1 行动计划 — {date_str}")
+    lines.append(f"# 📋 T+1 行动计划")
     lines.append("")
+    if plan_status == "degraded":
+        lines.append("> ⚠️ **降级模式**: 预测账本缺失，本报告为降级版本，不应用于正式交易决策")
+        lines.append("")
     lines.append(f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    lines.append(f"> 执行日期: T+1={date_str} (下一个交易日)")
+    lines.append(f"> 决策日期: {date_str}")
+    lines.append(f"> 执行日期: {execution_date_str} (T+1 下一个交易日)")
     lines.append("")
 
     # 模块 1: 总览
@@ -213,13 +286,22 @@ def generate_action_plan(date_str):
     lines.append("")
     lines.append("| 类别 | 数量 | 说明 |")
     lines.append("|------|------|------|")
-    lines.append(f"| 🟢 待买入 | **{n_buy}** 只 | 明日开盘买入 |")
-    lines.append(f"| 🔴 待卖出 | **{n_sell}** 只 | 明日开盘卖出 |")
+    lines.append(f"| 🟢 待买入 | **{n_buy}** 只 | {execution_date_str} 开盘买入 |")
+    lines.append(f"| 🔴 待卖出 | **{n_sell}** 只 | {execution_date_str} 开盘卖出 |")
     lines.append(f"| 🔵 继续持有 | **{n_hold}** 只 | 不动 |")
     skip_note = f"({'; '.join(skipped_df['skip_reason'].unique())})" if n_skip > 0 else ""
     lines.append(f"| ⚠️ 执行跳过 | {n_skip} 只 {skip_note} | 因规则未执行 |")
-    anomaly_note = ", ".join(system_anomalies) if system_anomalies else "无"
-    lines.append(f"| ❌ 系统异常 | {n_anomaly} 条 ({anomaly_note}) | 需人工检查 |")
+    anomaly_labels = []
+    for a in system_anomalies:
+        label = {
+            "holdings_empty_initial": "初始化空仓(正常)",
+            "holdings_missing_unexpectedly": "持仓异常缺失",
+            "missing_predictions": "预测账本缺失",
+        }.get(a, a)
+        anomaly_labels.append(label)
+    anomaly_note = ", ".join(anomaly_labels) if anomaly_labels else "无"
+    anomaly_count = sum(1 for a in system_anomalies if a != "holdings_empty_initial")
+    lines.append(f"| ❌ 系统异常 | {anomaly_count} 条 ({anomaly_note}) | 需人工检查 |")
     lines.append("")
 
     # 模块 2: 买入清单
@@ -235,8 +317,12 @@ def generate_action_plan(date_str):
             name = name_map.get(ts, ts)
             score = _fmt_float(r.get("score"))
             weight = f"{r.get('planned_weight', 0.1)*100:.0f}%"
-            chain = f"候选池排序第{idx+1} → 组合空位允许 → 不在持仓 → 生成买入单"
-            lines.append(f"| {idx+1} | {ts} | {name} | {score} | {weight} | {chain} |")
+            why = str(r.get("why", "")) if "why" in r and pd.notna(r.get("why")) else ""
+            if not why:
+                obs_day = r.get("obs_day")
+                rank = r.get("rank", idx + 1)
+                why = f"候选池排序第{rank} → 组合空位允许 → 不在持仓 → 生成买入单"
+            lines.append(f"| {idx+1} | {ts} | {name} | {score} | {weight} | {why} |")
         lines.append("")
     else:
         lines.append("无买入计划。")
@@ -254,24 +340,14 @@ def generate_action_plan(date_str):
             ts = str(r.get("ts_code", "?"))
             name = name_map.get(ts, ts)
             reason = r.get("reason", "unknown")
-            # 从 holdings 获取收益率
-            cur_ret = None
-            days_held = "?"
-            if hold_df is not None and "entry_price" in hold_df.columns:
-                hr = hold_df[hold_df["code"] == ts[:6]]
-                if not hr.empty:
-                    hr1 = hr.iloc[0]
-                    bp = hr1.get("entry_price")
-                    cp = hr1.get("close") if "close" in hr1 else None
-                    days_held = str(hr1.get("days_held", "?"))
-                    if bp and cp and bp > 0 and not pd.isna(cp):
-                        cur_ret = (cp - bp) / bp
-
+            days_held = str(r.get("days_held", "?")) if "days_held" in r else "?"
+            cur_ret = r.get("cur_ret") if "cur_ret" in r else None
             ret_str = _fmt_pct(cur_ret) if cur_ret is not None else "N/A"
+            threshold_val = str(r.get("threshold_value", "")) if "threshold_value" in r else ""
             trigger = {
-                "max_hold": "持仓天数>最大持有期",
-                "stop_loss": "跌破止损线",
-                "model_risk": "pred_buy_cls>退出阈值",
+                "max_hold": f"持仓天数>最大持有期({threshold_val})" if threshold_val else "持仓天数>最大持有期",
+                "stop_loss": f"跌破止损线({threshold_val})" if threshold_val else "跌破止损线",
+                "model_risk": f"pred_buy_cls>退出阈值({threshold_val})" if threshold_val else "pred_buy_cls>退出阈值",
             }.get(reason, reason)
             lines.append(f"| {ts} | {name} | {reason} | {days_held} | {ret_str} | {trigger} |")
         lines.append("")
@@ -290,20 +366,16 @@ def generate_action_plan(date_str):
         for _, r in hold_df_dec.iterrows():
             ts = str(r.get("ts_code", "?"))
             name = name_map.get(ts, ts)
-            days = "?"
-            cur_ret = None
-            if hold_df is not None and "code" in hold_df.columns:
-                hr = hold_df[hold_df["code"] == ts[:6]]
-                if not hr.empty:
-                    hr1 = hr.iloc[0]
-                    days = str(hr1.get("days_held", "?"))
-                    bp = hr1.get("entry_price")
-                    if bp and bp > 0:
-                        cur_ret = None  # 需要 T+1 开盘价，此处不计算
+            days = str(r.get("days_held", "?")) if "days_held" in r else "?"
+            cur_ret = r.get("cur_ret") if "cur_ret" in r else None
             ret_str = _fmt_pct(cur_ret) if cur_ret is not None else "—"
             risk = "正常"
-            if days != "?" and int(days) >= 17:
-                risk = "⚠️ 接近最大持有期"
+            try:
+                days_int = int(days)
+                if days_int >= 17:
+                    risk = "⚠️ 接近最大持有期"
+            except (ValueError, TypeError):
+                pass
             lines.append(f"| {ts} | {name} | {days}天 | {ret_str} | {risk} |")
         lines.append("")
     else:
@@ -343,8 +415,8 @@ def generate_action_plan(date_str):
         for _, r in buy_df.iterrows():
             ts = str(r.get("ts_code", "?"))
             name = name_map.get(ts, ts)
-            score = _fmt_float(r.get("score"))
-            lines.append(f"- **{ts} {name}**: 候选池排序 → 分数{score} → 组合空位允许 → 不在持仓 → 生成T+1买入单")
+            why = str(r.get("why", "")) if "why" in r and pd.notna(r.get("why")) else f"候选池排序 → 生成T+1买入单"
+            lines.append(f"- **{ts} {name}**: {why}")
     else:
         lines.append("- 今日无买入信号")
     lines.append("")
@@ -353,8 +425,8 @@ def generate_action_plan(date_str):
         for _, r in sell_df.iterrows():
             ts = str(r.get("ts_code", "?"))
             name = name_map.get(ts, ts)
-            reason = r.get("reason", "?")
-            lines.append(f"- **{ts} {name}**: 触发{reason} → decide_eod判定卖出 → 生成T+1卖出单")
+            why = str(r.get("why", "")) if "why" in r and pd.notna(r.get("why")) else f"触发{r.get('reason', '?')} → 生成T+1卖出单"
+            lines.append(f"- **{ts} {name}**: {why}")
     else:
         lines.append("- 今日无卖出信号")
     lines.append("")
@@ -363,13 +435,19 @@ def generate_action_plan(date_str):
         for _, r in hold_df_dec.iterrows():
             ts = str(r.get("ts_code", "?"))
             name = name_map.get(ts, ts)
-            lines.append(f"- **{ts} {name}**: 未触发退出条件 → 继续持有")
+            why = str(r.get("why", "")) if "why" in r and pd.notna(r.get("why")) else "未触发退出条件 → 继续持有"
+            lines.append(f"- **{ts} {name}**: {why}")
     lines.append("")
 
     # 系统状态
-    if system_anomalies:
+    critical_anomalies = [a for a in system_anomalies if a not in ("holdings_empty_initial",)]
+    if critical_anomalies:
         lines.append("---")
-        lines.append(f"## ⚠️ 系统异常: {', '.join(system_anomalies)}")
+        lines.append(f"## ⚠️ 系统异常: {', '.join(critical_anomalies)}")
+        lines.append("")
+    elif "holdings_empty_initial" in system_anomalies:
+        lines.append("---")
+        lines.append("> ℹ️ 初始化空仓 (首日运行，正常状态)")
         lines.append("")
     else:
         lines.append("---")
@@ -381,7 +459,9 @@ def generate_action_plan(date_str):
     # --- 构建 JSON ---
     json_data = {
         "decision_date": date_str,
+        "execution_date": execution_date_str,
         "generated_at": datetime.now().isoformat(),
+        "plan_status": plan_status,
         "overview": {
             "pending_buys": n_buy,
             "pending_sells": n_sell,
@@ -396,6 +476,7 @@ def generate_action_plan(date_str):
                 "score": float(r.get("score", 0)) if r.get("score") is not None else None,
                 "planned_weight": float(r.get("planned_weight", 0)) if r.get("planned_weight") is not None else None,
                 "rank": i + 1,
+                "why": str(r.get("why", "")) if "why" in r and pd.notna(r.get("why")) else "",
             }
             for i, (_, r) in enumerate(buy_df.iterrows())
         ],
@@ -404,6 +485,9 @@ def generate_action_plan(date_str):
                 "ts_code": str(r.get("ts_code", "")),
                 "name": name_map.get(str(r.get("ts_code", "")), ""),
                 "reason": str(r.get("reason", "")),
+                "days_held": r.get("days_held") if "days_held" in r else None,
+                "cur_ret": r.get("cur_ret") if "cur_ret" in r else None,
+                "why": str(r.get("why", "")) if "why" in r and pd.notna(r.get("why")) else "",
             }
             for _, r in sell_df.iterrows()
         ],
@@ -411,6 +495,9 @@ def generate_action_plan(date_str):
             {
                 "ts_code": str(r.get("ts_code", "")),
                 "name": name_map.get(str(r.get("ts_code", "")), ""),
+                "days_held": r.get("days_held") if "days_held" in r else None,
+                "cur_ret": r.get("cur_ret") if "cur_ret" in r else None,
+                "why": str(r.get("why", "")) if "why" in r and pd.notna(r.get("why")) else "",
             }
             for _, r in hold_df_dec.iterrows()
         ],
@@ -426,7 +513,8 @@ def generate_action_plan(date_str):
     }
 
     summary = f"[{date_str}] 买{n_buy} 卖{n_sell} 持{n_hold} 跳{n_skip}" + \
-              (f" 异常:{','.join(system_anomalies)}" if system_anomalies else " ✅正常")
+              (f" 异常:{','.join(critical_anomalies)}" if critical_anomalies else \
+              (" 初始化空仓" if "holdings_empty_initial" in system_anomalies else " ✅正常"))
 
     return md_content, json_data, summary
 
@@ -438,6 +526,8 @@ def main():
     parser.add_argument("--date", type=str, default=None, help="指定日期 YYYY-MM-DD")
     parser.add_argument("--latest", action="store_true", help="自动找最新有 decisions 的日期")
     parser.add_argument("--json-only", action="store_true", help="只输出 JSON")
+    parser.add_argument("--allow-missing-predictions", action="store_true",
+                        help="允许预测账本缺失时降级生成（不推荐正式交易使用）")
     args = parser.parse_args()
 
     date_str = args.date
@@ -452,7 +542,7 @@ def main():
     print(f"  📋 T+1 行动计划生成 — {date_str}")
     print(f"{'='*70}")
 
-    md_content, json_data, summary = generate_action_plan(date_str)
+    md_content, json_data, summary = generate_action_plan(date_str, args.allow_missing_predictions)
 
     os.makedirs(ACTION_PLANS_DIR, exist_ok=True)
 
@@ -467,7 +557,8 @@ def main():
         json.dump(json_data, f, ensure_ascii=False, indent=2)
     print(f"  ✅ JSON:     {json_path}")
 
-    print(f"\n  📊 {summary}")
+    plan_status = json_data.get("plan_status", "formal")
+    print(f"\n  📊 {summary} (状态: {plan_status})")
     print(f"\n{'='*70}")
 
     if not args.json_only:
