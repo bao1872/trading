@@ -79,6 +79,7 @@ from stop_experiment.backtest.simple_backtest import (
 from stop_experiment.backtest.decision_core import (
     find_exit_pred,
     evaluate_model_exit,
+    decide_eod,
 )
 
 DYNAMIC_DIR = os.path.join(BACKTEST_DIR, "dynamic")
@@ -156,7 +157,7 @@ def run_backtest(
     max_hold_days=MAX_HOLD_DAYS, stop_loss=STOP_LOSS,
     take_profit=TAKE_PROFIT, strict=True,
     buy_cost=None, sell_cost=None,
-    buy_cls_exit_threshold=None,
+    buy_cls_exit_threshold=0.70,
     debug_snapshots=False,
 ):
     """
@@ -291,44 +292,29 @@ def run_backtest(
             holdings_beginning_of_day = {k: dict(v) for k, v in holdings.items()}
 
         # ========== 决策阶段（T日收盘后，决策T+1日操作） ==========
-
-        # Step 2: 评估退出（决策：哪些持仓应该在明日卖出）
+        # Step 2~4: 统一日终决策（SSOT decide_eod）
         prev_date = trading_days[t_idx - 1] if t_idx > 0 else None
+        next_idx = t_idx + 1
+        day_open_next = price_pivot.loc[trading_days[next_idx], "open"] if next_idx < len(trading_days) else pd.Series(dtype=float)
 
-        for code, h in list(holdings.items()):
-            h["days_held"] += 1
+        holdings, pending_buys_new, pending_sells_new, sell_reasons_new = decide_eod(
+            decision_date=current_date,
+            holdings=holdings,
+            candidates=signal_by_date.get(current_date, pd.DataFrame()),
+            pred_lookup=pred_lookup,
+            prev_date=prev_date,
+            day_close=day_close,
+            day_open_next=day_open_next,
+            max_stocks=max_stocks,
+            max_hold_days=max_hold_days,
+            stop_loss=stop_loss,
+            exit_threshold=buy_cls_exit_threshold,
+        )
 
-            # 止损检查
-            should_sell = False
-            reason = ""
+        pending_sells = pending_sells_new
+        pending_orders = pending_buys_new
 
-            if h["days_held"] > max_hold_days:
-                should_sell, reason = True, "max_hold"
-            elif code in day_close.index and not np.isnan(day_close[code]) and day_close[code] > 0:
-                ret = (day_close[code] - h["buy_price"]) / h["buy_price"]
-                if ret < stop_loss:
-                    should_sell, reason = True, "stop_loss"
-
-            if not should_sell:
-                if exit_mode == "fixed_hold":
-                    if h["days_held"] > hold_days:
-                        should_sell, reason = True, "fixed"
-                elif exit_mode == "rule_exit":
-                    should_sell, reason = evaluate_rule_exit(h, code, day_close, take_profit)
-                elif exit_mode == "model_exit":
-                    should_sell, reason = evaluate_model_exit(h, code, prev_date, pred_lookup, buy_cls_exit_threshold)
-
-            if not should_sell:
-                continue
-
-            # 决策：加入 pending_sells，下一日开盘执行
-            pending_sells.append({
-                "code": code,
-                "holding": dict(h),
-                "reason": reason,
-            })
-
-        # Step 3: NAV
+        # Step 3: NAV（与 decide_eod 前完全一致，holdings 中 days_held 已递增）
         daily_ret = 0.0
         for code, h in holdings.items():
             if code in day_close.index and not np.isnan(day_close[code]):
@@ -359,34 +345,7 @@ def run_backtest(
             "daily_ret": daily_ret, "n_positions": len(holdings),
         })
 
-        # Step 4: 买入信号
-        if current_date in signal_by_date:
-            day_sigs = signal_by_date[current_date]
-        else:
-            day_sigs = pd.DataFrame()
-
-        n_avail = max_stocks - len(holdings) - len(pending_orders)
-        if n_avail > 0 and len(day_sigs) > 0:
-            next_idx = t_idx + 1
-            if next_idx < len(trading_days):
-                buy_date_ts = trading_days[next_idx]
-                if buy_date_ts in price_pivot.index:
-                    buy_open = price_pivot.loc[buy_date_ts, "open"]
-                    for _, sig in day_sigs.iterrows():
-                        if len(holdings) + len(pending_orders) >= max_stocks:
-                            break
-                        code = sig["ts_code"][:6] if "." in sig["ts_code"] else sig["ts_code"]
-                        if code in holdings or any(o[0] == code for o in pending_orders):
-                            continue
-                        if code not in buy_open.index or np.isnan(buy_open[code]):
-                            continue
-                        bp = buy_open[code]
-                        if bp <= 0:
-                            continue
-                        sid = sig.get("signal_id", None)
-                        pending_orders.append((code, bp, sig["ts_code"], sig.get("score", 0), sid))
-
-        # ---- debug: 记录当日快照 (Step 4 之后, 含当日新 pending buys/sells) ----
+        # ---- debug: 记录当日快照 (decide_eod 之后, 含当日新 pending buys/sells) ----
         if debug_snapshots:
             day_candidates = signal_by_date.get(current_date, pd.DataFrame())
             day_candidate_codes = list(day_candidates["ts_code"]) if not day_candidates.empty else []
@@ -397,11 +356,7 @@ def run_backtest(
                 "candidates_df": day_candidates.reset_index(drop=True) if not day_candidates.empty else day_candidates,
                 "holdings_before": holdings_beginning_of_day,
                 "to_sell": [item["code"] for item in pending_sells],  # 决策卖出，下一日执行
-                "sell_reasons": {
-                    td["ts_code"]: td.get("sell_reason", "")
-                    for td in trade_details
-                    if td.get("sell_date") == current_date
-                },
+                "sell_reasons": sell_reasons_new,  # decide_eod 当日决策的卖出原因
                 "buys": [{
                     "ts_code": o[2], "code": o[0], "buy_price": o[1],
                     "score": o[3], "signal_id": o[4],

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-决策内核（SSOT）：退出预测查找 + 模型退出评估 + 买卖决策
+决策内核（SSOT）：退出预测查找 + 模型退出评估 + 完整日终决策
 
 Purpose:
     回测、逐日推理、日报三条链路共用的决策逻辑，保证口径完全一致。
-    按 advicement.txt 建议，退出预测使用严格精确匹配（无回退），
-    避免回测和 replay 的退出行为不一致。
+    decide_eod() 是唯一的完整日终决策函数，使用严格精确匹配（无回退）。
 
 Pipeline Position:
     被 dynamic_exit_backtest_v2.py / 06_daily_inference_replay.py / 08_daily_inference_report.py 引用
@@ -18,13 +17,14 @@ Inputs:
 
 Outputs:
     - find_exit_pred() → pred_dict or None
-    - evaluate_model_exit() → (should_sell: bool, reason: str)
+    - decide_eod() → (new_holdings, pending_buys, pending_sells, sell_reasons)
 
 How to Run:
     python stop_experiment/backtest/decision_core.py  (自测)
 
 Side Effects:
-    - 纯函数，无副作用
+    - decide_eod() 会修改 holdings 的 days_held 值
+    - 不删除 holdings 元素（sells 由调用方在下日开盘执行）
 """
 
 from __future__ import annotations
@@ -179,6 +179,122 @@ def evaluate_eod_exits(holdings, prev_date, pred_lookup,
                     sells.append((code, dict(h), "model_risk"))
 
     return sells
+
+
+def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
+               day_close, day_open_next=None, max_stocks=10, max_hold_days=20,
+               stop_loss=-0.07, exit_threshold=0.70, strategy="sell_score"):
+    """
+    完整日终决策（SSOT），供 backtest/replay/report 共用。
+
+    决策顺序（与回测 run_backtest Step 2~4 完全一致）：
+    1. 所有持仓 days_held += 1
+    2. max_hold → stop_loss → model_exit 依次检查，命中后 continue
+    3. n_avail = max_stocks - (len(holdings) - len(pending_sells))
+       即预留即将卖出的仓位，与回测语义一致
+    4. 从 candidates 中按 score 降序选取 top-k 新买入
+
+    注意：不删除 holdings 中的 pending_sells，由调用方在下日开盘执行（与 backtest Step 1.5 一致）。
+    不计算 NAV（调用方在调用前自行计算）。
+
+    Input:
+        decision_date: 决策日（T日）
+        holdings:      开盘执行后持仓 {code: {buy_date, buy_price, weight, days_held, ts_code, signal_id, score}}
+        candidates:    T日候选池 DataFrame（columns: ts_code, signal_id, score/composite_score）
+        pred_lookup:   {(signal_id, obs_date): pred_dict}
+        prev_date:     前一交易日
+        day_close:     T日收盘价 Series（index=code），用于 stop_loss 计算
+        day_open_next: T+1日开盘价 Series（index=code），用于确定买入价，None 时不买入
+        max_stocks:    最大持仓数
+        max_hold_days: 最大持仓天数
+        stop_loss:     止损阈值（如 -0.07）
+        exit_threshold: model_exit pred_buy_cls 阈值
+        strategy:      策略名
+
+    Output:
+        holdings:       原 holdings dict（days_held 已递增，sells 仍保留在 dict 中）
+        pending_buys:   [(code, buy_price, ts_code, score, signal_id), ...]
+        pending_sells:  [{"code": ..., "holding": {...}, "reason": ...}, ...]
+        sell_reasons:   {ts_code: reason}
+    """
+    pending_sells = []
+    sell_reasons = {}
+
+    # ---- 1. days_held += 1 ----
+    for h in holdings.values():
+        h["days_held"] += 1
+
+    # ---- 2. 退出评估: max_hold → stop_loss → model_exit ----
+    for code, h in list(holdings.items()):
+        # a. max_hold
+        if h["days_held"] > max_hold_days:
+            pending_sells.append({"code": code, "holding": dict(h), "reason": "max_hold"})
+            sell_reasons[h.get("ts_code", code)] = "max_hold"
+            continue
+
+        # b. stop_loss（使用 day_close，与回测完全一致）
+        if code in day_close.index:
+            cp = day_close[code]
+            if not np.isnan(cp) and cp > 0 and h.get("buy_price") and h["buy_price"] > 0:
+                ret = (cp - h["buy_price"]) / h["buy_price"]
+                if ret < stop_loss:
+                    pending_sells.append({"code": code, "holding": dict(h), "reason": "stop_loss"})
+                    sell_reasons[h.get("ts_code", code)] = "stop_loss"
+                    continue
+
+        # c. model_exit（仅对 days_held > 1 且 signal_id 已知的持仓）
+        if h["days_held"] > 1 and prev_date is not None:
+            sid = h.get("signal_id")
+            if sid is not None:
+                pred = find_exit_pred(sid, prev_date, pred_lookup)
+                if pred is not None:
+                    bc = pred.get("pred_buy_cls", np.nan)
+                    if not np.isnan(bc) and bc > exit_threshold:
+                        pending_sells.append({"code": code, "holding": dict(h), "reason": "model_risk"})
+                        sell_reasons[h.get("ts_code", code)] = "model_risk"
+
+    # ---- 3. 新买入 ----
+    # n_avail 预扣 pending_sells（与回测语义一致：sell 在下日开盘执行前不占仓位额度）
+    n_avail = max_stocks - len(holdings) - len(pending_sells)
+    pending_buys = []
+    if n_avail > 0 and not candidates.empty and day_open_next is not None:
+        score_col = "score" if "score" in candidates.columns else "composite_score"
+        if score_col in candidates.columns:
+            cand_sorted = candidates.sort_values(score_col, ascending=False)
+        else:
+            cand_sorted = candidates
+
+        bought_codes = set(holdings.keys())
+        used_codes = set()
+
+        for _, row in cand_sorted.iterrows():
+            if len(used_codes) >= n_avail:
+                break
+
+            ts_code = row.get("ts_code") or row.get("code")
+            if ts_code is None:
+                continue
+            code_clean = ts_code[:6] if "." in ts_code else ts_code
+
+            if code_clean in bought_codes or code_clean in used_codes:
+                continue
+
+            bp = None
+            if code_clean in day_open_next.index:
+                bp_val = day_open_next[code_clean]
+                if not np.isnan(bp_val) and bp_val > 0:
+                    bp = bp_val
+            if bp is None:
+                bp = row.get("buy_price") or row.get("close")
+                if bp is None or np.isnan(bp) or bp <= 0:
+                    continue
+
+            sc = row.get(score_col, 0)
+            sid = row.get("signal_id")
+            pending_buys.append((code_clean, bp, ts_code, sc, sid))
+            used_codes.add(code_clean)
+
+    return holdings, pending_buys, pending_sells, sell_reasons
 
 
 # ==================== 自测入口 ====================

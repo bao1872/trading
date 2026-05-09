@@ -62,7 +62,7 @@ from stop_experiment.backtest.dynamic_exit_backtest_v2 import (
 from stop_experiment.backtest.decision_core import (
     find_exit_pred,
 )
-from stop_experiment.backtest.simple_backtest import score_stocks
+from stop_experiment.backtest.simple_backtest import score_stocks, is_limit_down, is_suspended, is_limit_up
 
 DYNAMIC_DIR = os.path.join(BACKTEST_DIR, "dynamic")
 FIRST_10_DATES = [
@@ -137,133 +137,45 @@ def build_daily_candidate_snapshot(date, df_all, score_col="composite_score"):
 def decide_daily_actions(date, holdings, candidates, pred_lookup, prev_date,
                          price_pivot=None, trading_dates=None):
     """
-    当日买卖决策，逻辑与 run_backtest 完全一致 (buy-only exit)。
+    日终决策：薄封装，直接调用 decision_core.decide_eod()。
 
-    时间线（与回测引擎 v2 对齐）：
-    - date = 决策日（T日），基于 T日收盘数据决策
-    - pending_buys = T+1 开盘执行
-    - pending_sells = T+1 开盘执行（不再当日执行）
-
-    Input:
-        date:         决策日（T日）
-        holdings:     跨日持仓 dict { code: {ts_code, buy_date, buy_price, weight, days_held, signal_id, score,...} }
-        candidates:   build_daily_candidate_snapshot 输出的候选池
-        pred_lookup:  预测查找表 {(signal_id, date) -> {pred_buy_cls, ...}}
-        prev_date:    前一个交易日（用于模型退出取前日预测）
-        price_pivot:  价格宽表 (index=bar_time, columns=MultiIndex(field, raw_code))
-        trading_dates: 交易日列表
-
-    Output:
-        (new_holdings, pending_buys, pending_sells, sell_reasons)
-        new_holdings:   dict（决策后，不含待卖出）
-        pending_buys:   [(code, price, ts_code, score, signal_id), ...] T+1 开盘执行
-        pending_sells:  [{"code": ..., "holding": {...}, "reason": ...}, ...] T+1 开盘执行
-        sell_reasons:   {ts_code: reason}（与 pending_sells 对应）
+    将 price_pivot 解析为 day_close / day_open_next，然后交给统一决策内核。
+    decide_eod() 内部使用 day_close 计算 stop_loss（不再依赖 cur_ret），
+    且 n_avail 正确预扣 pending_sells。
     """
-    pending_sells = []
-    sell_reasons = {}
+    from stop_experiment.backtest.decision_core import decide_eod
+    from stop_experiment.pipeline.stop_config import V1_PARAMS
 
-    stop_loss = V1_PARAMS.get("stop_loss", -0.07)
-    max_hold_days = V1_PARAMS.get("max_hold_days", 20)
-    exit_threshold = V1_PARAMS.get("buy_cls_exit_threshold", 0.70)
+    day_open_next = pd.Series(dtype=float)
+    day_close = pd.Series(dtype=float)
 
-    # ---- 确定下一个交易日（用于买入价计算，与回测 Step 4 同口径） ----
-    next_date = None
     if price_pivot is not None and trading_dates is not None:
         try:
-            t_idx = list(trading_dates).index(date)
-            if t_idx + 1 < len(trading_dates):
-                candidate_next = trading_dates[t_idx + 1]
-                if candidate_next in price_pivot.index:
-                    next_date = candidate_next
+            t_list = list(trading_dates)
+            t_idx = t_list.index(date)
+            if t_idx + 1 < len(t_list):
+                nd = t_list[t_idx + 1]
+                if nd in price_pivot.index:
+                    day_open_next = price_pivot.loc[nd, "open"]
         except (ValueError, IndexError):
             pass
 
-    # ---- 步骤 1: 当日已持仓天数递增 ----
-    for code, h in holdings.items():
-        h["days_held"] += 1
+    if price_pivot is not None and date in price_pivot.index:
+        day_close = price_pivot.loc[date, "close"]
 
-    # ---- 步骤 2: 评估退出（只决策，不执行；执行由调用方在 T+1 开盘时进行） ----
-    for code, h in list(holdings.items()):
-        should_sell = False
-        reason = ""
-
-        # a. max_hold（回测: days_held > max_hold_days）
-        if h["days_held"] > max_hold_days:
-            should_sell = True
-            reason = "max_hold"
-
-        # b. stop_loss（当前持仓 cur_ret 由调用方基于实时价格设置）
-        if not should_sell and h.get("cur_ret") is not None:
-            if h["cur_ret"] < stop_loss:
-                should_sell = True
-                reason = "stop_loss"
-        elif not should_sell:
-            # DEBUG: 打印为何跳过 stop_loss
-            cr = h.get("cur_ret")
-            if cr is None:
-                print(f"    [DEBUG decide] {h['ts_code']}: cur_ret=None, bp={h.get('buy_price')}, dh={h['days_held']}")
-
-        # c. model_exit（用前一天的 pred_buy_cls，回测: days_held > 1）
-        if not should_sell and prev_date is not None and h["days_held"] > 1:
-            sid = h.get("signal_id")
-            if sid is not None:
-                pred = find_exit_pred(sid, prev_date, pred_lookup)
-                if pred is not None:
-                    bc = pred.get("pred_buy_cls", np.nan)
-                    if not np.isnan(bc) and bc > exit_threshold:
-                        should_sell = True
-                        reason = "model_risk"
-
-        if should_sell:
-            pending_sells.append({
-                "code": code,
-                "holding": dict(h),
-                "reason": reason,
-            })
-            sell_reasons[h["ts_code"]] = reason
-
-    # ---- 步骤 3: 新买入（top_k from candidates，排除已持仓） ----
-    # 注: holdings 中仍包含今日待卖出(pending_sells)的股票，与回测 Step 4 一致
-    # 因为 pending_sells 在 T+1 开盘才执行，但买入也在 T+1 开盘执行
-    # 回测 n_avail = max_stocks - len(holdings) - len(pending_orders)
-    # 此处 pending_orders=0 (上一日已执行)，所以 n_avail = max_stocks - len(holdings)
-    max_stocks = V1_PARAMS.get("max_stocks_default", 10)
-    n_avail = max_stocks - len(holdings)
-
-    buy_count = 0
-    pending_buys_local = []
-    if n_avail > 0 and not candidates.empty:
-        score_col = "score" if "score" in candidates.columns else "composite_score"
-        cand_sorted = candidates.sort_values(score_col, ascending=False)
-
-        for _, row in cand_sorted.iterrows():
-            if buy_count >= n_avail:
-                break
-            ts_code = row["ts_code"] if "ts_code" in row else row.get("code")
-            if ts_code is None:
-                continue
-            code_clean = ts_code[:6] if "." in ts_code else ts_code
-            if code_clean in holdings:
-                continue
-
-            buy_price = None
-            if next_date is not None and price_pivot is not None:
-                buy_open_s = price_pivot.loc[next_date, "open"]
-                if code_clean in buy_open_s.index:
-                    bp_val = buy_open_s[code_clean]
-                    if pd.notna(bp_val) and bp_val > 0:
-                        buy_price = bp_val
-            if buy_price is None:
-                buy_price = row.get("buy_price") or row.get("close")
-
-            sc = row.get(score_col, 0)
-            sid = row.get("signal_id")
-
-            pending_buys_local.append((code_clean, buy_price, ts_code, sc, sid))
-            buy_count += 1
-
-    return holdings, pending_buys_local, pending_sells, sell_reasons
+    return decide_eod(
+        decision_date=date,
+        holdings=holdings,
+        candidates=candidates,
+        pred_lookup=pred_lookup,
+        prev_date=prev_date,
+        day_close=day_close,
+        day_open_next=day_open_next,
+        max_stocks=V1_PARAMS.get("max_stocks_default", 10),
+        max_hold_days=V1_PARAMS.get("max_hold_days", 20),
+        stop_loss=V1_PARAMS.get("stop_loss", -0.07),
+        exit_threshold=V1_PARAMS.get("buy_cls_exit_threshold", 0.70),
+    )
 
 
 def compare_with_backtest(date, replay_result, backtest_snapshot):
@@ -632,21 +544,58 @@ def run_replay(args):
         if snapshot is None:
             continue
 
-        # Step 1: 执行 T-1 日 pending_buys（T日开盘买入）
+        # Step 1: 执行 T-1 日 pending_buys（T日开盘买入，与回测 strict=True 完全一致）
         for code, bp_val, ts_code_val, sc_val, sid_val in pending_buys:
+            if code in holdings:
+                continue
+            buy_price = bp_val
+            if np.isnan(buy_price) or buy_price <= 0:
+                continue
+            # strict: 停牌/涨停跳过（与回测 Step 1 完全一致）
+            if "volume" in price.columns.levels[0] and code in price["volume"].columns:
+                vol_val = price["volume"][code].get(tdate, np.nan)
+                if is_suspended(vol_val):
+                    continue
+            if code in prev_close and tdate in prev_close[code].index:
+                prev_c = prev_close[code].get(tdate, np.nan)
+                if not np.isnan(prev_c) and prev_c > 0:
+                    if "high" in price.columns.levels[0] and code in price["high"].columns:
+                        high_val = price["high"][code].get(tdate, np.nan)
+                        if not np.isnan(high_val) and is_limit_up(buy_price, high_val, prev_c):
+                            continue
             holdings[code] = {
-                "buy_date": tdate, "buy_price": bp_val,
+                "buy_date": tdate, "buy_price": buy_price,
                 "weight": 1.0 / V1_PARAMS.get("max_stocks_default", 10),
                 "days_held": 0, "ts_code": ts_code_val,
                 "score": sc_val, "signal_id": sid_val,
             }
         pending_buys = []
 
-        # Step 1.5: 执行 T-1 日 pending_sells（T日开盘卖出）
+        # Step 1.5: 执行 T-1 日 pending_sells（T日开盘卖出，与回测 strict=True 完全一致）
         for sell_item in pending_sells_prev:
             code = sell_item["code"]
-            if code in holdings:
-                del holdings[code]
+            if code not in holdings:
+                continue
+            sell_price = np.nan
+            if tdate in price.index:
+                day_open = price.loc[tdate, "open"]
+                if code in day_open.index and not np.isnan(day_open[code]):
+                    sell_price = day_open[code]
+            if np.isnan(sell_price) or sell_price <= 0:
+                continue
+            # strict: 跌停/停牌跳过（与回测 Step 1.5 完全一致）
+            if "volume" in price.columns.levels[0] and code in price["volume"].columns:
+                vol_val = price["volume"][code].get(tdate, np.nan)
+                if is_suspended(vol_val):
+                    continue
+            if code in prev_close and tdate in prev_close[code].index:
+                prev_c = prev_close[code].get(tdate, np.nan)
+                if not np.isnan(prev_c) and prev_c > 0:
+                    if "low" in price.columns.levels[0] and code in price["low"].columns:
+                        low_val = price["low"][code].get(tdate, np.nan)
+                        if not np.isnan(low_val) and is_limit_down(sell_price, low_val, prev_c):
+                            continue
+            del holdings[code]
         pending_sells_prev = []
 
         prev_idx = None
@@ -681,15 +630,6 @@ def run_replay(args):
         rp_hcodes = set(h.get("ts_code", c) for c, h in holdings.items())
         if bt_hcodes != rp_hcodes and first_divergence is None:
             first_divergence = (tdate, bt_hcodes - rp_hcodes, rp_hcodes - bt_hcodes)
-
-        for code, h in holdings.items():
-            h["cur_ret"] = None
-            if tdate in price.index:
-                close_s = price.loc[tdate, "close"]
-                if code in close_s.index:
-                    close_p = close_s[code]
-                    if pd.notna(close_p) and h.get("buy_price") and h["buy_price"] > 0:
-                        h["cur_ret"] = (close_p - h["buy_price"]) / h["buy_price"]
 
         if debug_date is not None and tdate == debug_date:
             _run_debug_dashboard(
