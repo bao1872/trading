@@ -69,7 +69,7 @@ import numpy as np
 import pandas as pd
 
 from stop_experiment.pipeline.stop_config import (
-    OUTPUT_DIR, BACKTEST_DIR, V1_PARAMS, PREDICTIONS_DIR, V1_BASELINE,
+    OUTPUT_DIR, BACKTEST_DIR, V1_PARAMS, PREDICTIONS_DIR, DECISIONS_DIR, EXECUTIONS_DIR, V1_BASELINE,
 )
 from stop_experiment.backtest.dynamic_exit_backtest_v2 import (
     _load_data, run_backtest,
@@ -157,6 +157,106 @@ def save_holdings(date, holdings, pending_buys=None, pending_sells=None):
     path = os.path.join(HOLDINGS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
     df.to_parquet(path, index=False)
     print(f"  [持仓保存] {path} ({len(df)} 只)")
+
+def save_decisions(date, holdings_after, pending_buys, pending_sells, sell_reasons):
+    """
+    T日决策后保存决策账本到 decisions/YYYY-MM-DD.parquet。
+    三部分: hold (继续持有), sell (卖出), buy (买入)
+    """
+    os.makedirs(DECISIONS_DIR, exist_ok=True)
+    if isinstance(date, str):
+        date = pd.to_datetime(date)
+
+    rows = []
+    rank = 0
+    for code, h in holdings_after.items():
+        rows.append({
+            "decision_date": date, "ts_code": h.get("ts_code", code),
+            "signal_id": h.get("signal_id"), "action": "hold",
+            "reason": "", "rank": rank, "score": h.get("score", 0),
+            "planned_price": None, "planned_weight": h.get("weight"),
+        })
+        rank += 1
+    for item in pending_sells:
+        code = item["code"]
+        h = item.get("holding", {})
+        rows.append({
+            "decision_date": date, "ts_code": h.get("ts_code", code),
+            "signal_id": h.get("signal_id"), "action": "sell",
+            "reason": item.get("reason", ""), "rank": -1,
+            "score": h.get("score", 0), "planned_price": None,
+            "planned_weight": 0,
+        })
+    rank = 0
+    for code, bp_val, ts_code_val, sc_val, sid_val in pending_buys:
+        rows.append({
+            "decision_date": date, "ts_code": ts_code_val,
+            "signal_id": sid_val, "action": "buy",
+            "reason": "candidate_top", "rank": rank,
+            "score": sc_val, "planned_price": bp_val,
+            "planned_weight": 1.0 / DEFAULT_MAX_STOCKS,
+        })
+        rank += 1
+
+    df = pd.DataFrame(rows)
+    path = os.path.join(DECISIONS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
+    df.to_parquet(path, index=False)
+    print(f"  [决策保存] {path} ({len(df)} 条)")
+
+
+def save_executions(date, executed_buys, executed_sells, skipped_buys, skipped_sells):
+    """
+    T日开盘后保存执行账本到 executions/YYYY-MM-DD.parquet。
+    executed: 成功执行的买卖
+    skipped: 因停牌/涨跌停/无价格跳过的买卖
+    """
+    os.makedirs(EXECUTIONS_DIR, exist_ok=True)
+    if isinstance(date, str):
+        date = pd.to_datetime(date)
+
+    rows = []
+    for code, bp, ts_code, sc, sid in executed_buys:
+        rows.append({
+            "execution_date": date, "decision_date": date,
+            "ts_code": ts_code, "signal_id": sid,
+            "action": "buy", "planned_price": bp,
+            "executed_price": bp, "status": "executed",
+            "skip_reason": "",
+        })
+    for code, bp, ts_code, sc, sid, reason in skipped_buys:
+        rows.append({
+            "execution_date": date, "decision_date": date,
+            "ts_code": ts_code, "signal_id": sid,
+            "action": "buy", "planned_price": bp,
+            "executed_price": None, "status": "skipped",
+            "skip_reason": reason,
+        })
+    for item in executed_sells:
+        code = item["code"]
+        h = item.get("holding", {})
+        rows.append({
+            "execution_date": date, "decision_date": date,
+            "ts_code": h.get("ts_code", code), "signal_id": h.get("signal_id"),
+            "action": "sell", "planned_price": None,
+            "executed_price": item.get("executed_price"),
+            "status": "executed", "skip_reason": "",
+        })
+    for item in skipped_sells:
+        code = item["code"]
+        h = item.get("holding", {})
+        rows.append({
+            "execution_date": date, "decision_date": date,
+            "ts_code": h.get("ts_code", code), "signal_id": h.get("signal_id"),
+            "action": "sell", "planned_price": None,
+            "executed_price": None, "status": "skipped",
+            "skip_reason": item.get("reason", ""),
+        })
+
+    df = pd.DataFrame(rows)
+    path = os.path.join(EXECUTIONS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
+    df.to_parquet(path, index=False)
+    print(f"  [执行保存] {path} ({len(df)} 条, executed={len(executed_buys)+len(executed_sells)} skipped={len(skipped_buys)+len(skipped_sells)})")
+
 
 
 def load_holdings(date):
@@ -1548,6 +1648,79 @@ def _print_section_6_portfolio(holdings_after, pending_buys, target_date, tradin
         print(f"  {name:<10} {code:<8} {'新买':<6} {tier:>5} {sc_val:>10.4f} {'待定(T+1)':>12} {str(sid_val):>10}")
 
 
+def _print_section_anomaly(target_date, sells, pending_buys, skipped_buys, skipped_sells, predictions_exist, candidates_empty):
+    """
+    Section 异常摘要: system_health / execution_anomalies / data_quality_flags
+    输出清晰的系统健康状态和异常清单，便于定位流程问题还是策略问题
+    """
+    anomalies = []
+    warnings = []
+
+    # 1. system_health — 账本完整性
+    dec_path = os.path.join(DECISIONS_DIR, f"{target_date.strftime('%Y-%m-%d')}.parquet")
+    exec_path = os.path.join(EXECUTIONS_DIR, f"{target_date.strftime('%Y-%m-%d')}.parquet")
+    hold_path = os.path.join(HOLDINGS_DIR, f"{target_date.strftime('%Y-%m-%d')}.parquet")
+
+    health_items = []
+    health_items.append(f"decisions: {'✅' if os.path.exists(dec_path) else '❌ 缺失'}")
+    health_items.append(f"executions: {'✅' if os.path.exists(exec_path) else '❌ 缺失'}")
+    health_items.append(f"holdings: {'✅' if os.path.exists(hold_path) else '❌ 缺失'}")
+    health_items.append(f"predictions: {'✅' if predictions_exist else '❌ 缺失'}")
+
+    # 2. execution_anomalies — 执行异常
+    exec_items = []
+    if skipped_buys:
+        for code, bp, ts_code, sc, sid, reason in skipped_buys:
+            exec_items.append(f"buy_skip: {ts_code} ({reason})")
+    if skipped_sells:
+        for item in skipped_sells:
+            code = item.get("code", "?")
+            h = item.get("holding", {})
+            ts = h.get("ts_code", code)
+            reason = item.get("reason", "unknown")
+            exec_items.append(f"sell_skip: {ts} ({reason})")
+    if not skipped_buys and not skipped_sells:
+        exec_items.append("无异常")
+    else:
+        anomalies.append(f"执行跳过: {len(skipped_buys)+len(skipped_sells)} 笔")
+
+    # 3. data_quality_flags
+    dq_items = []
+    if candidates_empty:
+        dq_items.append("⚠️ 当日候选池为空 (no_candidates_today)")
+        anomalies.append("candidates_empty")
+    if not predictions_exist:
+        dq_items.append("❌ 预测文件缺失")
+    if not dq_items:
+        dq_items.append("正常")
+
+    # 4. decisions summary
+    dec_items = []
+    dec_items.append(f"买入决策: {len(pending_buys)} 笔")
+    dec_items.append(f"卖出决策: {len(sells)} 笔")
+
+    print()
+    print("=" * 85)
+    print("  异常摘要 (System Health & Anomalies)")
+    print("=" * 85)
+    print(f"  🔧 系统健康:")
+    for item in health_items:
+        print(f"      {item}")
+    print(f"  ⚡ 执行异常:")
+    for item in exec_items:
+        print(f"      {item}")
+    print(f"  📊 数据质量:")
+    for item in dq_items:
+        print(f"      {item}")
+    print(f"  📋 今日决策:")
+    for item in dec_items:
+        print(f"      {item}")
+    if anomalies:
+        print(f"  ⚠️ 异常汇总: {', '.join(anomalies)}")
+    else:
+        print(f"  ✅ 系统健康，无异常")
+
+
 def _print_section_7_notes(target_date, prev_date_decision):
     print()
     print("=" * 75)
@@ -1744,6 +1917,32 @@ def main():
     _print_section_5c_dual_track(pending_w1, pending_w3, name_map)
     _print_section_6_portfolio(holdings_after, pending_buys_with_tier, target_date, trading_days, name_map)
     _print_section_7_notes(target_date, prev_date_decision)
+
+    # ---- 异常摘要 ----
+    skipped_buys_for_report = []
+    skipped_sells_for_report = []
+    # Read execution ledger for skipped items
+    exec_path_report = os.path.join(EXECUTIONS_DIR, f"{target_date.strftime('%Y-%m-%d')}.parquet")
+    if os.path.exists(exec_path_report):
+        exec_df = pd.read_parquet(exec_path_report)
+        skipped = exec_df[exec_df["status"] == "skipped"]
+        sell_skip = skipped[skipped["action"] == "sell"]
+        buy_skip = skipped[skipped["action"] == "buy"]
+        for _, row in sell_skip.iterrows():
+            skipped_sells_for_report.append({
+                "code": row["ts_code"], "holding": {"ts_code": row["ts_code"]},
+                "reason": row["skip_reason"],
+            })
+        for _, row in buy_skip.iterrows():
+            skipped_buys_for_report.append((
+                row["ts_code"], row["planned_price"], row["ts_code"],
+                None, row["signal_id"], row["skip_reason"],
+            ))
+    predictions_file = os.path.join(PREDICTIONS_DIR, f"{target_date.strftime('%Y-%m-%d')}.parquet")
+    predictions_exist = os.path.exists(predictions_file)
+    _print_section_anomaly(target_date, sells, pending_buys_new,
+                           skipped_buys_for_report, skipped_sells_for_report,
+                           predictions_exist, candidates.empty)
 
     # ---- 飞书推送 ----
     if args.send_feishu:

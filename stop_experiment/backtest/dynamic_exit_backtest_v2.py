@@ -297,7 +297,7 @@ def run_backtest(
         next_idx = t_idx + 1
         day_open_next = price_pivot.loc[trading_days[next_idx], "open"] if next_idx < len(trading_days) else pd.Series(dtype=float)
 
-        holdings, pending_buys_new, pending_sells_new, sell_reasons_new = decide_eod(
+        holdings, pending_buys_new, pending_sells_new, sell_reasons, _extra_new = decide_eod(
             decision_date=current_date,
             holdings=holdings,
             candidates=signal_by_date.get(current_date, pd.DataFrame()),

@@ -83,6 +83,10 @@ MODELS_DIR = os.path.join(OUTPUT_DIR, "models")
 FIGURES_DIR = os.path.join(OUTPUT_DIR, "figures")
 BACKTEST_DIR = os.path.join(OUTPUT_DIR, "backtest")
 PREDICTIONS_DIR = os.path.join(OUTPUT_DIR, "predictions")
+HOLDINGS_DIR = os.path.join(OUTPUT_DIR, "holdings")
+LIVE_DIR = os.path.join(OUTPUT_DIR, "live")
+DECISIONS_DIR = os.path.join(LIVE_DIR, "decisions")
+EXECUTIONS_DIR = os.path.join(LIVE_DIR, "executions")
 
 # ==================== 模型退出默认参数 (Phase 1.5 验证) ====================
 MODEL_EXIT_PARAMS = {

@@ -216,6 +216,8 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
         pending_buys:   [(code, buy_price, ts_code, score, signal_id), ...]
         pending_sells:  [{"code": ..., "holding": {...}, "reason": ...}, ...]
         sell_reasons:   {ts_code: reason}
+        extra:          {"buy_details": [...], "sell_details": [...], "hold_details": [...]}
+                        供 10_tomorrow_action_plan.py 生成决策链条，下游可忽略
     """
     pending_sells = []
     sell_reasons = {}
@@ -294,7 +296,68 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
             pending_buys.append((code_clean, bp, ts_code, sc, sid))
             used_codes.add(code_clean)
 
-    return holdings, pending_buys, pending_sells, sell_reasons
+    # ---- extra: rich reason for action plan ----
+    buy_details = []
+    for idx, (code, bp, ts_code, sc, sid) in enumerate(pending_buys):
+        buy_details.append({
+            "code": code, "ts_code": ts_code, "signal_id": sid,
+            "score": sc if isinstance(sc, (int, float)) else (float(sc) if sc is not None else 0),
+            "rank": idx + 1, "obs_day": None,
+            "why": f"候选池排序第{idx+1} → 组合空位允许 → 不在持仓中 → 生成T+1买入单",
+        })
+    sell_details = []
+    for item in pending_sells:
+        code = item["code"]
+        h = item["holding"]
+        cur_ret = None
+        if code in day_close.index and h.get("buy_price") and h["buy_price"] > 0:
+            cp = day_close[code]
+            if not np.isnan(cp) and cp > 0:
+                cur_ret = round(float((cp - h["buy_price"]) / h["buy_price"]), 4)
+        reason = item["reason"]
+        threshold_str = None
+        if reason == "max_hold":
+            threshold_str = f"max_hold_days={max_hold_days}"
+        elif reason == "stop_loss":
+            threshold_str = f"stop_loss={stop_loss:.0%}"
+        elif reason == "model_risk":
+            threshold_str = f"pred_buy_cls>{exit_threshold:.2f}"
+        sell_details.append({
+            "code": code, "ts_code": h.get("ts_code", code),
+            "signal_id": h.get("signal_id"), "reason": reason,
+            "days_held": h["days_held"], "cur_ret": cur_ret,
+            "threshold": threshold_str,
+            "why": f"持仓{h['days_held']}天 → 触发{reason}({threshold_str}) → decide_eod判定卖出 → 生成T+1卖出单",
+        })
+    hold_details = []
+    sell_codes = {item["code"] for item in pending_sells}
+    for code, h in holdings.items():
+        if code in sell_codes:
+            continue
+        cur_ret = None
+        if code in day_close.index and h.get("buy_price") and h["buy_price"] > 0:
+            cp = day_close[code]
+            if not np.isnan(cp) and cp > 0:
+                cur_ret = round(float((cp - h["buy_price"]) / h["buy_price"]), 4)
+        risk_flags = []
+        if h["days_held"] >= max_hold_days - 3:
+            risk_flags.append("即将触发max_hold")
+        if cur_ret is not None and cur_ret < stop_loss * 0.7:
+            risk_flags.append("接近止损线")
+        why_parts = [f"持仓{h['days_held']}天"]
+        if not risk_flags:
+            why_parts.append("未触发max_hold/stop_loss/model_exit")
+            why_parts.append("继续持有")
+        else:
+            why_parts.append("继续持有(" + ";".join(risk_flags) + ")")
+        hold_details.append({
+            "code": code, "ts_code": h.get("ts_code", code),
+            "days_held": h["days_held"], "cur_ret": cur_ret,
+            "risk_flags": risk_flags, "why": " → ".join(why_parts),
+        })
+    extra = {"buy_details": buy_details, "sell_details": sell_details, "hold_details": hold_details}
+
+    return holdings, pending_buys, pending_sells, sell_reasons, extra
 
 
 # ==================== 自测入口 ====================
