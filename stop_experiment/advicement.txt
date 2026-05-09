@@ -1,411 +1,313 @@
-你这个问题，已经不是“补一条命令”能解决的了。
+我同意你，不应该每天都训练。
 
-我看完你最新代码和运行日志后的结论是：
+**永久方案必须是：模型低频训练，预测高频生成。**
+也就是：
 
-**当前系统缺的不是某个上游脚本名，而是“谁负责生成当日预测账本”这件事根本没有被正式设计成生产步骤。**
-所以 08 才会给出一个错误的历史提示 `01_selection_dsa.py`，而 `run_daily` 又会出现“覆盖检查说通过，但 09/10 实际找不到 `predictions/2026-05-08.parquet`”这种自相矛盾的情况。
+* **训练**：只在你决定更新模型时做，比如每周、每月、或手动触发
+* **日常盘后**：只做 **当日样本构建 + 加载已训练模型 + 推理打分 + 落预测账本**
+* **绝不能**把“每天要有 `predictions/T.parquet`”错误实现成“每天重跑 `02_train_gbdt_models.py`”
 
-我先把根因说透，再给你最终版方案。
+你现在系统里真正缺的，是这个中间层：
 
----
+> **正式的“每日推理生成器”**
 
-## 一、根因是什么
-
-### 1. 代码里没有真正的“预测账本生成器”
-
-现在生产链条里：
-
-* `09_paper_trading_runner --mode live` 直接要求
-  `output/predictions/{date}.parquet` 必须存在。
-* `10_tomorrow_action_plan` 也要求这个文件存在，否则正式模式直接失败。
-* `08_daily_inference_report` 又还依赖 `full_test_predictions.parquet` / `candidate_with_scores.parquet` 的历史覆盖。
-
-但**没有一个正式生产脚本负责在当天先把 `predictions/{T}.parquet` 生成出来**。
-这就是系统缺口。
-
-### 2. `run_daily` 的覆盖检查口径错了
-
-它开头说：
-
-* 最新价格日：2026-05-08
-* 最新预测日：2026-05-09
-* 覆盖检查通过。
-
-可 Step2 马上报：
-
-* 缺少 `output/predictions/2026-05-08.parquet`。
-
-这说明现在的“最新预测日”检查，不是按 **真实生产依赖的预测账本文件** 在检查，而是用了一套错误的代理口径。这个必须改。
-
-### 3. 生产链和研究链还没彻底拆开
-
-你现在的四个步骤里：
-
-* 09/10 是生产闭环
-* 08 是研究日报
-* 06 是历史回放校验
-
-但现在 `run_daily` 还在把它们揉成一个“都必须成功”的流程。
-结果就是：即使 09/10 能工作，08 也会因为历史覆盖只到 2026-05-06 而失败。
+而不是每日训练器。
 
 ---
 
-## 二、永久性解决方案
+## 一、我基于你最新代码的判断
 
-### 最核心的一句话
+从你附件里看到的代码结构，已经能确认几件事：
 
-**新增一个正式的“当日预测账本生成步骤”，并让 `run_daily` 先调用它，再进入 09 和 10。**
+### 1）模型训练和模型使用，本来就是两件不同的事
 
-也就是说，你现在缺的不是“正确命令”，而是**正确架构**。
+你项目里已经有：
+
+* `pipeline/02_train_gbdt_models.py`：训练并保存 final 模型
+* `backtest/generate_full_predictions.py`：加载已训练模型，对候选样本打分
+* `backtest/simple_backtest.py`：对预测结果再做 `score_stocks` 排序评分
+
+这说明你代码本身的设计思想已经是：
+
+* **训练一次**
+* **后面反复加载模型做预测**
+
+所以 Trae 最后那句“要先跑 `01_build_dataset.py` → `02_train_gbdt_models.py` 重建全量候选数据后，07 才覆盖到新日期”，作为“每天盘后流程”的建议，我不认可。
+那是**重建研究底座**的办法，不是**日常生产推理**的办法。
+
+### 2）你当前新增的 `07_generate_daily_predictions.py`，方向对了一半
+
+它解决了“谁负责生成 `predictions/T.parquet`”这个架构缺口，这是对的。
+但它现在仍然从 `candidate_with_scores.parquet` 提取单日，这就有个致命问题：
+
+* 如果 `candidate_with_scores.parquet` 只到 2026-05-06
+* 那 07 永远也不可能生成 2026-05-08 的正式预测账本
+
+所以这个 07 **还不是永久方案**，它只是“从研究产物中切一天出来”的过渡方案。
+
+### 3）真正应该复用的是 `01_build_dataset.py` 里的单日样本构造逻辑
+
+你附件里的代码检索已经指出：
+
+* `01_build_dataset.py` 的 `expand_observation_period`
+* 以及后续 `merge_factor_lib_features`、`build_derived_features`
+
+本质上就是在构造每个 `obs_date` 的候选样本。
+这说明你完全可以把它抽出来，做成“只为某个目标日 T 构造候选样本”的函数，而不是每次都重建整张 dataset。
 
 ---
 
-## 三、你应该新增的正式模块
+## 二、最终正确方案是什么
 
-我建议新增一个文件：
+### 结论一句话
 
-```text id="tp4zq1"
-stop_experiment/pipeline/07_generate_daily_predictions.py
-```
+**每天盘后应该做“单日样本构建 + 加载现成模型推理”，而不是“重训模型 + 重建全量 candidate_with_scores”。**
 
-它要成为：
+---
 
-> **唯一负责生成 `output/predictions/{T}.parquet` 的正式入口**
+## 三、我建议你把系统正式拆成三层
 
-### 它的职责必须只有这些
+### A 层：训练层，低频运行
 
-#### Step A：确定目标交易日 T
+只在这些场景运行：
 
-* 如果传 `--date`，就用这个日期
-* 否则用最新交易日，不是自然日今天
+* 你更新了特征工程
+* 你更换了训练窗口
+* 你想发布新模型版本
+* 你定期 refresh 模型
 
-#### Step B：检查价格/特征是否覆盖到 T
+对应脚本仍然是：
 
-如果价格、候选原始输入、特征还没到 T，就直接失败，并报：
+* `01_build_dataset.py`
+* `02_train_gbdt_models.py`
 
-* 目标交易日
-* 最新价格日期
-* 最新原始特征日期
-* 为什么不能生成预测账本
+这两个不应该进每日生产主流程。
 
-#### Step C：构建 T 日候选样本
+---
 
-这里不要再依赖 `full_test_predictions.parquet`。
-那是历史研究产物，不该是生产输入。
+### B 层：每日推理层，高频运行
 
-正确做法是：
+这才是你缺的正式模块。
 
-* 从你当前真实的原始行情/信号/特征来源里
-* 只构造 `obs_date = T` 的候选样本
+建议保留 `07_generate_daily_predictions.py`，但**彻底重写它的输入来源**。
 
-如果现有 `01_build_dataset.py` 里有构造单日样本的逻辑，就把那部分抽出来，做成共享函数。
-如果没有，就从 `01_build_dataset.py` 抽一个：
+#### 它应该做的事
 
-```python id="m3n3qh"
+1. 确定目标交易日 T
+2. 从原始行情/信号/因子库中构造 **仅 `obs_date=T` 的候选样本**
+3. 复用训练阶段已经确定的特征列
+4. 加载 `output/models/` 下当前生效的 final 模型
+5. 生成：
+
+   * `pred_buy_cls`
+   * `pred_buy_reg`
+   * `pred_sell_cls`
+   * `pred_sell_reg`
+   * `score`
+6. 落到：
+
+   * `output/predictions/T.parquet`
+
+#### 它**不应该**做的事
+
+* 不训练模型
+* 不重建全量 dataset
+* 不依赖 `candidate_with_scores.parquet` 是否更新到今天
+
+---
+
+### C 层：生产执行层，每日运行
+
+这层就是：
+
+* `09_paper_trading_runner.py`
+* `10_tomorrow_action_plan.py`
+
+它们只吃：
+
+* `predictions/T.parquet`
+* `holdings/T-1.parquet`
+* `executions/decisions`
+* 当日价格
+
+不应该再关心训练，不应该再关心全量历史 candidate。
+
+---
+
+## 四、你现在最该改的，不是 02，而是 07
+
+### 当前 07 的问题
+
+Trae 现在做的 07 是：
+
+* 从 `candidate_with_scores.parquet` 提取单日数据
+* 如果那张表没更新到今天，就生成不了当天预测账本
+
+这会把你的生产链永远绑死在“全量研究表是否更新”。
+
+### 正确改法
+
+把 07 改成真正的 **单日推理器**。
+
+---
+
+## 五、07 的正确职责设计
+
+建议你把 `07_generate_daily_predictions.py` 改成下面这 5 步：
+
+### Step 1：解析目标交易日
+
+* 用户传 `--date` 就用该日期
+* 否则取最新交易日
+
+### Step 2：构造单日候选样本
+
+新增一个共享函数，例如从 `01_build_dataset.py` 抽出来：
+
+```python id="s0rftd"
 build_daily_candidates_for_date(target_date)
 ```
 
-#### Step D：加载已训练好的模型 bundle
+这个函数只生成：
 
-不要重新训练。
-只加载当前固定版本模型，例如：
+* `obs_date == target_date`
+* 且所有特征齐备
+* 与训练时特征口径一致
 
-* buy cls / reg
-* sell cls / reg
-* score 组合逻辑
+它内部可以复用：
 
-并且要和历史回测用的是同一套模型文件、同一套打分函数。
+* `expand_observation_period` 的核心逻辑
+* `merge_factor_lib_features`
+* `build_derived_features`
 
-#### Step E：写出正式预测账本
+### Step 3：加载已训练模型
 
-输出到：
+从 `output/models/` 加载当前正式模型。
+你现有 `02_train_gbdt_models.py` 和 `generate_full_predictions.py` 已经有这套模型加载和打分逻辑，直接复用，不要再写一套。
 
-```text id="fglf7d"
+### Step 4：对当日候选做推理
+
+生成四个预测列和 `score`。
+
+这里的 `score` 也应复用 `simple_backtest.py` 里的 `score_stocks` 逻辑，而不是自己再发明一套。
+
+### Step 5：写出正式预测账本
+
+路径：
+
+```text id="f6y509"
 stop_experiment/output/predictions/YYYY-MM-DD.parquet
 ```
 
-字段至少包含：
+并带上：
 
-* `ts_code`
-* `signal_id`
-* `obs_date`
-* `obs_day`
-* `pred_buy_cls`
-* `pred_buy_reg`
-* `pred_sell_cls`
-* `pred_sell_reg`
-* `score`
 * `model_version`
 * `feature_version`
 * `generated_at`
 
-这一步完成后，09 和 10 才有资格运行。
+---
+
+## 六、这样改完以后，`run_daily.py` 应该怎么跑
+
+### 正式生产流程
+
+`run_daily.py` 应该变成：
+
+1. 解析目标交易日
+2. 检查原始数据是否覆盖到 T
+3. **调用 07 自动生成 `predictions/T.parquet`**
+4. 调 09 live 落四本账
+5. 调 10 生成 T+1 行动计划
+6. 08/06 改成可选，不阻塞生产
+
+而不是现在这样靠检查一个“最新预测日”就说覆盖通过。
 
 ---
 
-## 四、`run_daily.py` 应该怎么永久改
+## 七、08 和 06 应该怎么定位
 
-你现在的 `run_daily` 逻辑顺序不对。
-正确顺序应该改成这样：
+### 08 `daily_inference_report`
 
-### 生产模式的正确流程
+它是研究层，不是生产最小依赖。
+所以：
 
-#### Step 0：解析目标交易日
+* 默认 production 不跑
+* 只有 `--with-report` 才跑
 
-新增：
+而且 08 里的错误提示“请运行 `01_selection_dsa.py`”必须删掉。
+因为这个文件根本不存在，这条指引是错误的。你已经发现这一点了，我同意你。
 
-```python id="xwuts4"
-resolve_target_trade_date()
-```
+### 06 `daily_inference_replay`
 
-规则：
-
-* 传了 `--date` 就用它
-* 否则用最新交易日
-* 周六/周日不能直接当目标交易日
+它是校验层，不是生产执行层。
+可以保留，但不要让它成为每天主链的硬门槛。
 
 ---
 
-#### Step 1：检查上游覆盖
+## 八、永久方案下，哪些文件该怎么改
 
-新增：
+### 1. 新版 `07_generate_daily_predictions.py`
 
-```python id="h5w0v6"
-check_source_coverage(target_date)
-```
+**重点重写**
 
-检查的是：
+* 取消对 `candidate_with_scores.parquet` 的正式依赖
+* 改为“单日候选构建 + 模型加载 + 推理打分”
 
-* 价格是否到 T
-* 原始候选/特征是否到 T
-* 模型文件是否存在
+### 2. `01_build_dataset.py`
 
-不是检查“某个模糊的最新预测日期”。
+**抽函数，不重写全文件**
+把单日候选构造逻辑抽出成可复用函数，给 07 用。
 
----
+### 3. `02_train_gbdt_models.py`
 
-#### Step 2：自动生成预测账本
+**基本不动**
+它继续只负责训练和模型发布，不进日常生产链。
 
-新增：
+### 4. `generate_full_predictions.py`
 
-```python id="mbj2xw"
-ensure_prediction_ledger(target_date, auto_generate=True)
-```
+**不再作为生产依赖**
+保留给研究/回测，不参与每日正式预测账本生成。
 
-逻辑：
+### 5. `run_daily.py`
 
-* 如果 `predictions/T.parquet` 已存在，就直接用
-* 如果不存在，就自动调用
-  `python -m stop_experiment.pipeline.07_generate_daily_predictions --date T`
-* 如果仍失败，就停止整个 production 流程
-
-这样你以后不需要再手动补“上游预测账本”。
+**重排流程**
+生产模式先调 07，而不是先检查一个口径错误的“最新预测日”。
 
 ---
 
-#### Step 3：运行 09（live 模式）
+## 九、我给你的最终版建议
 
-09 正式模式只允许读取：
+### 不要接受的做法
 
-* `predictions/T.parquet`
-* 前一日 `holdings`
-* 前一日 `decisions/executions`
-* 当日价格
+* 每天跑 `02_train_gbdt_models.py`
+* 每天重建全量 `candidate_with_scores.parquet`
+* 每天为了生成预测账本而重训模型
 
-**不能再依赖 `full_test_predictions.parquet`。**
+这不合理，也不是你现在代码本来想做的事。
 
----
+### 应该接受的做法
 
-#### Step 4：运行 10 行动计划
+* 模型固定版本，按周/月更新
+* 每天只构造 `obs_date=T` 的单日候选
+* 每天只加载模型做推理
+* 自动生成 `predictions/T.parquet`
+* 再进入 09/10
 
-10 严格模式要求：
-
-* `predictions/T.parquet`
-* `decisions/T.parquet`
-* `holdings/T.parquet`
-
-必须齐全。
+这才是永久方案。
 
 ---
 
-#### Step 5：08 研究日报改成可选
-
-生产模式下，08 不应该阻塞主链。
-因为它依赖的是研究覆盖，不是正式决策最小依赖。
-
-建议改成：
-
-```bash id="og6s6n"
-python -m stop_experiment.run_daily --with-report
-```
-
-才跑 08。默认 production 不跑 08。
-
----
-
-#### Step 6：06 replay 也改成可选
-
-06 可以保留，但建议作为：
-
-* debug/replay 校验
-* 周期性健康检查
-
-不要让它成为每天生产必须通过的第一步。
-
-因为现在它对 2026-05-08 这种超出历史预测覆盖的日期，本质是“正常跳过”，不是真正的生产 gate。
-
----
-
-## 五、你现有几个文件，各自该怎么改
-
-### 1. `run_daily.py`
-
-这是最重要的改动点。
-
-你要让它从现在的：
-
-* 回放 → 账本 → 行动计划 → 日报
-
-改成：
-
-* 目标日期解析
-* 上游覆盖检查
-* 自动生成预测账本
-* 09 live
-* 10 action plan
-* 可选 08 report
-* 可选 06 replay
-
-### 2. `09_paper_trading_runner.py`
-
-保留 `--mode live`，但明确规定：
-
-* live 模式绝不能读取 `full_test_predictions.parquet`
-* 只能读真实预测账本
-
-### 3. `10_tomorrow_action_plan.py`
-
-现在严格模式已经是对的：缺预测就失败。
-
-但要让它依赖的输入来源变清晰：
-
-* 只吃 09 落好的账本
-* 不要自己去猜测补什么
-
-### 4. `08_daily_inference_report.py`
-
-把“请运行 `01_selection_dsa.py`”这条提示删掉。
-因为你已经确认代码库里没有这个文件，这就是错误指引。
-
-替换成明确的新提示，例如：
-
-```text id="ai8ebr"
-请先生成当日预测账本：
-python -m stop_experiment.pipeline.07_generate_daily_predictions --date 2026-05-08
-```
-
-或者更彻底一点，08 不再负责给上游建议，只负责说：
-
-* 当前为研究报告
-* 历史覆盖不足
-* 请先更新研究输入数据
-
-### 5. `01_build_dataset.py`
-
-如果你打算永久解决问题，就不要再让它只服务“训练历史大表”。
-要把里面“构造某日 obs_date 样本”的逻辑抽成共享函数，供 07 调用。
-
----
-
-## 六、你需要的不是“每次手动补数据”，而是这两个自动化能力
-
-### 能力 1：自动生成当日预测账本
-
-这是最关键的。
-
-### 能力 2：生产与研究完全分流
-
-生产只关心：
-
-* 能否在 T 日收盘后生成 T 日预测
-* 能否产出 T+1 操作计划
-
-研究才关心：
-
-* 历史覆盖
-* 回放一致性
-* 深度日报
-
-这两个不要再绑在一个硬流程里。
-
----
-
-## 七、我建议你最终落成的命令应该长这样
-
-### 正式生产
-
-```bash id="na0h7u"
-python -m stop_experiment.run_daily
-```
-
-内部自动完成：
-
-1. 解析最新交易日
-2. 检查原始数据覆盖
-3. 自动生成 `predictions/T.parquet`
-4. 运行 09 live
-5. 运行 10 action plan
-
-### 带研究日报
-
-```bash id="n6u4hx"
-python -m stop_experiment.run_daily --with-report
-```
-
-### 只生成预测账本
-
-```bash id="jdu1pm"
-python -m stop_experiment.pipeline.07_generate_daily_predictions --date 2026-05-08
-```
-
-### 调试/历史回放
-
-```bash id="xgs5sv"
-python -m stop_experiment.run_daily --date 2026-05-06 --mode debug --with-replay --with-report
-```
-
----
-
-## 八、我对你当前系统的最终版建议
-
-最重要的一句话：
-
-> **不要再试图修补“哪个步骤缺文件就报错”，而是要补上“预测账本生成器”这个缺失的正式生产步骤。**
-
-这是永久性解决方案。
-
-否则你以后每次都会碰到同一类问题：
-
-* 今天是最新交易日
-* 价格到了
-* 账本和行动计划都需要 `predictions/T.parquet`
-* 但没有任何正式模块负责先生成它
-
-然后你就只能手动补一次。
-
----
-
-## 九、你现在可以直接让 Trae 做的最终改动清单
-
-你可以把下面这段直接给它：
-
-1. 新增 `pipeline/07_generate_daily_predictions.py`，作为正式生产预测账本生成器。
-2. 从 `01_build_dataset.py` 抽取单日候选构造逻辑，供 07 调用。
-3. `run_daily.py` 改为：解析目标交易日 → 检查原始数据覆盖 → 自动生成预测账本 → 09 live → 10 action plan → 可选 08 report/06 replay。
-4. `run_daily.py` 的覆盖检查必须直接检查 `output/predictions/{T}.parquet`，不能再用错误代理口径。
-5. `09_paper_trading_runner.py` 的 live 模式只允许读取真实预测账本，不再依赖 `full_test_predictions.parquet`。
-6. `08_daily_inference_report.py` 删除错误提示 `01_selection_dsa.py`，改成新生产链提示或仅保留研究层提示。
-7. 生产模式下默认不跑 08 和 06；它们改成可选步骤。
-8. `run_daily.py` 最终汇总只显示真实存在的产物文件，不要显示“理论路径”。
+## 十、你现在可以直接让 Trae 去做的最终任务
+
+你可以把下面这段直接发给它：
+
+1. 保留 `07_generate_daily_predictions.py`，但彻底改成“单日推理器”，不要再依赖 `candidate_with_scores.parquet` 作为正式生产输入。
+2. 从 `01_build_dataset.py` 抽取单日候选构造逻辑，新增 `build_daily_candidates_for_date(target_date)`。
+3. 在 07 中复用 `02_train_gbdt_models.py` / `generate_full_predictions.py` 的模型加载和预测逻辑，加载现成模型，不训练。
+4. 在 07 中复用 `simple_backtest.py` 的 `score_stocks` 生成 `score`。
+5. `run_daily.py` 改为：解析目标交易日 → 检查原始数据覆盖 → 自动调用 07 生成 `predictions/T.parquet` → 09 live → 10 action plan。
+6. production 模式默认不跑 08 和 06；它们改成 `--with-report` / `--with-replay` 可选。
+7. 删除 08 里所有关于 `01_selection_dsa.py` 的错误提示，替换成 07 或纯研究提示。
+8. 最终覆盖检查必须以 `predictions/T.parquet` 的真实生成成功为准，而不是目录里某个“最新预测日”代理口径。
 
 这才是你要的“永久性解决问题”的版本。

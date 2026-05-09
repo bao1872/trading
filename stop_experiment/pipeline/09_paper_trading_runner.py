@@ -418,6 +418,10 @@ def run_single_day(target_date, df_all, price_pivot, trading_days, prev_close_ma
         nd = sorted(trading_days)[next_idx]
         if nd in price_pivot.index:
             day_open_next = price_pivot.loc[nd, "open"]
+    # 若 T 为最新交易日（无 T+1 开盘价），用 T 日收盘价作为买入价代理
+    if day_open_next.empty or day_open_next.isna().all():
+        day_open_next = day_close.copy()
+        print(f"  [代理] T+1 开盘价不可用，使用 T 日收盘价作为买入价代理")
 
     holdings, pending_buys, pending_sells, sell_reasons, _extra = decide_eod(
         decision_date=target_date, holdings=holdings,
@@ -516,8 +520,12 @@ def main():
         df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
         df_all = score_stocks(df_all, V1_PARAMS.get("strategy_default", "sell_score"))
         print(f"  候选: {len(df_all)} 行 (全量预测)")
+
+        test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data(
+            candidate_obs_days=V1_PARAMS["candidate_obs_days"]
+        )
     else:
-        # live 模式：只读当日预测账本
+        # live 模式：只读当日预测账本，pred_lookup 从实时预测构建
         if not args.date:
             raise RuntimeError("live 模式必须指定 --date (单日)")
         pred_path = os.path.join(PREDICTIONS_DIR, f"{args.date}.parquet")
@@ -536,10 +544,21 @@ def main():
             df_all = score_stocks(df_all, V1_PARAMS.get("strategy_default", "sell_score"))
         print(f"  候选: {len(df_all)} 行 (实时预测账本)")
 
-    test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data(
-        candidate_obs_days=V1_PARAMS["candidate_obs_days"]
-    )
-    print(f"  候选: {len(df_all)} 行, 交易日: {len(trading_days)}")
+        # 从实时预测构建 pred_lookup（替代 full_test_predictions.parquet）
+        pred_lookup = {}
+        for _, row in df_all.iterrows():
+            key = (int(row["signal_id"]), row["obs_date"])
+            pred_lookup[key] = {
+                "pred_buy_cls": float(row.get("pred_buy_cls", np.nan)),
+                "pred_sell_reg": float(row.get("pred_sell_reg", np.nan)),
+                "composite_score": float(row.get("score", np.nan)),
+            }
+
+        # 价格数据直接从 DB 加载（不依赖 full_test_predictions.parquet）
+        from stop_experiment.backtest.simple_backtest import load_daily_prices, build_price_pivot
+        daily = load_daily_prices("2024-01-01", "2027-01-01")
+        price_pivot, trading_days, prev_close_map = build_price_pivot(daily)
+        print(f"  交易日: {len(trading_days)}, pred_lookup: {len(pred_lookup)} 条")
 
     dates = []
     if args.date:

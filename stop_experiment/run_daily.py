@@ -10,10 +10,11 @@
 
 流程（production）：
   Step 0: 解析目标交易日
-  Step 1: 上游覆盖检查（candidate_with_scores 是否到 T）
+  Step 1: 上游覆盖检查（DB 原始数据是否覆盖 T）
   Step 2: 自动生成预测账本 (07, 幂等)
   Step 3: 09 模拟盘 (live 模式, 落四本账)
   Step 4: 10 行动计划 (正式模式)
+  Step 5: 11 飞书通知 (production 默认开启)
   [可选]: 08 日报 / 06 回放
 
 输出：
@@ -74,44 +75,47 @@ def resolve_target_trade_date(args):
 
 def check_source_coverage(target_date):
     """
-    检查上游数据是否覆盖目标交易日。
-    检查项: candidate_with_scores.parquet 中 obs_date=T 的行数。
+    检查上游 DB 原始数据是否覆盖目标交易日。
+    检查项: stock_k_data 最新日线日期、stop_loss_selection 最新信号日期。
     返回 (ok, message)。
     """
-    cand_path = os.path.join(OUTPUT_DIR, "candidate_with_scores.parquet")
+    from sqlalchemy import text
+    from datasource.database import get_engine
+
     target_dt = PD.to_datetime(target_date)
+    engine = get_engine()
+
+    try:
+        with engine.connect() as conn:
+            sql_k = "SELECT MAX(bar_time) FROM stock_k_data WHERE freq = 'd'"
+            latest_k = conn.execute(text(sql_k)).scalar()
+            sql_s = "SELECT MAX(signal_date) FROM stop_loss_selection"
+            latest_s = conn.execute(text(sql_s)).scalar()
+    finally:
+        engine.dispose()
 
     messages = []
     messages.append(f"  目标交易日: {target_date}")
+    messages.append(f"  K线最新日期: {str(latest_k)[:10] if latest_k else 'None'}")
+    messages.append(f"  信号最新日期: {str(latest_s)[:10] if latest_s else 'None'}")
 
-    if not os.path.exists(cand_path):
-        messages.append(f"  ❌ candidate_with_scores.parquet 不存在")
-        messages.append(f"  请先运行: 01_build_dataset.py → 02_train_gbdt_models.py")
+    if latest_k is None or PD.to_datetime(latest_k) < target_dt:
+        messages.append(f"  ❌ K线数据未覆盖 {target_date}")
+        messages.append(f"  请检查数据源 (stock_k_data) 更新状态")
         return False, "\n".join(messages)
 
-    df_cand = PD.read_parquet(cand_path, columns=["obs_date"])
-    df_cand["obs_date"] = PD.to_datetime(df_cand["obs_date"])
-    min_d = df_cand["obs_date"].min()
-    max_d = df_cand["obs_date"].max()
-    n_target = (df_cand["obs_date"] == target_dt).sum()
+    if latest_s is None or PD.to_datetime(latest_s) < target_dt:
+        messages.append(f"  ❌ 信号数据未覆盖 {target_date}")
+        messages.append(f"  请检查数据源 (stop_loss_selection) 更新状态")
+        return False, "\n".join(messages)
 
     pred_path = os.path.join(PREDICTIONS_DIR, f"{target_date}.parquet")
-    pred_exists = os.path.exists(pred_path)
-
-    messages.append(f"  candidate_with_scores 范围: {min_d.strftime('%Y-%m-%d')} ~ {max_d.strftime('%Y-%m-%d')}")
-    messages.append(f"  candidate_with_scores 覆盖目标: {n_target} 行")
-
-    if n_target == 0:
-        messages.append(f"  ❌ candidate_with_scores.parquet 未覆盖 {target_date}")
-        messages.append(f"  请先运行上游: 01_build_dataset.py → 02_train_gbdt_models.py")
-        return False, "\n".join(messages)
-
-    if pred_exists:
+    if os.path.exists(pred_path):
         messages.append(f"  ✅ predictions/{target_date}.parquet 已存在")
     else:
-        messages.append(f"  ⚠️ predictions/{target_date}.parquet 不存在 (Step2将自动生成)")
+        messages.append(f"  ⚠️ predictions/{target_date}.parquet 不存在 (将在 Step2 自动生成)")
 
-    messages.append(f"  ✅ 上游覆盖检查通过")
+    messages.append(f"  ✅ 原始数据覆盖检查通过")
     return True, "\n".join(messages)
 
 
@@ -194,6 +198,10 @@ def main():
                         help="运行模式: production(严格)/debug(宽松)")
     parser.add_argument("--with-report", action="store_true", help="追加 08 日报")
     parser.add_argument("--with-replay", action="store_true", help="追加 06 回放(历史一致性校验)")
+    parser.add_argument("--feishu", action="store_true", default=None,
+                        help="启用飞书通知 (production 默认开启)")
+    parser.add_argument("--no-feishu", action="store_true",
+                        help="强制关闭飞书通知 (含 production)")
     args = parser.parse_args()
 
     print(f"{'='*70}")
@@ -258,6 +266,19 @@ def main():
         ["stop_experiment.pipeline.10_tomorrow_action_plan", "--date", date_str],
     )
     step_statuses["10_action_plan"] = status
+
+    # Step 5: 11 飞书通知
+    send_feishu = args.feishu if args.feishu is not None else (args.mode == "production")
+    if args.no_feishu:
+        send_feishu = False
+    if send_feishu:
+        status, _ = run_step(
+            "Step5-11飞书通知",
+            ["stop_experiment.pipeline.11_feishu_notification", "--date", date_str],
+        )
+        step_statuses["11_feishu"] = status
+    else:
+        print(f"\n  ⏭️ 跳过 11 飞书通知 (--feishu 可启用)")
 
     # 可选: 06 回放
     if args.with_replay or args.mode == "debug":
