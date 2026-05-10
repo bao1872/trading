@@ -107,6 +107,8 @@ def _load_data(candidate_obs_days=None):
         prediction_lookup[key] = {
             "pred_buy_cls": float(row.get("pred_buy_cls", np.nan)),
             "pred_sell_reg": float(row.get("pred_sell_reg", np.nan)),
+            "pred_sell_cls": float(row.get("pred_sell_cls", np.nan)),
+            "pred_buy_reg": float(row.get("pred_buy_reg", np.nan)),
             "composite_score": float(row.get("composite_score", np.nan)) if "composite_score" in row else np.nan,
         }
 
@@ -158,13 +160,14 @@ def run_backtest(
     take_profit=TAKE_PROFIT, strict=True,
     buy_cost=None, sell_cost=None,
     buy_cls_exit_threshold=0.70,
+    exit_sub_mode=None, buy_reg_exit_threshold=None,
     debug_snapshots=False,
 ):
     """
     通用回测引擎，exit_mode 控制退出策略:
     - fixed_hold
     - rule_exit
-    - model_exit
+    - model_exit (支持 exit_sub_mode: None/X1 / "sell_decay"/X3 / "or_buy_reg"/X4)
 
     debug_snapshots=True 时返回逐日快照，用于与逐日推理脚本对账。
     """
@@ -309,10 +312,20 @@ def run_backtest(
             max_hold_days=max_hold_days,
             stop_loss=stop_loss,
             exit_threshold=buy_cls_exit_threshold,
+            exit_sub_mode=exit_sub_mode,
+            buy_reg_exit_threshold=buy_reg_exit_threshold,
+            prev_decision_date=trading_days[t_idx - 2] if t_idx >= 2 else None,
         )
 
         pending_sells = pending_sells_new
         pending_orders = pending_buys_new
+
+        # 按 exit_mode 过滤卖出类型（修复：之前 decide_eod 总是评估全部三种退出）
+        if exit_mode == "fixed_hold":
+            pending_sells = [s for s in pending_sells if s["reason"] == "max_hold"]
+        elif exit_mode == "rule_exit":
+            pending_sells = [s for s in pending_sells if s["reason"] != "model_risk"]
+        # else: model_exit — 保持全部 pending_sells
 
         # Step 3: NAV（与 decide_eod 前完全一致，holdings 中 days_held 已递增）
         daily_ret = 0.0

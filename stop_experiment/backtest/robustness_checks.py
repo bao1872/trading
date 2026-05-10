@@ -63,7 +63,7 @@ def run_threshold_robustness(args):
     print("阈值局部稳健性")
     print("=" * 60)
 
-    thresholds = [0.65, 0.70, 0.75]
+    thresholds = [0.55, 0.60, 0.65, 0.70, 0.75, 0.80]
     stops = [-0.05, -0.07, -0.09]
 
     test_df, price, td, prev, pred = _load_data(
@@ -179,6 +179,61 @@ def run_cost_sensitivity(args):
         print(f"\n  ⚠️ 结论: 高成本下模型退出优势减弱或消失")
 
 
+def run_buy_cls_calibration(args):
+    """buy_cls 阈值专项重标定：固定 stop_loss=-0.07，纯扫 buy_cls 阈值"""
+    print("=" * 60)
+    print("buy_cls 阈值专项重标定")
+    print("=" * 60)
+
+    thresholds = [0.55, 0.60, 0.65, 0.70, 0.75, 0.80]
+    fixed_stop = -0.07
+
+    test_df, price, td, prev, pred = _load_data(
+        candidate_obs_days=V1_PARAMS["candidate_obs_days"]
+    )
+
+    rows = []
+    for th in thresholds:
+        print(f"  buy_cls_threshold={th}, stop_loss={fixed_stop:.2f}")
+        result = run_backtest(
+            test_df, price, td, prev, pred,
+            max_stocks=args.top_k, strategy=args.strategy,
+            exit_mode="model_exit", stop_loss=fixed_stop,
+            buy_cls_exit_threshold=th,
+            strict=True,
+        )
+        s = compute_summary(result)
+        rows.append({
+            "buy_cls_threshold": th,
+            "stop_loss": fixed_stop,
+            "final_nav": s.get("final_nav", np.nan),
+            "max_dd": s.get("max_dd", np.nan),
+            "sharpe": s.get("sharpe", np.nan),
+            "win_rate": s.get("win_rate", np.nan),
+            "n_trades": s.get("n_trades", 0),
+            "avg_hold_days": s.get("avg_hold_days", np.nan),
+        })
+
+    df_out = pd.DataFrame(rows)
+    path = os.path.join(BACKTEST_DIR, "buy_cls_calibration.csv")
+    os.makedirs(BACKTEST_DIR, exist_ok=True)
+    df_out.to_csv(path, index=False)
+
+    print(f"\n  输出: {path}")
+    print(f"\n  buy_cls 阈值扫描结果:")
+    for _, row in df_out.iterrows():
+        print(f"    th={row['buy_cls_threshold']:.2f}: "
+              f"NAV={row['final_nav']:.4f}, Sharpe={row['sharpe']:.2f}, "
+              f"MDD={row['max_dd']:.4f}, win={row['win_rate']:.2%}, "
+              f"avg_hold={row['avg_hold_days']:.1f}d")
+
+    print(f"\n  NAV: min={df_out['final_nav'].min():.4f}, max={df_out['final_nav'].max():.4f}, "
+          f"range={df_out['final_nav'].max()-df_out['final_nav'].min():.4f}")
+
+    best = df_out.loc[df_out["final_nav"].idxmax()]
+    print(f"  ✅ 最优 buy_cls 阈值: {best['buy_cls_threshold']:.2f} (NAV={best['final_nav']:.4f})")
+
+
 def run_capacity_sensitivity(args):
     """3c: 容量敏感性 (top_k=5/10/20)"""
     print("=" * 60)
@@ -245,7 +300,7 @@ def run_capacity_sensitivity(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="三类局部稳健性测试")
     parser.add_argument("--mode", type=str, default="all",
-                        choices=["all", "thresholds", "cost", "capacity"])
+                        choices=["all", "thresholds", "cost", "capacity", "buy_cls_calibration"])
     parser.add_argument("--top-k", type=int, default=10, help="最大持仓数")
     parser.add_argument("--strategy", type=str, default="sell_score",
                         choices=["sell_score", "low_risk", "composite"])
@@ -261,3 +316,7 @@ if __name__ == "__main__":
 
     if args.mode in ("all", "capacity"):
         run_capacity_sensitivity(args)
+        print()
+
+    if args.mode in ("all", "buy_cls_calibration"):
+        run_buy_cls_calibration(args)

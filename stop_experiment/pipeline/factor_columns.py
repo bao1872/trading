@@ -118,7 +118,21 @@ DYNAMIC_COLS = [
     "dist_to_buy_stop_pct",  # float, 当前价到买止损距离(%)
 ]
 
-# ==================== 派生特征（交叉计算） ====================
+# ==================== VSA 量价类因子 ====================
+VSA_COLS = [
+    "vsa_er_factor",          # float, VSA Effort-Rank - Result-Rank 核心 ER 因子
+    "vsa_er_factor_ma",       # float, ER 因子 MA 平滑值
+    "vsa_effort_rank",        # float, 量能努力等级 1-10
+    "vsa_result_rank",        # float, 价差结果等级 1-10
+    "vsa_vol_rank",           # float, 成交量滚动百分位排名 0-100
+    "vsa_spread_rank",        # float, 价差滚动百分位排名 0-100
+    "vsa_net_score",          # float, 多空背景净得分
+    "vsa_strength_score",     # float, 多头背景得分
+    "vsa_weakness_score",     # float, 空头背景得分
+    "vsa_bull_score",         # float, 单根 K 线多头信号得分 (0/1/2/3)
+    "vsa_bear_score",         # float, 单根 K 线空头信号得分 (0/1/2/3)
+    "vsa_strong_move_z",      # float, 强移动 Z-score
+]
 DERIVED_COLS = [
     "cluster_count_ratio",       # active_sell / (active_buy + 1)
     "dist_atr_ratio",            # dist_sell_stop_atr / (dist_buy_stop_atr + 0.01)
@@ -154,14 +168,18 @@ FACTOR_CATEGORIES = {
     "rhythm": RHYTHM_COLS,
     "dynamic": DYNAMIC_COLS,
     "derived": DERIVED_COLS,
+    "vsa": VSA_COLS,
 }
 
 # ==================== 全部特征列 ====================
+from stop_experiment.pipeline.stop_config import VSA_ENABLED
+
 ALL_FEATURE_COLS = (
     SLC_STATIC_COLS + TREND_COLS + POSITION_COLS + MOMENTUM_COLS
     + VOLUME_COLS + RISK_COLS + RHYTHM_COLS + DYNAMIC_COLS + DERIVED_COLS
+    + (VSA_COLS if VSA_ENABLED else [])
 )
-# ~57列（剔除8个无效特征，新增2个：bbmacd_slope_3_pct, has_buy_cluster）
+# ~69列含VSA (57基础 + 12 VSA)，默认57列（VSA_ENABLED=False）
 
 # ==================== 剔除的不可比因子（仅作文档记录） ====================
 EXCLUDED_ABSOLUTE_COLS = {

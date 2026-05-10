@@ -132,18 +132,28 @@ def evaluate_stop_loss(holding, current_price, stop_loss_threshold=None):
 
 def evaluate_eod_exits(holdings, prev_date, pred_lookup,
                        max_hold_days=None, stop_loss=None,
-                       exit_threshold=None, current_price_map=None):
+                       exit_threshold=None, current_price_map=None,
+                       exit_sub_mode=None, buy_reg_exit_threshold=None,
+                       prev_decision_date=None):
     """
     评估所有持仓的退出信号（max_hold → stop_loss → model_exit）。
 
+    exit_sub_mode (仅 model_exit 有效):
+        None / "buy_cls_only" (X1): 仅 buy_cls > exit_threshold 退出
+        "sell_decay" (X3): buy_cls > exit_threshold 且 sell_reg(t) < sell_reg(t-1)
+        "or_buy_reg" (X4): buy_cls > exit_threshold 或 buy_reg < -buy_reg_exit_threshold
+
     Input:
         holdings:         dict {code: holding_dict}
-        prev_date:        前一交易日
+        prev_date:        前一交易日 (T-1)
         pred_lookup:      {(signal_id, obs_date): pred_dict}
         max_hold_days:    最大持仓天数
         stop_loss:        止损阈值
         exit_threshold:   model_exit 阈值
         current_price_map: {code: price} 当日收盘价映射，用于止损计算
+        exit_sub_mode:    model_exit 子模式
+        buy_reg_exit_threshold: X4 的 buy_reg 退出阈值 (正数，如 0.05)
+        prev_decision_date: X3 用 T-2 日期，用于比较 sell_reg 衰减
 
     Output:
         sell_decisions: [(code, holding, reason), ...]
@@ -169,21 +179,45 @@ def evaluate_eod_exits(holdings, prev_date, pred_lookup,
                 sells.append((code, dict(h), "stop_loss"))
                 continue
 
-        # c. model_exit
+        # c. model_exit (supporting sub-modes: X1/X3/X4)
         sid = h.get("signal_id")
         if sid is not None and prev_date is not None and h["days_held"] > 1:
             pred = find_exit_pred(sid, prev_date, pred_lookup)
             if pred is not None:
                 bc = pred.get("pred_buy_cls", np.nan)
-                if not np.isnan(bc) and bc > _threshold:
-                    sells.append((code, dict(h), "model_risk"))
+
+                if exit_sub_mode == "sell_decay":
+                    # X3: buy_cls > threshold 且 sell_reg 较前日下降
+                    sr = pred.get("pred_sell_reg", np.nan)
+                    prev_pred = find_exit_pred(sid, prev_decision_date, pred_lookup) if prev_decision_date else None
+                    sr_prev = prev_pred.get("pred_sell_reg", np.nan) if prev_pred else np.nan
+                    if (not np.isnan(bc) and bc > _threshold and
+                            not np.isnan(sr) and not np.isnan(sr_prev) and sr < sr_prev):
+                        sells.append((code, dict(h), "model_risk"))
+                        continue
+
+                elif exit_sub_mode == "or_buy_reg":
+                    # X4: buy_cls > threshold 或 buy_reg < -k
+                    br = pred.get("pred_buy_reg", np.nan)
+                    _br_th = buy_reg_exit_threshold if buy_reg_exit_threshold is not None else 0.05
+                    if ((not np.isnan(bc) and bc > _threshold) or
+                            (not np.isnan(br) and br < -_br_th)):
+                        sells.append((code, dict(h), "model_risk"))
+                        continue
+
+                else:
+                    # X1: 仅 buy_cls > threshold
+                    if not np.isnan(bc) and bc > _threshold:
+                        sells.append((code, dict(h), "model_risk"))
 
     return sells
 
 
 def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
                day_close, day_open_next=None, max_stocks=10, max_hold_days=20,
-               stop_loss=-0.07, exit_threshold=0.70, strategy="sell_score"):
+               stop_loss=-0.07, exit_threshold=0.70, strategy="sell_score",
+               exit_sub_mode=None, buy_reg_exit_threshold=None,
+               prev_decision_date=None):
     """
     完整日终决策（SSOT），供 backtest/replay/report 共用。
 
@@ -210,6 +244,9 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
         stop_loss:     止损阈值（如 -0.07）
         exit_threshold: model_exit pred_buy_cls 阈值
         strategy:      策略名
+        exit_sub_mode: model_exit 子模式 (None="buy_cls_only" / "sell_decay" / "or_buy_reg")
+        buy_reg_exit_threshold: X4 的 buy_reg 退出阈值
+        prev_decision_date: X3 用 T-2 日期，比较 sell_reg 衰减
 
     Output:
         holdings:       原 holdings dict（days_held 已递增，sells 仍保留在 dict 中）
@@ -244,20 +281,41 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
                     sell_reasons[h.get("ts_code", code)] = "stop_loss"
                     continue
 
-        # c. model_exit（仅对 days_held > 1 且 signal_id 已知的持仓）
+        # c. model_exit（仅对 days_held > 1 且 signal_id 已知的持仓, 支持 X1/X3/X4 子模式）
         if h["days_held"] > 1 and prev_date is not None:
             sid = h.get("signal_id")
             if sid is not None:
                 pred = find_exit_pred(sid, prev_date, pred_lookup)
                 if pred is not None:
                     bc = pred.get("pred_buy_cls", np.nan)
-                    if not np.isnan(bc) and bc > exit_threshold:
+
+                    def _do_sell():
                         pending_sells.append({"code": code, "holding": dict(h), "reason": "model_risk"})
                         sell_reasons[h.get("ts_code", code)] = "model_risk"
 
+                    if exit_sub_mode == "sell_decay":
+                        sr = pred.get("pred_sell_reg", np.nan)
+                        prev_pred = find_exit_pred(sid, prev_decision_date, pred_lookup) if prev_decision_date else None
+                        sr_prev = prev_pred.get("pred_sell_reg", np.nan) if prev_pred else np.nan
+                        if (not np.isnan(bc) and bc > exit_threshold and
+                                not np.isnan(sr) and not np.isnan(sr_prev) and sr < sr_prev):
+                            _do_sell()
+
+                    elif exit_sub_mode == "or_buy_reg":
+                        br = pred.get("pred_buy_reg", np.nan)
+                        _br_th = buy_reg_exit_threshold if buy_reg_exit_threshold is not None else 0.05
+                        if ((not np.isnan(bc) and bc > exit_threshold) or
+                                (not np.isnan(br) and br < -_br_th)):
+                            _do_sell()
+
+                    else:
+                        if not np.isnan(bc) and bc > exit_threshold:
+                            _do_sell()
+
     # ---- 3. 新买入 ----
-    # n_avail 预扣 pending_sells（与回测语义一致：sell 在下日开盘执行前不占仓位额度）
-    n_avail = max_stocks - len(holdings) - len(pending_sells)
+    # n_avail: 预留 pending_sells 的仓位（sell 在下日开盘执行后释放额度）
+    # holdings 此时仍包含 pending_sells（尚未执行），所以 n_avail = max - (|H| - |S|) = max - |H| + |S|
+    n_avail = max_stocks - len(holdings) + len(pending_sells)
     pending_buys = []
     if n_avail > 0 and not candidates.empty and day_open_next is not None:
         score_col = "score" if "score" in candidates.columns else "composite_score"

@@ -37,7 +37,7 @@ import pandas as pd
 
 from stop_experiment.pipeline.factor_columns import (
     TREND_COLS, POSITION_COLS, MOMENTUM_COLS,
-    VOLUME_COLS, RISK_COLS, RHYTHM_COLS,
+    VOLUME_COLS, RISK_COLS, RHYTHM_COLS, VSA_COLS,
     ALL_FEATURE_COLS,
 )
 from stop_experiment.pipeline.stop_config import DATASET_PATH, OUTPUT_DIR
@@ -148,6 +148,14 @@ def compute_stock_factors(df_kline: pd.DataFrame) -> pd.DataFrame:
     # 9. stage相关派生（runs 计算）
     merged["current_stage_amp_pct"], merged["current_stage_ret_pct"] = _compute_stage_metrics(merged)
     merged["prev_stage_amp_pct"] = merged["current_stage_amp_pct"].shift(1)
+
+    # 10. VSA 量价因子（引用 factor_lib 权威实现，受 VSA_ENABLED 控制）
+    from stop_experiment.pipeline.stop_config import VSA_ENABLED
+    if VSA_ENABLED:
+        from factor_lib.categories.quantity_price import compute_quantity_price_factors
+        vsa_factors = compute_quantity_price_factors(df_kline)
+        for col in vsa_factors.columns:
+            merged[col] = vsa_factors[col]
 
     # 只保留需要的列
     factor_cols = [c for c in ALL_FEATURE_COLS if c in merged.columns]

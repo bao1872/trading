@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import sys
 import os
+import json
 import argparse
 import warnings
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np
 import pandas as pd
 from scipy import stats
+from tqdm import tqdm
 import lightgbm as lgb
 from sklearn.metrics import mean_absolute_error, roc_auc_score, average_precision_score
 
@@ -56,13 +58,33 @@ warnings.filterwarnings("ignore")
 
 from stop_experiment.pipeline.stop_config import (
     EMBARGO_DAYS, LGB_PARAMS, MODEL_SPECS,
-    OUTPUT_DIR, DATASET_PATH, MODELS_DIR,
+    OUTPUT_DIR, DATASET_PATH, MODELS_DIR, MODELS_TREATMENT_DIR,
     OBS_TRAIN_END, OBS_VAL_END,
 )
-from stop_experiment.pipeline.factor_columns import (
-    ALL_FEATURE_COLS, ALL_LABELS, META_COLS,
-    FACTOR_CATEGORIES,
-)
+from stop_experiment.pipeline.factor_columns import ALL_FEATURE_COLS
+
+BATCHES_DIR = os.path.join(OUTPUT_DIR, "dataset_batches")
+
+
+def load_dataset() -> pd.DataFrame:
+    """加载数据集，自动兼容分批/单文件模式"""
+    manifest_path = os.path.join(BATCHES_DIR, "manifest.json")
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        print(f"  分批数据集: {manifest['total_batches']} 批, {manifest['total_rows']} 行")
+        dfs = []
+        for batch_file in tqdm(manifest["batch_files"], desc="加载分批数据集"):
+            batch_path = os.path.join(BATCHES_DIR, batch_file)
+            dfs.append(pd.read_parquet(batch_path))
+        return pd.concat(dfs, ignore_index=True)
+    elif os.path.exists(DATASET_PATH):
+        print(f"  单文件数据集: {DATASET_PATH}")
+        return pd.read_parquet(DATASET_PATH)
+    else:
+        raise FileNotFoundError(f"数据集不存在: {BATCHES_DIR} 或 {DATASET_PATH}")
+
+
 from datetime import datetime
 
 
@@ -284,11 +306,20 @@ def main(args):
     print("Stop-Loss Clustering GBDT 模型训练 (v2: train/val/test)")
     print("=" * 60)
 
+    # 确定模型输出目录和特征集
+    if args.exclude_vsa:
+        models_dir = MODELS_DIR                        # models_control（当前默认基线）
+        feature_set_tag = "Control (56特征, 不含VSA)"
+    else:
+        models_dir = MODELS_TREATMENT_DIR              # models（VSA版，研究保留）
+        feature_set_tag = "Treatment (68特征, 含VSA)"
+
     # 1. 加载数据
     print("\n[1/5] 加载数据集...")
-    df = pd.read_parquet(DATASET_PATH)
+    df = load_dataset()
     if args.sample_limit > 0:
         df = df.head(args.sample_limit)
+        print(f"  sample_limit: {args.sample_limit}")
     print(f"  总行数: {len(df)}, 列数: {len(df.columns)}")
 
     # 过滤可交易 + 有效标签
@@ -304,13 +335,18 @@ def main(args):
     if missing_features:
         print(f"  缺少特征: {missing_features}")
 
+    # 排除/保留 VSA 因子
+    if args.exclude_vsa:
+        feature_cols = [c for c in feature_cols if not c.startswith("vsa_")]
+        print(f"  排除 VSA 后特征数: {len(feature_cols)} ({feature_set_tag})")
+
     # 2. 构建 train/val/test 分割
     print("\n[2/5] 构建 train/val/test 分割...")
     split = build_train_val_test_split(df)
 
     # 3. 训练4个模型（用val早停）
     print("\n[3/5] 训练4个模型变体（val早停）...")
-    os.makedirs(MODELS_DIR, exist_ok=True)
+    os.makedirs(models_dir, exist_ok=True)
 
     all_metrics = []
     all_importance = []
@@ -362,7 +398,7 @@ def main(args):
                   f"best_iter={val_metrics['best_iteration']}")
 
         # 保存early-stopping模型
-        model_path = os.path.join(MODELS_DIR, f"{model_name}.txt")
+        model_path = os.path.join(models_dir, f"{model_name}.txt")
         model.save_model(model_path)
         print(f"    模型保存: {model_path}")
 
@@ -425,35 +461,35 @@ def main(args):
         )
 
         # 保存最终模型
-        final_model_path = os.path.join(MODELS_DIR, f"{model_name}_final.txt")
+        final_model_path = os.path.join(models_dir, f"{model_name}_final.txt")
         final_model.save_model(final_model_path)
         print(f"    最终模型保存: {final_model_path} (iter={best_iterations[model_name]})")
 
     # 保存指标
     metrics_df = pd.DataFrame(all_metrics)
-    metrics_path = os.path.join(OUTPUT_DIR, "fold_metrics.csv")
+    metrics_path = os.path.join(models_dir, "fold_metrics.csv")
     metrics_df.to_csv(metrics_path, index=False)
     print(f"\n  指标: {metrics_path}")
 
     # 保存重要性
     imp_df = pd.concat(all_importance, ignore_index=True)
-    imp_path = os.path.join(OUTPUT_DIR, "feature_importance.csv")
+    imp_path = os.path.join(models_dir, "feature_importance.csv")
     imp_df.to_csv(imp_path, index=False)
     print(f"  重要性: {imp_path}")
 
     # 保存test集预测
-    test_preds_path = os.path.join(OUTPUT_DIR, "test_predictions.parquet")
+    test_preds_path = os.path.join(models_dir, "test_predictions.parquet")
     test_preds.to_parquet(test_preds_path, index=False)
     print(f"  test预测: {test_preds_path}")
 
     # 生成全量带评分数据集（用final模型）
     print("\n生成全量带评分数据集（final模型）...")
     for model_name, spec in MODEL_SPECS.items():
-        final_model_path = os.path.join(MODELS_DIR, f"{model_name}_final.txt")
+        final_model_path = os.path.join(models_dir, f"{model_name}_final.txt")
         final_model = lgb.Booster(model_file=final_model_path)
         df[f"pred_{model_name}"] = final_model.predict(df[feature_cols])
 
-    scores_path = os.path.join(OUTPUT_DIR, "candidate_with_scores.parquet")
+    scores_path = os.path.join(models_dir, "candidate_with_scores.parquet")
     df.to_parquet(scores_path, index=False)
     print(f"  保存: {scores_path}")
 
@@ -500,7 +536,7 @@ def main(args):
             monitor["obs_day_2_pct"] = (df["obs_day"] == 2).mean()
             monitor["obs_day_3_pct"] = (df["obs_day"] == 3).mean()
 
-        mon_path = os.path.join(OUTPUT_DIR, "monitoring.csv")
+        mon_path = os.path.join(models_dir, "monitoring.csv")
         monitor_df = pd.DataFrame([monitor])
         if os.path.exists(mon_path):
             monitor_df.to_csv(mon_path, mode="a", header=False, index=False)
@@ -512,5 +548,6 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="训练 Stop-Loss Clustering GBDT 模型 (v2)")
     parser.add_argument("--sample-limit", type=int, default=0, help="限制样本数（调试用）")
+    parser.add_argument("--exclude-vsa", action="store_true", help="排除VSA因子（Control组，57旧特征）")
     args = parser.parse_args()
     main(args)

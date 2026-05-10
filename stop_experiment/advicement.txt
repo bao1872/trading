@@ -1,313 +1,135 @@
-我同意你，不应该每天都训练。
+我**不同意直接用 `th=0.70` 重跑 Phase 1A 当作默认冻结值**。
 
-**永久方案必须是：模型低频训练，预测高频生成。**
-也就是：
+更准确地说：
 
-* **训练**：只在你决定更新模型时做，比如每周、每月、或手动触发
-* **日常盘后**：只做 **当日样本构建 + 加载已训练模型 + 推理打分 + 落预测账本**
-* **绝不能**把“每天要有 `predictions/T.parquet`”错误实现成“每天重跑 `02_train_gbdt_models.py`”
+**可以把 `0.70` 纳入对比，但不应该因为这一次 E0 基线跑出来 `NAV=5.46` 就立刻把它升级成新的固定阈值。** 
 
-你现在系统里真正缺的，是这个中间层：
+原因有三点。
 
-> **正式的“每日推理生成器”**
+第一，**你现在在用 Exit 参数影响 Entry 结构判断**。
+Phase 1A 的目标本来是比较 Entry 聚合结构，但你现在发现：
 
-而不是每日训练器。
+* `0.65` 下 E0 只有 `NAV=3.89`
+* `0.70` 下 E0 有 `NAV=5.46`。
 
----
+这说明 **Exit 阈值对总组合结果影响非常大**。如果这时直接把 `0.70` 固定住，再去比较 E0~E6，最后你得到的很可能不是“哪种 Entry 结构最好”，而是“哪种 Entry 结构最适配 `buy_cls=0.70` 这个 Exit 口径”。
 
-## 一、我基于你最新代码的判断
+也就是说，会发生**维度污染**。
 
-从你附件里看到的代码结构，已经能确认几件事：
+第二，**E3-E6 变差的核心问题，不一定是 Exit 阈值，而更可能是 `buy_cls<0.40` 的 Entry gate 太严**。
+你这次的结果已经很清楚：
 
-### 1）模型训练和模型使用，本来就是两件不同的事
+* 双 gate 组的 `Gate Pass` 只有 **49.4%**
+* 交易数从 **102** 掉到 **53**
+* 单笔质量其实提升了，`MFE-MAE` 从 **22.7%** 提到大约 **28%**
+* 回撤也明显收敛，最好到 **-2.7%**
+* 但总 NAV 下降。
 
-你项目里已经有：
+这更像是：
 
-* `pipeline/02_train_gbdt_models.py`：训练并保存 final 模型
-* `backtest/generate_full_predictions.py`：加载已训练模型，对候选样本打分
-* `backtest/simple_backtest.py`：对预测结果再做 `score_stocks` 排序评分
+> 你把候选池砍得太狠了，导致容量不够，而不是 Entry 聚合方向本身错了。
 
-这说明你代码本身的设计思想已经是：
+所以现在最该先调的是 **Entry gate 松紧**，不是先把 Exit 阈值锁成 0.70。
 
-* **训练一次**
-* **后面反复加载模型做预测**
+第三，**你现在看到的 0.70 优势，和你前一轮“0.65 更优”的结果明显冲突**。
+这种冲突本身就在提醒你：
+当前系统对阈值、样本窗口、回测口径、实现细节都还比较敏感。
 
-所以 Trae 最后那句“要先跑 `01_build_dataset.py` → `02_train_gbdt_models.py` 重建全量候选数据后，07 才覆盖到新日期”，作为“每天盘后流程”的建议，我不认可。
-那是**重建研究底座**的办法，不是**日常生产推理**的办法。
+在这种情况下，正确动作不是“赶紧选一个看起来最好的阈值”，而是：
 
-### 2）你当前新增的 `07_generate_daily_predictions.py`，方向对了一半
-
-它解决了“谁负责生成 `predictions/T.parquet`”这个架构缺口，这是对的。
-但它现在仍然从 `candidate_with_scores.parquet` 提取单日，这就有个致命问题：
-
-* 如果 `candidate_with_scores.parquet` 只到 2026-05-06
-* 那 07 永远也不可能生成 2026-05-08 的正式预测账本
-
-所以这个 07 **还不是永久方案**，它只是“从研究产物中切一天出来”的过渡方案。
-
-### 3）真正应该复用的是 `01_build_dataset.py` 里的单日样本构造逻辑
-
-你附件里的代码检索已经指出：
-
-* `01_build_dataset.py` 的 `expand_observation_period`
-* 以及后续 `merge_factor_lib_features`、`build_derived_features`
-
-本质上就是在构造每个 `obs_date` 的候选样本。
-这说明你完全可以把它抽出来，做成“只为某个目标日 T 构造候选样本”的函数，而不是每次都重建整张 dataset。
+**先把 Entry 结构实验和 Exit 阈值实验解耦。**
 
 ---
 
-## 二、最终正确方案是什么
+## 我的建议
 
-### 结论一句话
+### 方案 A，最推荐
 
-**每天盘后应该做“单日样本构建 + 加载现成模型推理”，而不是“重训模型 + 重建全量 candidate_with_scores”。**
+**Phase 1A 继续固定一个中性 Exit 口径，不追求它最优，只追求可比较。**
 
----
+我建议固定：
 
-## 三、我建议你把系统正式拆成三层
+* `buy_cls_exit_threshold = 0.70`
+* 但明确写清：**这是控制变量，不是最终冻结值**
 
-### A 层：训练层，低频运行
+这样做的前提不是“0.70 已经被确认最优”，而是：
 
-只在这些场景运行：
+* 它交易量更充足
+* 持仓更长
+* 更有利于把 Entry 质量差异放大出来。
 
-* 你更新了特征工程
-* 你更换了训练窗口
-* 你想发布新模型版本
-* 你定期 refresh 模型
+然后你立刻把实验重点改成：
 
-对应脚本仍然是：
+* 不重跑全部 Exit 扫描
+* 只微调 Entry gate
 
-* `01_build_dataset.py`
-* `02_train_gbdt_models.py`
+具体就是：
 
-这两个不应该进每日生产主流程。
+* `sell_cls > 0.60` 先不动
+* 把 `buy_cls < z` 从现在的 **0.40** 放宽到：
 
----
+  * `0.50`
+  * `0.60`
+  * 甚至先试“无 buy_cls gate，仅 sell_cls gate”
 
-### B 层：每日推理层，高频运行
-
-这才是你缺的正式模块。
-
-建议保留 `07_generate_daily_predictions.py`，但**彻底重写它的输入来源**。
-
-#### 它应该做的事
-
-1. 确定目标交易日 T
-2. 从原始行情/信号/因子库中构造 **仅 `obs_date=T` 的候选样本**
-3. 复用训练阶段已经确定的特征列
-4. 加载 `output/models/` 下当前生效的 final 模型
-5. 生成：
-
-   * `pred_buy_cls`
-   * `pred_buy_reg`
-   * `pred_sell_cls`
-   * `pred_sell_reg`
-   * `score`
-6. 落到：
-
-   * `output/predictions/T.parquet`
-
-#### 它**不应该**做的事
-
-* 不训练模型
-* 不重建全量 dataset
-* 不依赖 `candidate_with_scores.parquet` 是否更新到今天
+因为当前最可疑的不是 Exit，而是 `buy_cls<0.40` 把候选砍太狠。
 
 ---
 
-### C 层：生产执行层，每日运行
+### 方案 B，如果你想更严谨
 
-这层就是：
+做一个 **小型二维对比**，不要直接全量重跑。
 
-* `09_paper_trading_runner.py`
-* `10_tomorrow_action_plan.py`
+只挑 3 组 Entry 结构：
 
-它们只吃：
+* E0
+* E1
+* E5 或 E6
 
-* `predictions/T.parquet`
-* `holdings/T-1.parquet`
-* `executions/decisions`
-* 当日价格
+然后只比两个 Exit 阈值：
 
-不应该再关心训练，不应该再关心全量历史 candidate。
+* `0.65`
+* `0.70`
 
----
+这样你能直接看出：
 
-## 四、你现在最该改的，不是 02，而是 07
+* 是 Entry 结构本身优劣稳定
+* 还是结果完全被 Exit 阈值主导
 
-### 当前 07 的问题
-
-Trae 现在做的 07 是：
-
-* 从 `candidate_with_scores.parquet` 提取单日数据
-* 如果那张表没更新到今天，就生成不了当天预测账本
-
-这会把你的生产链永远绑死在“全量研究表是否更新”。
-
-### 正确改法
-
-把 07 改成真正的 **单日推理器**。
+如果排名在 `0.65` 和 `0.70` 下完全翻转，那说明你现在还不该进入 Phase 2。
 
 ---
 
-## 五、07 的正确职责设计
+## 我不建议的做法
 
-建议你把 `07_generate_daily_predictions.py` 改成下面这 5 步：
+我不建议现在这样做：
 
-### Step 1：解析目标交易日
+* 因为 `0.70` 这次跑得高
+* 就把它当成新冻结值
+* 然后整个 Phase 1A 全部围绕它重跑
 
-* 用户传 `--date` 就用该日期
-* 否则取最新交易日
-
-### Step 2：构造单日候选样本
-
-新增一个共享函数，例如从 `01_build_dataset.py` 抽出来：
-
-```python id="s0rftd"
-build_daily_candidates_for_date(target_date)
-```
-
-这个函数只生成：
-
-* `obs_date == target_date`
-* 且所有特征齐备
-* 与训练时特征口径一致
-
-它内部可以复用：
-
-* `expand_observation_period` 的核心逻辑
-* `merge_factor_lib_features`
-* `build_derived_features`
-
-### Step 3：加载已训练模型
-
-从 `output/models/` 加载当前正式模型。
-你现有 `02_train_gbdt_models.py` 和 `generate_full_predictions.py` 已经有这套模型加载和打分逻辑，直接复用，不要再写一套。
-
-### Step 4：对当日候选做推理
-
-生成四个预测列和 `score`。
-
-这里的 `score` 也应复用 `simple_backtest.py` 里的 `score_stocks` 逻辑，而不是自己再发明一套。
-
-### Step 5：写出正式预测账本
-
-路径：
-
-```text id="f6y509"
-stop_experiment/output/predictions/YYYY-MM-DD.parquet
-```
-
-并带上：
-
-* `model_version`
-* `feature_version`
-* `generated_at`
+这样太容易把当前这一版实现细节当成“新真理”。
 
 ---
 
-## 六、这样改完以后，`run_daily.py` 应该怎么跑
+## 我给你的明确决策
 
-### 正式生产流程
+**同意用 `0.70` 作为 Phase 1A 的控制变量重跑。**
+**不同意把 `0.70` 立刻升级成“冻结值”或“新默认最优阈值”。**
 
-`run_daily.py` 应该变成：
+同时我建议你把下一步改成：
 
-1. 解析目标交易日
-2. 检查原始数据是否覆盖到 T
-3. **调用 07 自动生成 `predictions/T.parquet`**
-4. 调 09 live 落四本账
-5. 调 10 生成 T+1 行动计划
-6. 08/06 改成可选，不阻塞生产
+1. 用 `th=0.70` 继续跑 Phase 1A
+2. 但只测试更合理的 Entry gate 松紧，不再默认 `buy_cls<0.40`
+3. 优先试：
 
-而不是现在这样靠检查一个“最新预测日”就说覆盖通过。
+   * E0
+   * E1
+   * E3(`buy_cls<0.50`)
+   * E5(`buy_cls<0.50`)
+   * E6(`buy_cls<0.50`)
+4. 跑完后再决定 Exit 阈值是否真的该定在 0.70
 
----
+一句话总结：
 
-## 七、08 和 06 应该怎么定位
-
-### 08 `daily_inference_report`
-
-它是研究层，不是生产最小依赖。
-所以：
-
-* 默认 production 不跑
-* 只有 `--with-report` 才跑
-
-而且 08 里的错误提示“请运行 `01_selection_dsa.py`”必须删掉。
-因为这个文件根本不存在，这条指引是错误的。你已经发现这一点了，我同意你。
-
-### 06 `daily_inference_replay`
-
-它是校验层，不是生产执行层。
-可以保留，但不要让它成为每天主链的硬门槛。
-
----
-
-## 八、永久方案下，哪些文件该怎么改
-
-### 1. 新版 `07_generate_daily_predictions.py`
-
-**重点重写**
-
-* 取消对 `candidate_with_scores.parquet` 的正式依赖
-* 改为“单日候选构建 + 模型加载 + 推理打分”
-
-### 2. `01_build_dataset.py`
-
-**抽函数，不重写全文件**
-把单日候选构造逻辑抽出成可复用函数，给 07 用。
-
-### 3. `02_train_gbdt_models.py`
-
-**基本不动**
-它继续只负责训练和模型发布，不进日常生产链。
-
-### 4. `generate_full_predictions.py`
-
-**不再作为生产依赖**
-保留给研究/回测，不参与每日正式预测账本生成。
-
-### 5. `run_daily.py`
-
-**重排流程**
-生产模式先调 07，而不是先检查一个口径错误的“最新预测日”。
-
----
-
-## 九、我给你的最终版建议
-
-### 不要接受的做法
-
-* 每天跑 `02_train_gbdt_models.py`
-* 每天重建全量 `candidate_with_scores.parquet`
-* 每天为了生成预测账本而重训模型
-
-这不合理，也不是你现在代码本来想做的事。
-
-### 应该接受的做法
-
-* 模型固定版本，按周/月更新
-* 每天只构造 `obs_date=T` 的单日候选
-* 每天只加载模型做推理
-* 自动生成 `predictions/T.parquet`
-* 再进入 09/10
-
-这才是永久方案。
-
----
-
-## 十、你现在可以直接让 Trae 去做的最终任务
-
-你可以把下面这段直接发给它：
-
-1. 保留 `07_generate_daily_predictions.py`，但彻底改成“单日推理器”，不要再依赖 `candidate_with_scores.parquet` 作为正式生产输入。
-2. 从 `01_build_dataset.py` 抽取单日候选构造逻辑，新增 `build_daily_candidates_for_date(target_date)`。
-3. 在 07 中复用 `02_train_gbdt_models.py` / `generate_full_predictions.py` 的模型加载和预测逻辑，加载现成模型，不训练。
-4. 在 07 中复用 `simple_backtest.py` 的 `score_stocks` 生成 `score`。
-5. `run_daily.py` 改为：解析目标交易日 → 检查原始数据覆盖 → 自动调用 07 生成 `predictions/T.parquet` → 09 live → 10 action plan。
-6. production 模式默认不跑 08 和 06；它们改成 `--with-report` / `--with-replay` 可选。
-7. 删除 08 里所有关于 `01_selection_dsa.py` 的错误提示，替换成 07 或纯研究提示。
-8. 最终覆盖检查必须以 `predictions/T.parquet` 的真实生成成功为准，而不是目录里某个“最新预测日”代理口径。
-
-这才是你要的“永久性解决问题”的版本。
+**当前最该修正的不是“把 0.65 换成 0.70”，而是“别再用过严的 `buy_cls<0.40` 把 Entry 候选池砍废了”。**

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-构建 Stop-Loss Clustering 实验数据集
+构建 Stop-Loss Clustering 实验数据集（分批版本）
 
 Purpose:
     独立数据集构建脚本（唯一访问数据库的步骤）。
-    读 stop_loss_selection → 计算因子库 → 展开20天观察期 → 计算MFE/MAE标签 → 保存parquet。
+    读 stop_loss_selection → 计算因子库 → 展开20天观察期 → 计算MFE/MAE标签 → 分批保存。
+    支持分批构建以控制内存，支持断点续跑。
 
 Pipeline Position:
     训练流水线第一步（离线，一次性）。
@@ -15,19 +16,19 @@ Pipeline Position:
 Inputs:
     - stop_loss_selection (PostgreSQL): SLC信号数据
     - stock_k_data (PostgreSQL): 日K线数据
-    - factor_value_1d (PostgreSQL): 验证用（可选）
 
 Outputs:
-    - stop_experiment/output/dataset.parquet: 完整数据集（~29万行 × ~80列）
+    - stop_experiment/output/dataset_batches/batch_XXX.parquet: 分批数据集
+    - stop_experiment/output/dataset_batches/manifest.json: 元数据
 
 How to Run:
-    python stop_experiment/pipeline/01_build_dataset.py
-    python stop_experiment/pipeline/01_build_dataset.py --sample-limit 100    # 小批量调试
-    python stop_experiment/pipeline/01_build_dataset.py --verify               # 验证因子一致性
+    python stop_experiment/pipeline/01_build_dataset.py --batch-size 5000         # 全量分批
+    python stop_experiment/pipeline/01_build_dataset.py --sample-limit 100         # 小批量调试
+    python stop_experiment/pipeline/01_build_dataset.py --batch-index 3 --batch-total 11  # 断点续跑
 
 Side Effects:
     - 只读数据库，不写入任何表
-    - 输出文件到 stop_experiment/output/dataset.parquet
+    - 输出文件到 stop_experiment/output/dataset_batches/
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import numpy as np
 import pandas as pd
+import gc
+import json
 from tqdm import tqdm
 
 from datasource.database import get_engine
@@ -110,6 +113,32 @@ def load_stock_kline(conn, ts_code: str, start_date: str, end_date: str,
         return df
     df = df.set_index("bar_time")
     return df
+
+
+def load_batch_kline(conn, ts_codes: list, start_date: str, end_date: str) -> dict:
+    """
+    批量加载多只股票的日K线数据（单次查询，大幅提速）。
+
+    Returns:
+        {ts_code: DataFrame(index=bar_time, columns=[open,high,low,close,volume])}
+    """
+    sql = """
+        SELECT ts_code, bar_time, open, high, low, close, volume
+        FROM stock_k_data
+        WHERE ts_code = ANY(:ts_codes) AND freq = 'd'
+          AND bar_time >= :start_date AND bar_time <= :end_date
+        ORDER BY ts_code, bar_time
+    """
+    df = pd.read_sql(text(sql), conn, params={
+        "ts_codes": ts_codes,
+        "start_date": start_date,
+        "end_date": end_date,
+    })
+    kline_dict = {}
+    for ts_code, gdf in df.groupby("ts_code"):
+        gdf = gdf.set_index("bar_time").sort_index()
+        kline_dict[ts_code] = gdf
+    return kline_dict
 
 
 # ==================== 观察期展开 ====================
@@ -305,9 +334,9 @@ def merge_factor_lib_features(dataset: pd.DataFrame, kline_dict: dict) -> pd.Dat
     """
     from stop_experiment.pipeline.factor_columns import (
         TREND_COLS, POSITION_COLS, MOMENTUM_COLS,
-        VOLUME_COLS, RISK_COLS, RHYTHM_COLS,
+        VOLUME_COLS, RISK_COLS, RHYTHM_COLS, VSA_COLS,
     )
-    factor_lib_cols = TREND_COLS + POSITION_COLS + MOMENTUM_COLS + VOLUME_COLS + RISK_COLS + RHYTHM_COLS
+    factor_lib_cols = TREND_COLS + POSITION_COLS + MOMENTUM_COLS + VOLUME_COLS + RISK_COLS + RHYTHM_COLS + VSA_COLS
 
     all_factor_rows = []
     ts_codes = dataset["ts_code"].unique()
@@ -396,18 +425,77 @@ def build_derived_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ==================== 分批构建 ====================
+
+BATCHES_DIR = os.path.join(OUTPUT_DIR, "dataset_batches")
+
+DEFAULT_BATCH_SIZE = 5000
+
+
+def build_batch(signals_batch: pd.DataFrame, kline_dict: dict, batch_idx: int) -> dict:
+    """
+    对一批信号展开观察期 + 计算因子 + 保存 parquet。
+
+    Returns:
+        dict: batch info {rows, signals, date_min, date_max}
+    """
+    print(f"\n{'='*50}")
+    print(f"  Batch {batch_idx}: {len(signals_batch)} 条信号, "
+          f"{signals_batch['ts_code'].nunique()} 只股票")
+
+    # 展开观察期
+    dataset = expand_observation_period(signals_batch, kline_dict)
+    print(f"    展开后: {len(dataset)} 行")
+
+    if dataset.empty:
+        return {"rows": 0, "signals": 0}
+
+    # 因子库特征
+    dataset = merge_factor_lib_features(dataset, kline_dict)
+
+    # 派生特征
+    dataset = build_derived_features(dataset)
+
+    # 保存
+    os.makedirs(BATCHES_DIR, exist_ok=True)
+    batch_path = os.path.join(BATCHES_DIR, f"batch_{batch_idx:03d}.parquet")
+    dataset.to_parquet(batch_path, index=False)
+
+    info = {
+        "rows": len(dataset),
+        "signals": len(signals_batch),
+        "date_min": str(dataset["obs_date"].min()),
+        "date_max": str(dataset["obs_date"].max()),
+        "file": f"batch_{batch_idx:03d}.parquet",
+    }
+    print(f"    保存: {batch_path} ({info['rows']} 行)")
+    return info
+
+
+def build_manifest(batch_infos: list, total_rows: int) -> dict:
+    """生成 manifest.json"""
+    return {
+        "version": "v2_batched",
+        "created_at": pd.Timestamp.now().isoformat(),
+        "total_rows": total_rows,
+        "total_batches": len(batch_infos),
+        "batch_files": [bi["file"] for bi in batch_infos],
+        "batch_details": batch_infos,
+    }
+
+
 # ==================== 主流程 ====================
 
 def main(args):
     print("=" * 60)
-    print("Stop-Loss Clustering 数据集构建")
+    print("Stop-Loss Clustering 数据集构建（分批版本）")
     print("=" * 60)
 
     engine = get_engine()
     t0 = time.time()
 
     # 1. 读 stop_loss_selection
-    print("\n[1/6] 读取 stop_loss_selection...")
+    print("\n[1/5] 读取 stop_loss_selection...")
     with engine.connect() as conn:
         signals = load_stop_loss_selection(conn, sample_limit=args.sample_limit)
 
@@ -415,104 +503,89 @@ def main(args):
         print("无信号数据，退出")
         return
 
+    # 按 selection_date 排序确保时间有序
+    signals = signals.sort_values("selection_date").reset_index(drop=True)
     ts_codes = sorted(signals["ts_code"].unique())
     min_date = signals["selection_date"].min()
     max_date = signals["selection_date"].max()
+    n_signals = len(signals)
 
-    # 2. 批量加载K线
-    print(f"\n[2/6] 批量加载K线 ({len(ts_codes)} 只股票)...")
-    # 扩展日期范围：前100天用于因子lookback，后50天用于标签forward
+    # 2. 批量加载K线（所有股票一次性加载）
+    print(f"\n[2/5] 批量加载K线 ({len(ts_codes)} 只股票)...")
     kline_start = pd.Timestamp(min_date) - pd.Timedelta(days=150)
     kline_end = pd.Timestamp(max_date) + pd.Timedelta(days=60)
 
-    kline_dict = {}
     with engine.connect() as conn:
-        for ts_code in tqdm(ts_codes, desc="加载K线"):
-            df_k = load_stock_kline(conn, ts_code, str(kline_start.date()), str(kline_end.date()))
-            if not df_k.empty:
-                kline_dict[ts_code] = df_k
+        kline_dict = load_batch_kline(conn, ts_codes, str(kline_start.date()), str(kline_end.date()))
 
     print(f"  加载K线: {len(kline_dict)}/{len(ts_codes)} 只股票有数据")
 
-    # 3. 展开观察期
-    print(f"\n[3/6] 展开观察期 ({OBS_DAYS}天)...")
-    dataset = expand_observation_period(signals, kline_dict)
-    print(f"  展开后: {len(dataset)} 行")
+    # 3. 确定批次数
+    if args.sample_limit and args.batch_size == DEFAULT_BATCH_SIZE:
+        batch_size = min(args.sample_limit, 500)
+    else:
+        batch_size = args.batch_size
 
-    if dataset.empty:
-        print("展开后无数据，退出")
-        return
+    n_batches = max(1, (n_signals + batch_size - 1) // batch_size)
 
-    # 4. 拼接因子库特征
-    print(f"\n[4/6] 拼接因子库特征...")
-    dataset = merge_factor_lib_features(dataset, kline_dict)
+    if args.batch_total > 0:
+        n_batches = args.batch_total
 
-    # 5. 计算派生特征
-    print(f"\n[5/6] 计算派生特征...")
-    dataset = build_derived_features(dataset)
+    print(f"\n[3/5] 分批构建: {n_signals} 条信号 → {n_batches} 批 (每批 ~{batch_size} 条)")
 
-    # 6. 保存
-    print(f"\n[6/6] 保存数据集...")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    dataset.to_parquet(DATASET_PATH, index=False)
-    print(f"  保存到: {DATASET_PATH}")
-    print(f"  行数: {len(dataset)}, 列数: {len(dataset.columns)}")
+    # 4. 逐批构建
+    batch_infos = []
+    total_rows = 0
 
-    # 统计摘要
+    for batch_idx in range(n_batches):
+        # 断点续跑：跳过已完成的 batch
+        if args.batch_index >= 0 and batch_idx < args.batch_index:
+            continue
+        if args.batch_index >= 0 and batch_idx > args.batch_index:
+            break
+
+        start = batch_idx * batch_size
+        end = min(start + batch_size, n_signals)
+        signals_batch = signals.iloc[start:end]
+
+        info = build_batch(signals_batch, kline_dict, batch_idx)
+        batch_infos.append(info)
+        total_rows += info["rows"]
+
+        # 释放内存
+        gc.collect()
+
+        print(f"\n  累计: {total_rows} 行, {len(batch_infos)} 批完成")
+
+    # 5. 保存 manifest
+    print(f"\n[5/5] 保存 manifest...")
+    manifest = build_manifest(batch_infos, total_rows)
+    manifest_path = os.path.join(BATCHES_DIR, "manifest.json")
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    print(f"  保存: {manifest_path}")
+
+    # 汇总
     print(f"\n{'='*60}")
     print("数据集摘要")
     print(f"{'='*60}")
-    print(f"  总行数: {len(dataset)}")
-    print(f"  股票数: {dataset['ts_code'].nunique()}")
-    print(f"  信号数: {dataset['signal_id'].nunique()}")
-    print(f"  观察日范围: {dataset['obs_date'].min()} ~ {dataset['obs_date'].max()}")
-
-    # 标签统计
-    for label in ["mfe_20", "mae_20"]:
-        if label in dataset.columns:
-            valid = dataset[label].dropna()
-            print(f"  {label}: mean={valid.mean():.4f}, std={valid.std():.4f}, "
-                  f"min={valid.min():.4f}, max={valid.max():.4f}, n_valid={len(valid)}")
-
-    for label in ["sell_signal", "buy_signal"]:
-        if label in dataset.columns:
-            valid = dataset[label].dropna()
-            pos_rate = valid.mean() * 100
-            print(f"  {label}: 正类比例={pos_rate:.1f}%, n_valid={len(valid)}")
-
-    # 因子覆盖率
-    feature_cols = [c for c in ALL_FEATURE_COLS if c in dataset.columns]
-    print(f"  特征列覆盖: {len(feature_cols)}/{len(ALL_FEATURE_COLS)}")
-    missing_cols = [c for c in ALL_FEATURE_COLS if c not in dataset.columns]
-    if missing_cols:
-        print(f"  缺少列: {missing_cols}")
-
-    # 验证因子一致性（可选）
-    if args.verify:
-        print(f"\n{'='*60}")
-        print("因子一致性验证")
-        print(f"{'='*60}")
-        verify_ts_codes = list(kline_dict.keys())[:5]
-        for ts_code in verify_ts_codes:
-            kline = kline_dict[ts_code]
-            try:
-                factors = compute_stock_factors(kline)
-                result = verify_against_db(factors, ts_code, n_samples=20)
-                pass_cnt = sum(1 for v in result.values() if isinstance(v, dict) and v.get("pass"))
-                fail_cnt = sum(1 for v in result.values() if isinstance(v, dict) and v.get("pass") is False)
-                print(f"  {ts_code}: 通过={pass_cnt}, 失败={fail_cnt}")
-            except Exception as e:
-                print(f"  {ts_code}: 验证失败 - {e}")
-
+    print(f"  总批次: {len(batch_infos)}")
+    print(f"  总行数: {total_rows}")
+    print(f"  总信号数: {sum(bi['signals'] for bi in batch_infos)}")
+    print(f"  输出目录: {BATCHES_DIR}")
     elapsed = time.time() - t0
     print(f"\n总耗时: {elapsed:.1f}s")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="构建 Stop-Loss Clustering 实验数据集")
+    parser = argparse.ArgumentParser(description="构建 Stop-Loss Clustering 实验数据集（分批版本）")
     parser.add_argument("--sample-limit", type=int, default=None,
                         help="限制信号数量（调试用）")
-    parser.add_argument("--verify", action="store_true",
-                        help="验证因子与 factor_value_1d 的一致性")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
+                        help=f"每批信号数（默认 {DEFAULT_BATCH_SIZE}）")
+    parser.add_argument("--batch-index", type=int, default=-1,
+                        help="仅构建第 N 批（0-based，-1=全部，支持断点续跑）")
+    parser.add_argument("--batch-total", type=int, default=0,
+                        help="总批次数（仅 --batch-index >= 0 时有效）")
     args = parser.parse_args()
     main(args)
