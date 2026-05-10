@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np
 import pandas as pd
 
-from stop_experiment.pipeline.stop_config import OUTPUT_DIR, BUY_CLS_THRESHOLD, MODEL_EXIT_PARAMS
+from stop_experiment.pipeline.stop_config import OUTPUT_DIR, BUY_CLS_THRESHOLD, PRODUCTION_PARAMS
 
 
 def compute_composite_score(df: pd.DataFrame) -> pd.DataFrame:
@@ -144,8 +144,8 @@ def main(args):
         df = df[df["can_buy"] == 1].copy()
     print(f"  可交易: {len(df)}")
 
-    # 候选池过滤: 只保留 obs_day in [1,2,3]，同一信号每天保留最新 obs_day
-    candidate_obs_days = MODEL_EXIT_PARAMS.get("candidate_obs_days", [1, 2, 3])
+    # 候选池过滤: 只保留 obs_day=1（生产口径）
+    candidate_obs_days = PRODUCTION_PARAMS.get("candidate_obs_days", [1])
     df = df[df["obs_day"].isin(candidate_obs_days)].copy()
     print(f"  obs_day in {candidate_obs_days}: {len(df)}")
 

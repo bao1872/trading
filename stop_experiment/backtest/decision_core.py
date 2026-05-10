@@ -71,15 +71,15 @@ def evaluate_model_exit(holding, code, prev_date, pred_lookup, threshold=None):
         code:        股票代码
         prev_date:   前一交易日
         pred_lookup: 预测查找表
-        threshold:   pred_buy_cls 退出阈值，None 时使用 BUY_CLS_EXIT_THRESHOLD
+        threshold:   pred_buy_cls 退出阈值，None 时使用 PRODUCTION_PARAMS["buy_cls_exit_threshold"]
 
     Output:
         (should_sell: bool, reason: str)
     """
-    from stop_experiment.pipeline.stop_config import V1_PARAMS
+    from stop_experiment.pipeline.stop_config import PRODUCTION_PARAMS
     days_held = holding["days_held"]
     signal_id = holding.get("signal_id")
-    _threshold = threshold if threshold is not None else V1_PARAMS.get("buy_cls_exit_threshold", 0.70)
+    _threshold = threshold if threshold is not None else PRODUCTION_PARAMS.get("buy_cls_exit_threshold", 0.70)
 
     if signal_id is not None and days_held > 1 and prev_date is not None:
         pred = find_exit_pred(signal_id, prev_date, pred_lookup)
@@ -96,13 +96,13 @@ def evaluate_max_hold(holding, max_hold_days=None):
 
     Input:
         holding:       持仓 dict
-        max_hold_days: 最大持仓天数，None 时使用 V1_PARAMS["max_hold_days"]
+        max_hold_days: 最大持仓天数，None 时使用 PRODUCTION_PARAMS["max_hold_days"]
 
     Output:
         (should_sell: bool, reason: str)
     """
-    from stop_experiment.pipeline.stop_config import V1_PARAMS
-    _max_days = max_hold_days if max_hold_days is not None else V1_PARAMS.get("max_hold_days", 20)
+    from stop_experiment.pipeline.stop_config import PRODUCTION_PARAMS
+    _max_days = max_hold_days if max_hold_days is not None else PRODUCTION_PARAMS.get("max_hold_days", 20)
     if holding["days_held"] > _max_days:
         return True, "max_hold"
     return False, ""
@@ -115,13 +115,13 @@ def evaluate_stop_loss(holding, current_price, stop_loss_threshold=None):
     Input:
         holding:             持仓 dict
         current_price:       当前价格
-        stop_loss_threshold: 止损阈值（如 -0.07），None 时使用 V1_PARAMS["stop_loss"]
+        stop_loss_threshold: 止损阈值（如 -0.07），None 时使用 PRODUCTION_PARAMS["stop_loss"]
 
     Output:
         (should_sell: bool, reason: str)
     """
-    from stop_experiment.pipeline.stop_config import V1_PARAMS
-    _threshold = stop_loss_threshold if stop_loss_threshold is not None else V1_PARAMS.get("stop_loss", -0.07)
+    from stop_experiment.pipeline.stop_config import PRODUCTION_PARAMS
+    _threshold = stop_loss_threshold if stop_loss_threshold is not None else PRODUCTION_PARAMS.get("stop_loss", -0.07)
     if current_price is None or np.isnan(current_price) or current_price <= 0:
         return False, ""
     ret = (current_price - holding["buy_price"]) / holding["buy_price"]
@@ -158,10 +158,10 @@ def evaluate_eod_exits(holdings, prev_date, pred_lookup,
     Output:
         sell_decisions: [(code, holding, reason), ...]
     """
-    from stop_experiment.pipeline.stop_config import V1_PARAMS
-    _max_hold = max_hold_days if max_hold_days is not None else V1_PARAMS.get("max_hold_days", 20)
-    _stop = stop_loss if stop_loss is not None else V1_PARAMS.get("stop_loss", -0.07)
-    _threshold = exit_threshold if exit_threshold is not None else V1_PARAMS.get("buy_cls_exit_threshold", 0.70)
+    from stop_experiment.pipeline.stop_config import PRODUCTION_PARAMS
+    _max_hold = max_hold_days if max_hold_days is not None else PRODUCTION_PARAMS.get("max_hold_days", 20)
+    _stop = stop_loss if stop_loss is not None else PRODUCTION_PARAMS.get("stop_loss", -0.07)
+    _threshold = exit_threshold if exit_threshold is not None else PRODUCTION_PARAMS.get("buy_cls_exit_threshold", 0.70)
 
     sells = []
     for code, h in list(holdings.items()):
@@ -268,7 +268,7 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
         # a. max_hold
         if h["days_held"] > max_hold_days:
             pending_sells.append({"code": code, "holding": dict(h), "reason": "max_hold"})
-            sell_reasons[h.get("ts_code", code)] = "max_hold"
+            sell_reasons[code] = "max_hold"
             continue
 
         # b. stop_loss（使用 day_close，与回测完全一致）
@@ -278,7 +278,7 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
                 ret = (cp - h["buy_price"]) / h["buy_price"]
                 if ret < stop_loss:
                     pending_sells.append({"code": code, "holding": dict(h), "reason": "stop_loss"})
-                    sell_reasons[h.get("ts_code", code)] = "stop_loss"
+                    sell_reasons[code] = "stop_loss"
                     continue
 
         # c. model_exit（仅对 days_held > 1 且 signal_id 已知的持仓, 支持 X1/X3/X4 子模式）
@@ -291,7 +291,7 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
 
                     def _do_sell():
                         pending_sells.append({"code": code, "holding": dict(h), "reason": "model_risk"})
-                        sell_reasons[h.get("ts_code", code)] = "model_risk"
+                        sell_reasons[code] = "model_risk"
 
                     if exit_sub_mode == "sell_decay":
                         sr = pred.get("pred_sell_reg", np.nan)
@@ -413,7 +413,32 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
             "days_held": h["days_held"], "cur_ret": cur_ret,
             "risk_flags": risk_flags, "why": " → ".join(why_parts),
         })
-    extra = {"buy_details": buy_details, "sell_details": sell_details, "hold_details": hold_details}
+    candidate_top10 = []
+    if not candidates.empty:
+        _score_col = "score" if "score" in candidates.columns else "composite_score"
+        _cand_disp = candidates.copy()
+        if _score_col in _cand_disp.columns:
+            _cand_disp = _cand_disp.sort_values([_score_col, "ts_code"], ascending=[False, True])
+        _held_codes = set(holdings.keys())
+        _buy_codes = {pb[0] for pb in pending_buys}
+        for _idx, (_, _row) in enumerate(_cand_disp.head(10).iterrows()):
+            _tc = _row.get("ts_code") or _row.get("code")
+            _cc = _tc[:6] if "." in _tc else _tc
+            _sc_val = _row.get(_score_col, 0)
+            candidate_top10.append({
+                "rank": _idx + 1,
+                "ts_code": _tc,
+                "code": _cc,
+                "score": float(_sc_val) if isinstance(_sc_val, (int, float)) and not np.isnan(_sc_val) else None,
+                "pred_buy_cls": float(_row["pred_buy_cls"]) if "pred_buy_cls" in _row and pd.notna(_row.get("pred_buy_cls")) else None,
+                "pred_sell_reg": float(_row["pred_sell_reg"]) if "pred_sell_reg" in _row and pd.notna(_row.get("pred_sell_reg")) else None,
+                "pred_sell_cls": float(_row["pred_sell_cls"]) if "pred_sell_cls" in _row and pd.notna(_row.get("pred_sell_cls")) else None,
+                "pred_buy_reg": float(_row["pred_buy_reg"]) if "pred_buy_reg" in _row and pd.notna(_row.get("pred_buy_reg")) else None,
+                "signal_id": _row.get("signal_id"),
+                "is_held": _cc in _held_codes,
+                "is_pending_buy": _cc in _buy_codes,
+            })
+    extra = {"buy_details": buy_details, "sell_details": sell_details, "hold_details": hold_details, "candidate_top10": candidate_top10}
 
     return holdings, pending_buys, pending_sells, sell_reasons, extra
 

@@ -24,7 +24,7 @@
 
 输入：
     - DB: stop_loss_selection (信号), stock_k_data (K线)
-    - output/models/xxx_final.txt (4个已训练模型)
+    - output/models_control/xxx_final.txt (4个已训练模型)
 
 输出：
     - output/predictions/YYYY-MM-DD.parquet
@@ -50,7 +50,7 @@ from datasource.database import get_engine
 from stop_experiment.pipeline.stop_config import (
     OBS_DAYS, SELL_CLS_THRESHOLD, BUY_CLS_THRESHOLD,
     OUTPUT_DIR, MODELS_DIR, PREDICTIONS_DIR, MODEL_SPECS,
-    V1_PARAMS, BASELINE_E0_X1_V1_PARAMS,
+    PRODUCTION_PARAMS, BASELINE_E0_X1_V1_PARAMS,
 )
 from stop_experiment.pipeline.factor_columns import (
     SLC_STATIC_COLS, ALL_FEATURE_COLS, META_COLS,
@@ -203,7 +203,7 @@ def _predict_and_score(df):
         model = lgb.Booster(model_file=model_path)
         df[f"pred_{model_name}"] = model.predict(df[feature_cols])
 
-    df = score_stocks(df, strategy=V1_PARAMS.get("strategy_default", "sell_score"))
+    df = score_stocks(df, strategy=PRODUCTION_PARAMS.get("strategy_default", "sell_score"))
     return df
 
 

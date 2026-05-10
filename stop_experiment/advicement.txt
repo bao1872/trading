@@ -1,183 +1,221 @@
-明确建议：
+明确建议如下。
 
-## 结论
+## 先定结论
 
-**这个问题应该按“主线生产闭环”处理，不是单独补一个报表。**
-也就是把这次新增的两类产物：
+**你现在不要再继续加功能。先把当前版本定成“可用的手动交易操作系统 v1”。**
 
-* `live_equity_curve.csv`
-* `live_trade_report.csv`
+原因很清楚：
 
-视为**每日生产流水线的正式输出**，而不是临时分析文件。根据你给出的执行结果，`09_paper_trading_runner.py` 已经承担了三件事：修正 `cur_ret`、生成净值曲线、生成交易报告；`11_feishu_notification.py` 也已经读取净值并在消息里展示。
+1. **主线生产链已经能跑通**
 
----
+   * 每日盘后可以产出 T+1 建议
+   * 有账户净值曲线
+   * 有历史交易报告
+   * 有操作包。
 
-## 这个问题该怎么处理
+2. **模拟盘核心完整性已经过关**
 
-### 1. 不要再单独改回测逻辑
+   * 参数一致性 PASS
+   * 决策一致性 PASS
+   * 状态一致性 PASS
+   * CSV 输出基本 PASS
+   * 只有 Layer 2 预测源仍是已知问题。
 
-现在这个处理方向是对的：
-
-* **不改原回测逻辑**
-* 在生产侧新增：
-
-  * `build_live_equity_curve.py`
-  * `build_live_trade_report.py`
-* 并由 `09_paper_trading_runner.py` 在 live 流程里统一触发
-
-这是最稳的方案，因为：
-
-* 不会污染研究侧基线
-* 生产侧账户净值和交易报告是从真实执行账本重建的
-* 飞书通知也能直接复用这些产物。
-
-### 2. `run_daily.py` 必须同步更新
-
-**要同步更新。答案是明确的：要。**
-
-理由很简单：
-你现在已经把“净值曲线 + 交易报告”纳入了 `09_paper_trading_runner.py` 的 live 后处理，而每日真正跑生产的是 `run_daily.py`。如果 `run_daily.py` 只是跑到预测/决策/执行就结束，或者没有经过 `09` 的 live 模式，那这两类新产物就不会每天自动更新。
-
-所以你要把它当成生产链正式步骤，而不是“手动跑一次 09 看看”。
+3. **你当前最大问题已经从“功能缺失”变成“界面和流程太乱”**
+   所以现在最重要的不是继续扩逻辑，而是**收口、固定、形成日常使用流程**。
 
 ---
 
-## 我给你的明确处理建议
+# 我建议你下一步只做 3 件事
 
-### 方案 A：最推荐
+## 1. 立刻冻结“日常使用口径”
 
-**让 `run_daily.py` 继续调用 `09_paper_trading_runner.py --mode live`，不要在 `run_daily.py` 里重复实现净值和交易报告逻辑。**
+以后你每天盘后只看这 3 个东西：
 
-也就是：
+### A. 操作包
 
-* `run_daily.py` 只负责调度
-* `09_paper_trading_runner.py` 负责：
+路径：
 
-  * 保存 decisions
-  * 重建 `live_equity_curve.csv`
-  * 重建 `live_trade_report.csv`
-* `11_feishu_notification.py` 负责读这些产物并发消息
+* `output/live/operator_packets/YYYY-MM-DD/`
 
-这样职责最清晰，也最不容易产生双份逻辑。根据你给出的结果，`09` 和 `11` 这边已经具备这个能力了。
+你主要看：
 
-### 方案 B：不要做
+* `02_account_snapshot.md`
+* `03_t1_action_plan.md`
+* `04_trade_history_summary.md`
+* `05_equity_curve.png`
 
-不要在 `run_daily.py` 里再手写一遍：
+### B. 飞书摘要
 
-* 账户净值曲线构建
-* 交易配对报告构建
+飞书只负责提醒，不负责承载全部细节。
 
-否则以后修一个地方，另一个地方忘了改，很快就会口径漂移。
+### C. 账本只做底层存证
+
+这些你平时不要主动看，除非排错：
+
+* `holdings/*.parquet`
+* `live/decisions/*.parquet`
+* `live/executions/*.parquet`
+
+**这是第一条硬规则。**
+否则你还是会每天陷进一堆底层文件里。
 
 ---
 
-## `run_daily.py` 具体要确认什么
+## 2. 把 `run_daily.py` 定成唯一入口
 
-你现在应该检查 `run_daily.py` 是否满足下面 4 条：
+以后不要再手动分别跑：
 
-### 必须有
+* 07
+* 09
+* 10
+* 11
+* 12
 
-1. **调用 `07_generate_daily_predictions.py`**
-2. **调用 `09_paper_trading_runner.py --mode live`**
-3. **调用 `10_tomorrow_action_plan.py`**
-4. **调用 `11_feishu_notification.py`**
+**统一只跑 `run_daily.py`。**
 
-### 顺序建议
-
-最合理的顺序是：
+你现在已经把 Step 7 接进去了，所以以后生产流程就固定为：
 
 ```text
-07_generate_daily_predictions
-→ 09_paper_trading_runner --mode live
-→ 10_tomorrow_action_plan
-→ 11_feishu_notification
+run_daily.py
+→ 07 predictions
+→ 09 paper trading
+→ 10 T+1 action plan
+→ 11 feishu summary
+→ 12 operator packet
 ```
 
-因为：
+### 你要做的唯一动作
 
-* `09` 会生成最新执行账本、净值曲线、交易报告
-* `10` 负责 T+1 操作建议
-* `11` 最后读取最新净值和建议做通知
+给自己定一个固定命令，比如：
 
----
+```bash
+python stop_experiment/run_daily.py --date YYYY-MM-DD
+```
 
-## 每日生产验收标准
-
-我建议你给 `run_daily.py` 增加一个非常明确的验收清单。
-每天跑完后，至少检查以下文件是否更新成功：
-
-### 核心账本
-
-* `output/live/decisions/<date>.parquet`
-* `output/live/executions/<date>.parquet`
-
-### 新增产物
-
-* `output/live/live_equity_curve.csv`
-* `output/live/live_trade_report.csv`
-
-### T+1 决策建议
-
-* `output/live/action_plans/<date>.md`
-
-### 通知侧
-
-* 飞书消息里包含：
-
-  * 净值
-  * 日收益
-  * 回撤
-  * T+1 建议摘要。
+然后把它写到 README 最前面，作为唯一生产入口。
 
 ---
 
-## 我对当前 Trae 处理结果的评价
+## 3. 暂停所有“策略扩展”，只保留一个技术债
 
-### 方向上：对
+**现在唯一值得继续追的技术问题，就是 Layer 2 预测源不一致。**
 
-* `09` 负责后处理
-* 新建净值曲线与交易报告脚本
-* `11` 读净值并展示
-  这个分层是对的。
+这件事你已经查得很清楚了：
 
-### 还差的一步：把 `run_daily.py` 明确纳入
+* live 模式下，`07_generate_daily_predictions.py` 从 DB 实时拉特征
+* 和训练/回测时的特征源有差异
+* 导致预测不同
+* top10 overlap 很低。
 
-现在你给我的材料里，已经证明：
+### 这件事怎么处理
 
-* 直接跑 `09_paper_trading_runner.py --mode live` 可以生成：
+我建议你把它单独列成一个项目，不和日常盘后系统混做。
 
-  * `live_equity_curve.csv`
-  * `live_trade_report.csv`
-* 飞书消息也能显示净值。
+项目名就叫：
 
-但**还没有直接证明 `run_daily.py` 已经把这条链完整串起来**。
-所以这里不能默认“应该已经好了”，必须主动检查并补上。
+**“冻结 live 预测特征源”**
 
----
+在没解决之前，明确写死一句话：
 
-## 你现在该怎么做
+> **当前生产系统可用，但 live 预测和回测预测并非同一来源；一致性检查以 replay 为准，生产使用 operator packet。**
 
-### 立刻做
-
-1. 打开 `run_daily.py`
-2. 确认它是否显式调用 `09_paper_trading_runner.py --mode live`
-3. 确认 `09` 的执行发生在 `11_feishu_notification.py` 之前
-4. 加入每日产物存在性检查：
-
-   * 决策账本
-   * 执行账本
-   * 净值曲线
-   * 交易报告
-   * T+1 建议
-
-### 不要做
-
-5. 不要在 `run_daily.py` 里重复写净值和交易报告逻辑
+也就是说，**先接受这个已知问题，不要因此阻塞日常使用。**
 
 ---
 
-## 最终明确结论
+# 你现在不要做的事
 
-**这个问题的正确处理方式是：把净值曲线和交易报告正式纳入每日生产链，由 `09_paper_trading_runner.py` 统一生成，`run_daily.py` 负责调度和验收，`11_feishu_notification.py` 负责展示。**
+## 不要做 1：不要继续重构回测主引擎
 
-**而且 `run_daily.py` 必须同步更新或至少同步校验这两个新产物，否则这次改动就还没有真正落到生产闭环。**
+现在已经够用了。
+再重构只会把系统重新搞乱。
+
+## 不要做 2：不要继续扩仓位实验
+
+W1a 已经有阶段性答案了，但现在还没必要切到生产。
+先保持生产等权。
+
+## 不要做 3：不要再加更多报表
+
+你现在不是缺报表，是缺“只看哪几个”的纪律。
+
+---
+
+# 我建议你给自己定一个固定日常流程
+
+## 每天收盘后
+
+只做这 4 步：
+
+### Step 1
+
+运行：
+
+```bash
+python stop_experiment/run_daily.py --date YYYY-MM-DD
+```
+
+### Step 2
+
+看飞书摘要
+确认：
+
+* 账户净值
+* 当日收益
+* 明日买几只 / 卖几只
+
+### Step 3
+
+打开操作包，只看两份：
+
+* `02_account_snapshot.md`
+* `03_t1_action_plan.md`
+
+### Step 4
+
+手动下单
+按 `03_t1_action_plan.md` 执行。
+
+---
+
+# 我建议你再补两个很小的动作
+
+## 动作 A：把操作包目录做成“最新快捷入口”
+
+例如额外生成一个：
+
+* `output/live/operator_packets/latest/`
+
+永远指向最新日期。
+这样你不用每天找目录。
+
+## 动作 B：把 `run_daily.py` 成功后在终端最后打印一句
+
+类似：
+
+```text
+今日操作包：
+output/live/operator_packets/2026-05-08/
+重点查看：
+- 02_account_snapshot.md
+- 03_t1_action_plan.md
+```
+
+这会让你日常使用顺很多。
+
+---
+
+# 最终明确建议
+
+**现在就停手，不再扩功能。**
+
+接下来只做这三件事：
+
+1. **冻结当前版本为“手动交易操作系统 v1”**
+2. **以后只通过 `run_daily.py` 使用系统**
+3. **把 Layer 2 预测源不一致单独列为唯一待修技术债**
+
+一句话总结：
+
+**你现在已经够用了，下一步不是继续开发，而是强制自己只用“飞书摘要 + 操作包 + run_daily.py”这条简化流程。**

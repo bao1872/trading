@@ -13,7 +13,7 @@ Purpose:
     - 买入: T 日决策 → T+1 开盘买入，等权分配
     - 卖出: T 日决策卖出 → T+1 开盘执行（不再 T 日执行）
     - 成本: 买入 0.05% + 卖出 0.10%
-    - 候选池: obs_day in [1,2,3]（经 obs_window_comparison.py 验证最优）
+    - 候选池: obs_day=1（生产口径，经聚合实验验证最优）
 
     退出版本:
     - fixed_hold : 固定持有 hold_days 天后卖出 (baseline A)

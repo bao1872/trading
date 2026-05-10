@@ -13,7 +13,7 @@ Pipeline Position:
 
 Inputs:
     - stop_experiment/output/feature_importance.csv
-    - stop_experiment/output/models/ (模型文件)
+    - stop_experiment/output/models_control/ (模型文件)
     - stop_experiment/output/dataset.parquet
 
 Outputs:

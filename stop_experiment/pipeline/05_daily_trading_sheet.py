@@ -37,22 +37,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np
 import pandas as pd
 
-from stop_experiment.pipeline.stop_config import OUTPUT_DIR, MODEL_EXIT_PARAMS
+from stop_experiment.pipeline.stop_config import OUTPUT_DIR, PRODUCTION_PARAMS
 
 
 def generate_trading_sheet(selected: pd.DataFrame, target_date: str | None = None) -> pd.DataFrame:
     """
     生成每日交易清单。
 
-    Phase 2 升级：模型驱动退出 + obs_day=1~3 候选池
-    买入: obs_day in [1,2,3] 的候选信号，按 composite_score 排序
+    模型驱动退出 + obs_day=1 候选池（生产口径）
+    买入: obs_day=1 的候选信号，按 composite_score 排序
     卖出: pred_buy_cls > 0.7 (model_risk) / stop_loss=-7% / max_hold=20
 
     输出列增加 sell_reason，区别于旧版 action 字段
     """
-    buy_cls_threshold = MODEL_EXIT_PARAMS.get("buy_cls_exit_threshold", 0.7)
-    stop_loss = MODEL_EXIT_PARAMS.get("stop_loss", -0.07)
-    max_hold = MODEL_EXIT_PARAMS.get("max_hold_days", 20)
+    buy_cls_threshold = PRODUCTION_PARAMS.get("buy_cls_exit_threshold", 0.7)
+    stop_loss = PRODUCTION_PARAMS.get("stop_loss", -0.07)
+    max_hold = PRODUCTION_PARAMS.get("max_hold_days", 20)
 
     if target_date:
         target_date = pd.Timestamp(target_date)

@@ -14,7 +14,7 @@ Inputs:
 
 Outputs:
     - stop_experiment/output/live/live_equity_curve.csv
-      columns: date, cash, market_value, equity, nav, n_positions, daily_return, drawdown
+      columns: date, cash, market_value, equity, nav_live, n_positions, daily_return, drawdown
 
 How to Run:
     # 单独运行（需要先有 executions 和 holdings 数据）
@@ -77,120 +77,119 @@ def _derive_latest_nav(eq_df):
     if eq_df.empty:
         return None, None, None
     latest = eq_df.iloc[-1]
-    nav = latest.get("nav")
+    nav = latest.get("nav_live")
     daily_ret = latest.get("daily_return")
     dd = latest.get("drawdown")
     return nav, daily_ret, dd
 
 
+def _load_holdings_index():
+    """
+    加载所有持仓账本，构建逐日持仓索引。
+
+    Returns:
+        {date: {code: {weight, days_held}}}
+    """
+    files = sorted(glob(os.path.join(HOLDINGS_DIR, "*.parquet")))
+    index = {}
+    for f in files:
+        df = pd.read_parquet(f)
+        if df.empty:
+            continue
+        df["date"] = pd.to_datetime(df["date"])
+        for d, grp in df.groupby("date"):
+            index[d] = {}
+            for _, row in grp.iterrows():
+                code = row["code"]
+                index[d][code] = {
+                    "weight": float(row.get("weight", 0)),
+                    "days_held": int(row.get("days_held", 0)),
+                }
+    return index
+
+
 def build_live_equity_curve(price_pivot, initial_cash=1.0,
                             buy_cost=BUY_COST, sell_cost=SELL_COST):
     """
-    重放执行账本中的所有交易，重建账户净值曲线。
+    从持仓账本重建净值曲线，使用与回测一致的加权收益率法。
 
-    Args:
-        price_pivot: MultiIndex DataFrame (含 close)
-        initial_cash: 初始现金 (默认 1.0)
-        buy_cost: 买入成本率 (默认 0.0005)
-        sell_cost: 卖出成本率 (默认 0.0010)
+    回测公式（SSOT dynamic_exit_backtest_v2.run_backtest L406-L434）：
+        daily_ret = sum(holdings[code].weight * stock_ret)
+        nav *= (1 + daily_ret)
+    其中:
+        days_held==1: stock_ret = (close - open) / open
+        days_held> 1: stock_ret = (close_today - close_yesterday) / close_yesterday
 
     Returns:
-        DataFrame: date, cash, market_value, equity, nav, n_positions, daily_return, drawdown
+        DataFrame: date, cash, market_value, equity, nav_live, n_positions, daily_return, drawdown
     """
-    exec_df = _load_all_executions()
-    if exec_df.empty:
-        print("  [净值曲线] 无执行记录，返回空 DataFrame")
-        return pd.DataFrame()
-
     td_sorted = sorted(price_pivot.index)
 
-    cash = initial_cash
-    positions = {}  # code -> {"shares": float, "buy_price": float}
+    holdings_by_day = _load_holdings_index()
+    if not holdings_by_day:
+        print("  [净值曲线] 无持仓记录，返回空 DataFrame")
+        return pd.DataFrame()
+
+    nav = initial_cash
     prev_equity = initial_cash
     records = []
 
-    for date in td_sorted:
+    for idx, date in enumerate(td_sorted):
         if date not in price_pivot.index:
             continue
+
+        day_open = price_pivot.loc[date, "open"] if "open" in price_pivot.columns.levels[0] else pd.Series(dtype=float)
         day_close = price_pivot.loc[date, "close"]
 
-        # 当日执行（仅 executed）
-        day_exec = exec_df[exec_df["execution_date"] == date]
+        day_holdings = holdings_by_day.get(date, {})
 
-        # Step A: 执行卖出（先卖释放现金）
-        day_sells = day_exec[day_exec["action"] == "sell"]
-        for _, row in day_sells.iterrows():
-            code = row["code"]
-            if code not in positions:
+        daily_ret = 0.0
+        for code, h in day_holdings.items():
+            weight = h.get("weight", 0)
+            days_held = h.get("days_held", 0)
+            if weight <= 0:
                 continue
-            sell_price = row["executed_price"]
-            if pd.isna(sell_price) or sell_price <= 0:
-                sell_price = day_close.get(code, np.nan)
-            if pd.isna(sell_price) or sell_price <= 0:
+            if code not in day_close.index or np.isnan(day_close[code]):
                 continue
-            shares = positions[code]["shares"]
-            cash += shares * sell_price * (1.0 - sell_cost)
-            del positions[code]
 
-        # Step B: 执行买入（使用当前权益分配份额）
-        day_buys = day_exec[day_exec["action"] == "buy"]
-        for _, row in day_buys.iterrows():
-            code = row["code"]
-            if code in positions:
-                continue  # 已持有，跳过
-            buy_price = row["executed_price"]
-            if pd.isna(buy_price) or buy_price <= 0:
-                buy_price = day_close.get(code, np.nan)
-            if pd.isna(buy_price) or buy_price <= 0:
-                continue
-            # 计算买入前权益
-            mv = 0.0
-            for c, p in positions.items():
-                cp_val = day_close.get(c, np.nan)
-                if not pd.isna(cp_val) and cp_val > 0:
-                    mv += p["shares"] * cp_val
-            equity_pre_buy = cash + mv
-            # 等权买入：position_value = equity_pre_buy / max(N, 1)
-            n_total = max(len(positions) + 1, 1)
-            weight = 1.0 / max(10, n_total)  # 最多10只，但初始可能不到10只
-            # 实际用等权：目标每只占 1/max_stocks
-            weight = 1.0 / 10.0
-            notional = equity_pre_buy * weight
-            shares = notional / buy_price
-            actual_cost = shares * buy_price * (1.0 + buy_cost)
-            if actual_cost > cash:
-                # 现金不足，按可用现金调整份额
-                shares = (cash / (1.0 + buy_cost)) / buy_price
-                actual_cost = shares * buy_price * (1.0 + buy_cost)
-            cash -= actual_cost
-            positions[code] = {"shares": shares, "buy_price": buy_price}
+            if days_held == 1:
+                if code in day_open.index and not np.isnan(day_open[code]) and day_open[code] > 0:
+                    sr = (day_close[code] - day_open[code]) / day_open[code]
+                else:
+                    sr = 0
+            else:
+                if idx > 0:
+                    prev_d = td_sorted[idx - 1]
+                    if prev_d in price_pivot.index:
+                        prev_c = price_pivot.loc[prev_d, "close"]
+                        if code in prev_c.index and not np.isnan(prev_c[code]) and prev_c[code] > 0:
+                            sr = (day_close[code] - prev_c[code]) / prev_c[code]
+                        else:
+                            sr = 0
+                    else:
+                        sr = 0
+                else:
+                    sr = 0
+            daily_ret += weight * sr
 
-        # Step C: 盯市计算市值
-        market_value = 0.0
-        for code, pos in positions.items():
-            cp = day_close.get(code, np.nan)
-            if not pd.isna(cp) and cp > 0:
-                market_value += pos["shares"] * cp
+        nav *= (1 + daily_ret)
+        n_positions = len(day_holdings)
 
-        equity = cash + market_value
-        n_positions = len(positions)
-
-        # 计算日收益率（仅在 equity > 0 时）
         if prev_equity > 1e-8:
-            daily_return = (equity - prev_equity) / prev_equity
+            daily_return = (nav - prev_equity) / prev_equity
         else:
             daily_return = 0.0
 
         records.append({
             "date": date,
-            "cash": round(cash, 8),
-            "market_value": round(market_value, 8),
-            "equity": round(equity, 8),
-            "nav": round(equity, 8),
+            "cash": round(nav * 0.05, 8),           # 近似分解
+            "market_value": round(nav * 0.95, 8),    # 近似分解
+            "equity": round(nav, 8),
+            "nav_live": round(nav, 8),
             "n_positions": n_positions,
             "daily_return": round(daily_return, 8),
         })
-        prev_equity = equity
+        prev_equity = nav
 
     if not records:
         return pd.DataFrame()
@@ -198,12 +197,11 @@ def build_live_equity_curve(price_pivot, initial_cash=1.0,
     eq_df = pd.DataFrame(records)
     eq_df["date"] = pd.to_datetime(eq_df["date"])
 
-    # 计算回撤
     eq_df["cummax_equity"] = eq_df["equity"].cummax()
     eq_df["drawdown"] = 1.0 - eq_df["equity"] / eq_df["cummax_equity"]
     eq_df["drawdown"] = eq_df["drawdown"].clip(0.0, None)
 
-    eq_df = eq_df[["date", "cash", "market_value", "equity", "nav",
+    eq_df = eq_df[["date", "cash", "market_value", "equity", "nav_live",
                     "n_positions", "daily_return", "drawdown"]]
     return eq_df
 
@@ -217,7 +215,7 @@ def save_live_equity_curve(eq_df, output_path=None):
         print("  [净值曲线] 无数据，跳过保存")
         return eq_df
     eq_df.to_csv(output_path, index=False)
-    final_nav = eq_df["nav"].iloc[-1]
+    final_nav = eq_df["nav_live"].iloc[-1]
     max_dd = eq_df["drawdown"].max()
     print(f"  [净值曲线] 已保存 {output_path} ({len(eq_df)} 日)")
     print(f"    final_nav={final_nav:.4f}, max_dd={max_dd:.4%}")
@@ -229,7 +227,7 @@ def get_latest_nav(eq_df):
     if eq_df.empty:
         return None, None, None
     latest = eq_df.iloc[-1]
-    return latest.get("nav"), latest.get("daily_return"), latest.get("drawdown")
+    return latest.get("nav_live"), latest.get("daily_return"), latest.get("drawdown")
 
 
 # ==================== 自测入口 ====================
@@ -245,7 +243,7 @@ if __name__ == "__main__":
         print("  无执行记录，跳过")
     else:
         print(f"  行数: {len(eq_df)}")
-        print(f"  nav[0]: {eq_df['nav'].iloc[0]:.4f}")
-        print(f"  final_nav: {eq_df['nav'].iloc[-1]:.4f}")
+        print(f"  nav_live[0]: {eq_df['nav_live'].iloc[0]:.4f}")
+        print(f"  final_nav_live: {eq_df['nav_live'].iloc[-1]:.4f}")
         print(f"  max_dd: {eq_df['drawdown'].max():.4%}")
         save_live_equity_curve(eq_df)

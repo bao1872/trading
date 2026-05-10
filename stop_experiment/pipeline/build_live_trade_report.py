@@ -154,11 +154,16 @@ def build_live_trade_report(buy_cost=BUY_COST, sell_cost=SELL_COST):
 
     # 构建决策查找表: {ts_code: {decision_date: reason}}
     sell_reason_map = {}
+    all_decision_dates = set()
     if not dec_df.empty:
         sells_in_dec = dec_df[dec_df["action"] == "sell"]
         for _, r in sells_in_dec.iterrows():
             ts = r["ts_code"]
-            sell_reason_map.setdefault(ts, {})[r["decision_date"]] = r.get("reason", "unknown")
+            dd = r["decision_date"]
+            sell_reason_map.setdefault(ts, {})[dd] = r.get("reason", "unknown")
+            all_decision_dates.add(dd)
+
+    sorted_decision_dates = sorted(all_decision_dates)
 
     # 构建持仓入场评分查找表: {ts_code: {entry_date: score}}
     score_map = {}
@@ -198,8 +203,16 @@ def build_live_trade_report(buy_cost=BUY_COST, sell_cost=SELL_COST):
         gross_ret = (sell_price - buy_price) / buy_price
         net_ret = (sell_price * (1.0 - sell_cost) - buy_price * (1.0 + buy_cost)) / (buy_price * (1.0 + buy_cost))
 
-        # 卖出原因
-        reason = sell_reason_map.get(ts, {}).get(sell_date, "unknown")
+        # 卖出原因（execution_date 在 T+1，decision_date 在 T，用交易日历回溯）
+        reason = sell_reason_map.get(ts, {}).get(sell_date, None)
+        if reason is None and sorted_decision_dates:
+            for prev_dd in reversed(sorted_decision_dates):
+                if prev_dd < sell_date:
+                    reason = sell_reason_map.get(ts, {}).get(prev_dd, None)
+                    if reason is not None:
+                        break
+        if reason is None:
+            reason = "unknown"
 
         # 入场评分
         score = score_map.get(ts, {}).get(buy_date, 0)

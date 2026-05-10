@@ -22,7 +22,7 @@ Inputs:
     - stop_experiment/output/dataset.parquet
 
 Outputs:
-    - stop_experiment/output/models/ (4个模型txt + 4个final模型txt)
+    - stop_experiment/output/models_control/ (4个模型txt + 4个final模型txt)
     - stop_experiment/output/fold_metrics.csv
     - stop_experiment/output/feature_importance.csv
     - stop_experiment/output/candidate_with_scores.parquet

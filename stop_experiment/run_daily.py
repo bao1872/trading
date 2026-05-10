@@ -299,10 +299,24 @@ def main():
     else:
         step_statuses["07_predictions"] = Status.SUCCESS
 
-    # Step 3: 09 模拟盘 live 模式
+    # Step 3: 09 模拟盘 — 优先 replay 模式（回测一致），日期不在 test 集时降级 live
+    full_test_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
+    use_replay = False
+    try:
+        import pandas as pd
+        full_dates = pd.read_parquet(
+            full_test_path, columns=["obs_date"]
+        )["obs_date"].unique()
+        full_dates_set = {str(d)[:10] for d in full_dates}
+        use_replay = date_str in full_dates_set
+    except Exception:
+        pass
+
+    mode = "replay" if use_replay else "live"
+    print(f"  使用 mode={mode} (date_str={date_str} in full_test={'Y' if use_replay else 'N'})")
     status, _ = run_step(
         "Step3-09模拟盘",
-        ["stop_experiment.pipeline.09_paper_trading_runner", "--date", date_str, "--mode", "live"],
+        ["stop_experiment.pipeline.09_paper_trading_runner", "--date", date_str, "--mode", mode],
     )
     step_statuses["09_ledger"] = status
 
@@ -355,6 +369,13 @@ def main():
     else:
         print(f"\n  ⏭️ 跳过 08 日报 (--with-report 可启用)")
 
+    # Step 7: 操作包生成
+    status, _ = run_step(
+        "Step7-操作包",
+        ["stop_experiment.pipeline.12_build_operator_packet", "--date", date_str],
+    )
+    step_statuses["12_operator_packet"] = status
+
     # 汇总
     print(f"\n{'='*70}")
     print(f"  📊 运行汇总")
@@ -398,6 +419,12 @@ def main():
             print(f"    ❌ {label}: 未生成 — {path}")
 
     print(f"\n  ✅ run_daily 完成: {overall}")
+
+    print(f"\n今日操作包：stop_experiment/output/live/operator_packets/{date_str}/")
+    print(f"重点查看：")
+    print(f"  - 02_account_snapshot.md")
+    print(f"  - 03_t1_action_plan.md")
+
     sys.exit(EXIT_CODES[overall])
 
 

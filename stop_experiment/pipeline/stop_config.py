@@ -81,7 +81,7 @@ STOP_EXPERIMENT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 OUTPUT_DIR = os.path.join(STOP_EXPERIMENT_ROOT, "output")
 DATASET_PATH = os.path.join(OUTPUT_DIR, "dataset.parquet")
 MODELS_DIR = os.path.join(OUTPUT_DIR, "models_control")       # baseline_3y_control_v1
-MODELS_TREATMENT_DIR = os.path.join(OUTPUT_DIR, "models")     # VSA版（研究保留）
+MODELS_TREATMENT_DIR = os.path.join(OUTPUT_DIR, "models")     # VSA版（研究保留，目录当前不存在）
 FIGURES_DIR = os.path.join(OUTPUT_DIR, "figures")
 BACKTEST_DIR = os.path.join(OUTPUT_DIR, "backtest")
 PREDICTIONS_DIR = os.path.join(OUTPUT_DIR, "predictions")
@@ -92,29 +92,6 @@ EXECUTIONS_DIR = os.path.join(LIVE_DIR, "executions")
 
 # ==================== VSA 因子开关 ====================
 VSA_ENABLED = False  # 默认关闭，研究需要时改为 True
-
-# ==================== 模型退出默认参数 (Phase 1.5 验证, 历史研究口径) ====================
-# obs_day=1~3 是旧研究口径。生产口径见 BASELINE_E0_X1_V1_PARAMS (obs_day=[1])。
-# 此块保留仅用于旧实验复现/审计对比，不用于日常生产。
-MODEL_EXIT_PARAMS = {
-    "buy_cls_exit_threshold": 0.7,
-    "stop_loss": -0.07,
-    "max_hold_days": 20,
-    "candidate_obs_days": [1, 2, 3],
-}
-
-# ==================== V1 历史基线 (已归档, 2026-05-10 起不再用于生产) ====================
-# 生产口径见 BASELINE_E0_X1_V1_PARAMS / PRODUCTION_PARAMS。
-# 保留仅用于旧版本审计、兼容性对比，非活跃参数。
-V1_PARAMS = {
-    "buy_signal_threshold": -0.07,
-    "candidate_obs_days": [1, 2, 3],
-    "buy_cls_exit_threshold": 0.70,
-    "stop_loss": -0.07,
-    "max_hold_days": 20,
-    "max_stocks_default": 10,
-    "strategy_default": "sell_score",  # 实际 = pred_sell_reg（score_stocks）
-}
 
 # ==================== 聚合实验最优基线 (Phase 0-3 完结, 2026-05-10 冻结) ====================
 BASELINE_E0_X1_V1 = "baseline_e0_x1_v1"
@@ -145,25 +122,7 @@ BASELINE_E0_X1_V1_PARAMS = {
 # 每日盘后生产口径: 统一使用主线冻结基线
 PRODUCTION_PARAMS = BASELINE_E0_X1_V1_PARAMS
 
-# ==================== 新基线 (Phase 4: 3年Control, 2026-05-10 冻结) ====================
-BASELINE_3Y_CONTROL_V1 = "baseline_3y_control_v1"
-
-BASELINE_3Y_PARAMS = {
-    "dataset_version": "3y_batched_v2",
-    "data_range": "2023-03 ~ 2026-05",
-    "train_end": "2025-06-30",
-    "val_end": "2025-12-31",
-    "test_range": "2026-01 ~ 2026-05",
-    "signals_count": 54678,
-    "feature_set_name": "control_no_vsa",
-    "vsa_enabled": False,
-    "feature_version": "baseline_3y_v1",
-    "model_dir": "models_control",
-    "buy_signal_threshold": -0.07,
-    "candidate_obs_days": [1, 2, 3],
-    "buy_cls_exit_threshold": 0.70,
-    "stop_loss": -0.07,
-    "max_hold_days": 20,
-    "max_stocks_default": 10,
-    "strategy_default": "sell_score",  # 实际 = pred_sell_reg（score_stocks）
-}
+# 向后兼容别名（_archive 归档脚本仍引用旧名称，统一指向生产口径）
+MODEL_EXIT_PARAMS = PRODUCTION_PARAMS
+V1_PARAMS = PRODUCTION_PARAMS
+BASELINE_3Y_PARAMS = PRODUCTION_PARAMS

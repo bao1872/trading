@@ -64,8 +64,9 @@ from stop_experiment.pipeline.stop_config import (
     PREDICTIONS_DIR, HOLDINGS_DIR, DECISIONS_DIR, EXECUTIONS_DIR,
 )
 from stop_experiment.backtest.dynamic_exit_backtest_v2 import _load_data
-from stop_experiment.backtest.simple_backtest import score_stocks, is_limit_down, is_limit_up, is_suspended
-from stop_experiment.backtest.decision_core import decide_eod
+from stop_experiment.backtest.daily_state_machine import step_day
+from stop_experiment.backtest.simple_backtest import score_stocks
+from stop_experiment.pipeline.live_ledger import load_holdings, save_holdings, save_decisions, save_executions
 from stop_experiment.pipeline.build_live_equity_curve import build_live_equity_curve, save_live_equity_curve
 from stop_experiment.pipeline.build_live_trade_report import build_live_trade_report, save_live_trade_report
 
@@ -75,187 +76,6 @@ FIRST_10_DATES = [
     "2026-03-20", "2026-03-24", "2026-04-03", "2026-04-10", "2026-04-17",
     "2026-04-24", "2026-04-30", "2026-05-06",
 ]
-
-
-# ==================== 前日持仓读写 ====================
-
-def load_holdings(date):
-    """从 holdings/YYYY-MM-DD.parquet 读取持仓"""
-    if isinstance(date, str):
-        date = pd.to_datetime(date)
-    path = os.path.join(HOLDINGS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
-    if not os.path.exists(path):
-        return None
-    df = pd.read_parquet(path)
-    holdings = {}
-    for _, row in df.iterrows():
-        code = row["code"]
-        holdings[code] = {
-            "buy_date": row.get("entry_date"),
-            "buy_price": row.get("entry_price"),
-            "weight": row.get("weight", 1.0 / DEFAULT_MAX_STOCKS),
-            "days_held": row.get("days_held", 0),
-            "ts_code": row.get("ts_code", code),
-            "signal_id": row.get("signal_id"),
-            "score": row.get("score", 0),
-        }
-    return holdings if holdings else None
-
-
-def save_holdings(date, holdings):
-    """保存当日决策后持仓到 holdings/YYYY-MM-DD.parquet"""
-    os.makedirs(HOLDINGS_DIR, exist_ok=True)
-    if isinstance(date, str):
-        date = pd.to_datetime(date)
-    rows = []
-    for code, h in holdings.items():
-        rows.append({
-            "date": date, "code": code,
-            "ts_code": h.get("ts_code", code),
-            "entry_date": h.get("buy_date"),
-            "entry_price": h.get("buy_price"),
-            "weight": h.get("weight"),
-            "days_held": h.get("days_held"),
-            "signal_id": h.get("signal_id"),
-            "score": h.get("score"),
-        })
-    df = pd.DataFrame(rows)
-    path = os.path.join(HOLDINGS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
-    df.to_parquet(path, index=False)
-    print(f"  [持仓保存] {path} ({len(df)} 只)")
-
-
-# ==================== 决策/执行账本 ====================
-
-def save_decisions(date, holdings, pending_buys, pending_sells, sell_reasons, extra=None, day_close=None):
-    """T日收盘后保存决策账本。cur_ret 优先从 extra details 取，兜底用 day_close+buy_price 计算。"""
-    os.makedirs(DECISIONS_DIR, exist_ok=True)
-    if isinstance(date, str):
-        date = pd.to_datetime(date)
-
-    def _resolve_cur_ret(h, detail, default=None):
-        """优先取 detail.cur_ret，兜底用 day_close 和 buy_price 计算"""
-        val = detail.get("cur_ret")
-        if val is not None and not (isinstance(val, float) and np.isnan(val)):
-            return val
-        if day_close is not None and h.get("buy_price") and h["buy_price"] > 0:
-            ts_val = h.get("ts_code", "")
-            # 按 ts_code 查找，失败则去掉后缀按纯 code 查找
-            cp = day_close.get(ts_val)
-            if cp is None or (isinstance(cp, float) and np.isnan(cp)):
-                code_pure = ts_val.split(".")[0] if isinstance(ts_val, str) and "." in ts_val else ts_val
-                cp = day_close.get(code_pure)
-            if cp is not None and not (isinstance(cp, float) and np.isnan(cp)) and cp > 0:
-                return float((cp - h["buy_price"]) / h["buy_price"])
-        return default
-
-    buy_details = extra.get("buy_details", []) if extra else []
-    sell_details = extra.get("sell_details", []) if extra else []
-    hold_details = extra.get("hold_details", []) if extra else []
-    buy_detail_map = {d["ts_code"]: d for d in buy_details}
-    buy_detail_map.update({d.get("code", ""): d for d in buy_details})
-    sell_detail_map = {d["ts_code"]: d for d in sell_details}
-    sell_detail_map.update({d.get("code", ""): d for d in sell_details})
-    hold_detail_map = {d["ts_code"]: d for d in hold_details}
-    hold_detail_map.update({d.get("code", ""): d for d in hold_details})
-    rows = []
-    for code, h in holdings.items():
-        ts = h.get("ts_code", code)
-        detail = hold_detail_map.get(ts, hold_detail_map.get(code, {}))
-        rows.append({
-            "decision_date": date, "ts_code": ts,
-            "signal_id": h.get("signal_id"), "action": "hold",
-            "reason": detail.get("why", "held"),
-            "score": h.get("score", 0),
-            "days_held": h.get("days_held", 0),
-            "cur_ret": _resolve_cur_ret(h, detail),
-            "threshold_value": None,
-            "why": detail.get("why", ""),
-        })
-    for code, reason in sell_reasons.items():
-        h = holdings.get(code, {})
-        ts = h.get("ts_code", code)
-        detail = sell_detail_map.get(ts, sell_detail_map.get(code, {}))
-        rows.append({
-            "decision_date": date, "ts_code": ts,
-            "signal_id": h.get("signal_id"), "action": "sell",
-            "reason": reason,
-            "score": h.get("score", 0),
-            "days_held": h.get("days_held", 0),
-            "cur_ret": _resolve_cur_ret(h, detail),
-            "threshold_value": detail.get("threshold"),
-            "why": detail.get("why", ""),
-        })
-    rank = 0
-    for code, bp_val, ts_code_val, sc_val, sid_val in pending_buys:
-        detail = buy_detail_map.get(code, {})
-        rows.append({
-            "decision_date": date, "ts_code": ts_code_val,
-            "signal_id": sid_val, "action": "buy",
-            "reason": detail.get("why", "candidate_top"),
-            "score": sc_val,
-            "days_held": 0, "cur_ret": None,
-            "threshold_value": detail.get("threshold_value"),
-            "why": detail.get("why", ""),
-            "rank": rank, "obs_day": detail.get("obs_day"),
-            "planned_price": bp_val,
-            "planned_weight": 1.0 / DEFAULT_MAX_STOCKS,
-        })
-        rank += 1
-    df = pd.DataFrame(rows)
-    path = os.path.join(DECISIONS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
-    df.to_parquet(path, index=False)
-    print(f"  [决策保存] {path} ({len(df)} 条)")
-
-
-def save_executions(date, executed_buys, executed_sells, skipped_buys, skipped_sells):
-    """T日开盘后保存执行账本到 executions/YYYY-MM-DD.parquet"""
-    os.makedirs(EXECUTIONS_DIR, exist_ok=True)
-    if isinstance(date, str):
-        date = pd.to_datetime(date)
-    rows = []
-    for code, bp, ts_code, sc, sid in executed_buys:
-        rows.append({
-            "execution_date": date, "decision_date": date,
-            "ts_code": ts_code, "signal_id": sid,
-            "action": "buy", "planned_price": bp,
-            "executed_price": bp, "status": "executed",
-            "skip_reason": "",
-        })
-    for code, bp, ts_code, sc, sid, reason in skipped_buys:
-        rows.append({
-            "execution_date": date, "decision_date": date,
-            "ts_code": ts_code, "signal_id": sid,
-            "action": "buy", "planned_price": bp,
-            "executed_price": None, "status": "skipped",
-            "skip_reason": reason,
-        })
-    for item in executed_sells:
-        code = item["code"]
-        h = item.get("holding", {})
-        rows.append({
-            "execution_date": date, "decision_date": date,
-            "ts_code": h.get("ts_code", code), "signal_id": h.get("signal_id"),
-            "action": "sell", "planned_price": None,
-            "executed_price": item.get("executed_price"),
-            "status": "executed", "skip_reason": "",
-        })
-    for item in skipped_sells:
-        code = item["code"]
-        h = item.get("holding", {})
-        rows.append({
-            "execution_date": date, "decision_date": date,
-            "ts_code": h.get("ts_code", code), "signal_id": h.get("signal_id"),
-            "action": "sell", "planned_price": None,
-            "executed_price": None, "status": "skipped",
-            "skip_reason": item.get("reason", ""),
-        })
-    df = pd.DataFrame(rows)
-    path = os.path.join(EXECUTIONS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
-    df.to_parquet(path, index=False)
-    nb = len(executed_buys) + len(executed_sells)
-    ns = len(skipped_buys) + len(skipped_sells)
-    print(f"  [执行保存] {path} ({len(df)} 条, executed={nb} skipped={ns})")
 
 
 # ==================== 统一校验 ====================
@@ -338,7 +158,7 @@ def run_single_day(target_date, df_all, price_pivot, trading_days, prev_close_ma
     holdings = dict(holdings_input) if holdings_input else {}
     pending_buys_prev = list(pending_buys_input) if pending_buys_input else []
     pending_sells_prev = list(pending_sells_input) if pending_sells_input else []
-    if not holdings_input:
+    if holdings_input is None and pending_buys_input is None:
         prev_dt = _resolve_prev_decision_date(target_date, trading_days, pred_lookup)
         if prev_dt is not None:
             holdings = _load_latest_holdings(target_date, trading_days) or {}
@@ -361,84 +181,17 @@ def run_single_day(target_date, df_all, price_pivot, trading_days, prev_close_ma
                         "reason": row["reason"],
                     })
 
-    # Step 2: 执行 pending orders
-    day_open = price_pivot.loc[target_date, "open"]
-    executed_buys, skipped_buys = [], []
-    executed_sells, skipped_sells = [], []
-
-    for code, bp_val, ts_code_val, sc_val, sid_val in pending_buys_prev:
-        if code in holdings:
-            skipped_buys.append((code, bp_val, ts_code_val, sc_val, sid_val, "already_held"))
-            continue
-        buy_price = bp_val
-        if np.isnan(buy_price) or buy_price <= 0:
-            skipped_buys.append((code, bp_val, ts_code_val, sc_val, sid_val, "missing_price"))
-            continue
-        if "volume" in price_pivot.columns.levels[0] and code in price_pivot["volume"].columns:
-            vol_val = price_pivot["volume"][code].get(target_date, np.nan)
-            if is_suspended(vol_val):
-                skipped_buys.append((code, bp_val, ts_code_val, sc_val, sid_val, "suspended_skip"))
-                continue
-        if code in prev_close_map and target_date in prev_close_map[code].index:
-            prev_c = prev_close_map[code].get(target_date, np.nan)
-            if not np.isnan(prev_c) and prev_c > 0:
-                if "high" in price_pivot.columns.levels[0] and code in price_pivot["high"].columns:
-                    high_val = price_pivot["high"][code].get(target_date, np.nan)
-                    if not np.isnan(high_val) and is_limit_up(buy_price, high_val, prev_c):
-                        skipped_buys.append((code, bp_val, ts_code_val, sc_val, sid_val, "limit_up_skip"))
-                        continue
-        holdings[code] = {
-            "buy_date": target_date, "buy_price": buy_price,
-            "weight": 1.0 / DEFAULT_MAX_STOCKS,
-            "days_held": 0, "ts_code": ts_code_val,
-            "score": sc_val, "signal_id": sid_val,
-        }
-        executed_buys.append((code, bp_val, ts_code_val, sc_val, sid_val))
-
-    for sell_item in pending_sells_prev:
-        code = sell_item["code"]
-        if code not in holdings:
-            continue
-        sell_price = np.nan
-        if code in day_open.index and not np.isnan(day_open[code]):
-            sell_price = day_open[code]
-        if np.isnan(sell_price) or sell_price <= 0:
-            sell_item["reason"] = "missing_price"
-            skipped_sells.append(dict(sell_item))
-            anomalies.append(f"skip_sell_no_price:{code}")
-            continue
-        if "volume" in price_pivot.columns.levels[0] and code in price_pivot["volume"].columns:
-            vol_val = price_pivot["volume"][code].get(target_date, np.nan)
-            if is_suspended(vol_val):
-                sell_item["reason"] = "suspended_skip"
-                skipped_sells.append(dict(sell_item))
-                anomalies.append(f"skip_sell_suspended:{code}")
-                continue
-        if code in prev_close_map and target_date in prev_close_map[code].index:
-            prev_c = prev_close_map[code].get(target_date, np.nan)
-            if not np.isnan(prev_c) and prev_c > 0:
-                if "low" in price_pivot.columns.levels[0] and code in price_pivot["low"].columns:
-                    low_val = price_pivot["low"][code].get(target_date, np.nan)
-                    if not np.isnan(low_val) and is_limit_down(sell_price, low_val, prev_c):
-                        sell_item["reason"] = "limit_down_skip"
-                        skipped_sells.append(dict(sell_item))
-                        anomalies.append(f"skip_sell_limit_down:{code}")
-                        continue
-        sell_item["executed_price"] = sell_price
-        executed_sells.append(dict(sell_item))
-        del holdings[code]
-
-    save_executions(target_date, executed_buys, executed_sells, skipped_buys, skipped_sells)
-
-    # Step 3: 开盘后持仓已在 holdings 中（已执行买卖）
-
-    # Step 4: 收盘后决策
+    # Step 2: 执行 pending orders（统一日状态推进器 SSOT step_day）
+    # 构建候选人池
     candidates = _build_candidate_pool(target_date, df_all, trading_days, pred_lookup)
     if candidates.empty:
         anomalies.append("no_candidates_today")
         print(f"  [候选池] 空 (no_candidates_today)")
 
+    # 计算前日决策日
     prev_dt = _resolve_prev_decision_date(target_date, trading_days, pred_lookup)
+
+    # 计算 day_close 和 day_open_next
     day_close = price_pivot.loc[target_date, "close"]
 
     next_idx = None
@@ -451,24 +204,45 @@ def run_single_day(target_date, df_all, price_pivot, trading_days, prev_close_ma
         nd = sorted(trading_days)[next_idx]
         if nd in price_pivot.index:
             day_open_next = price_pivot.loc[nd, "open"]
-    # 若 T 为最新交易日（无 T+1 开盘价），用 T 日收盘价作为买入价代理
     if day_open_next.empty or day_open_next.isna().all():
-        day_open_next = day_close.copy()
-        print(f"  [代理] T+1 开盘价不可用，使用 T 日收盘价作为买入价代理")
+        day_open_next = None
+        print(f"  [信息] T+1 开盘价不可用（最后一日或数据缺失），不生成买入单")
 
-    holdings, pending_buys, pending_sells, sell_reasons, _extra = decide_eod(
-        decision_date=target_date, holdings=holdings,
-        candidates=candidates, pred_lookup=pred_lookup,
-        prev_date=prev_dt, day_close=day_close,
+    # 统一日状态推进（SSOT）
+    step_params = {
+        "max_stocks": DEFAULT_MAX_STOCKS,
+        "max_hold_days": BASELINE_E0_X1_V1_PARAMS.get("max_hold_days", 20),
+        "stop_loss": BASELINE_E0_X1_V1_PARAMS.get("stop_loss", -0.07),
+        "exit_threshold": BASELINE_E0_X1_V1_PARAMS.get("buy_cls_exit_threshold", 0.70),
+    }
+    step_result = step_day(
+        target_date, holdings, pending_buys_prev, pending_sells_prev,
+        price_pivot, candidates, pred_lookup, prev_dt, step_params,
+        prev_close_map=prev_close_map, strict=True,
         day_open_next=day_open_next,
-        max_stocks=DEFAULT_MAX_STOCKS,
-        max_hold_days=BASELINE_E0_X1_V1_PARAMS.get("max_hold_days", 20),
-        stop_loss=BASELINE_E0_X1_V1_PARAMS.get("stop_loss", -0.07),
-        exit_threshold=BASELINE_E0_X1_V1_PARAMS.get("buy_cls_exit_threshold", 0.70),
     )
 
-    save_decisions(target_date, holdings, pending_buys, pending_sells, sell_reasons, extra=_extra,
-                   day_close=price_pivot.loc[target_date, "close"])
+    executed_buys = step_result["executed_buys"]
+    executed_sells = step_result["executed_sells"]
+    skipped_buys = step_result["skipped_buys"]
+    skipped_sells = step_result["skipped_sells"]
+    holdings = step_result["holdings"]
+    pending_buys = step_result["pending_buys"]
+    pending_sells = step_result["pending_sells"]
+    sell_reasons = step_result["sell_reasons"]
+
+    # 采集 skip 异常
+    for _sb in skipped_buys:
+        anomalies.append(f"skip_buy:{_sb[5]}:{_sb[0]}")
+    for _ss in skipped_sells:
+        anomalies.append(f"skip_sell:{_ss.get('reason', 'unknown')}:{_ss.get('code', '?')}")
+
+    # Step 2+: 写执行账本
+    save_executions(target_date, executed_buys, executed_sells, skipped_buys, skipped_sells)
+
+    # Step 4+: 写决策账本
+    save_decisions(target_date, holdings, pending_buys, pending_sells, sell_reasons,
+                   extra=step_result.get("extra", {}), day_close=day_close)
 
     # Step 5: 保存持仓
     save_holdings(target_date, holdings)
@@ -579,6 +353,8 @@ def main():
     parser.add_argument("--fault-inject", type=str, default=None,
                         choices=["MISSING_PREDICTION", "MISSING_HOLDINGS", "MISSING_OPEN_PRICE"],
                         help="故障注入测试")
+    parser.add_argument("--start-date", type=str, default=None,
+                        help="批量运行起始日期 (YYYY-MM-DD)")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -595,7 +371,7 @@ def main():
         df_all["obs_date"] = pd.to_datetime(df_all["obs_date"])
         candidate_obs_days = BASELINE_E0_X1_V1_PARAMS.get("candidate_obs_days", [1])
         df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
-        df_all = score_stocks(df_all, BASELINE_E0_X1_V1_PARAMS.get("score_col", "pred_sell_reg"))
+        df_all = score_stocks(df_all, "sell_score")
         print(f"  候选: {len(df_all)} 行 (全量预测)")
 
         test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data(
@@ -631,35 +407,41 @@ def main():
                 "composite_score": float(row.get("score", np.nan)),
             }
 
-        # 补充前日预测账本，保证 decide_eod 的 find_exit_pred(sid, prev_date) 可匹配
-        target_dt = pd.to_datetime(args.date)
-        for lookback in range(1, 4):
-            prev_try = target_dt - pd.Timedelta(days=lookback)
-            prev_pred_path = os.path.join(PREDICTIONS_DIR, f"{prev_try.strftime('%Y-%m-%d')}.parquet")
-            if os.path.exists(prev_pred_path):
-                prev_pred = pd.read_parquet(prev_pred_path)
-                if "obs_date" not in prev_pred.columns and "pred_date" in prev_pred.columns:
-                    prev_pred["obs_date"] = pd.to_datetime(prev_pred["pred_date"])
-                merged = 0
-                for _, row in prev_pred.iterrows():
-                    key = (int(row["signal_id"]), row["obs_date"])
-                    if key not in pred_lookup:
-                        pred_lookup[key] = {
-                            "pred_buy_cls": float(row.get("pred_buy_cls", np.nan)),
-                            "pred_sell_reg": float(row.get("pred_sell_reg", np.nan)),
-                            "composite_score": float(row.get("score", np.nan)),
-                        }
-                        merged += 1
-                print(f"  [pred_lookup] 已合并 {prev_try.strftime('%Y-%m-%d')} 预测: {prev_pred_path} (合并 {merged} 条)")
-                break
-        else:
-            print(f"  [pred_lookup] 回溯 3 日内无前日预测文件 (退出检查可能缺精度)")
-
         # 价格数据直接从 DB 加载（不依赖 full_test_predictions.parquet）
         from stop_experiment.backtest.simple_backtest import load_daily_prices, build_price_pivot
         daily = load_daily_prices("2024-01-01", "2027-01-01")
         price_pivot, trading_days, prev_close_map = build_price_pivot(daily)
         print(f"  交易日: {len(trading_days)}, pred_lookup: {len(pred_lookup)} 条")
+
+        # 补充前日预测账本，保证 decide_eod 的 find_exit_pred(sid, prev_date) 可匹配
+        target_dt = pd.to_datetime(args.date)
+        if target_dt in trading_days:
+            tidx = trading_days.index(target_dt)
+            for lookback in range(1, 4):
+                if tidx - lookback < 0:
+                    break
+                prev_tday = trading_days[tidx - lookback]
+                prev_pred_path = os.path.join(PREDICTIONS_DIR, f"{prev_tday.strftime('%Y-%m-%d')}.parquet")
+                if os.path.exists(prev_pred_path):
+                    prev_pred = pd.read_parquet(prev_pred_path)
+                    if "obs_date" not in prev_pred.columns and "pred_date" in prev_pred.columns:
+                        prev_pred["obs_date"] = pd.to_datetime(prev_pred["pred_date"])
+                    merged = 0
+                    for _, row in prev_pred.iterrows():
+                        key = (int(row["signal_id"]), row["obs_date"])
+                        if key not in pred_lookup:
+                            pred_lookup[key] = {
+                                "pred_buy_cls": float(row.get("pred_buy_cls", np.nan)),
+                                "pred_sell_reg": float(row.get("pred_sell_reg", np.nan)),
+                                "composite_score": float(row.get("score", np.nan)),
+                            }
+                            merged += 1
+                    print(f"  [pred_lookup] 已合并 {prev_tday.strftime('%Y-%m-%d')} 预测: {prev_pred_path} (合并 {merged} 条)")
+                    break
+            else:
+                print(f"  [pred_lookup] 回溯 3 个交易日内无前日预测文件 (退出检查可能缺精度)")
+        else:
+            print(f"  [pred_lookup] {args.date} 非交易日，跳过前日回溯")
 
     dates = []
     if args.date:
@@ -668,6 +450,10 @@ def main():
         dates = [pd.to_datetime(d) for d in FIRST_10_DATES]
     elif args.batch_all:
         dates = sorted(trading_days)
+        if args.start_date:
+            start = pd.to_datetime(args.start_date)
+            dates = [d for d in dates if d >= start]
+            print(f"  起始日期: {start.strftime('%Y-%m-%d')}")
     else:
         print("请指定 --date, --batch-first-10 或 --batch-all")
         return

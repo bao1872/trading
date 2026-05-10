@@ -68,18 +68,19 @@ import numpy as np
 import pandas as pd
 
 from stop_experiment.pipeline.stop_config import (
-    OUTPUT_DIR, BACKTEST_DIR, BASELINE_E0_X1_V1_PARAMS, PREDICTIONS_DIR, DECISIONS_DIR, EXECUTIONS_DIR,
+    OUTPUT_DIR, BACKTEST_DIR, BASELINE_E0_X1_V1_PARAMS, PRODUCTION_PARAMS, PREDICTIONS_DIR, DECISIONS_DIR, EXECUTIONS_DIR,
 )
+from stop_experiment.pipeline.live_ledger import load_holdings, save_holdings, save_decisions, save_executions
 from stop_experiment.backtest.dynamic_exit_backtest_v2 import (
     _load_data, run_backtest,
 )
 from stop_experiment.backtest.simple_backtest import score_stocks
+from stop_experiment.backtest.daily_state_machine import step_day
 
 _SIX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "06_daily_inference_replay.py")
 _six_spec = importlib.util.spec_from_file_location("_daily_inference_replay", _SIX_PATH)
 _six_mod = importlib.util.module_from_spec(_six_spec)
 _six_spec.loader.exec_module(_six_mod)
-decide_daily_actions = _six_mod.decide_daily_actions
 build_daily_candidate_snapshot = _six_mod.build_daily_candidate_snapshot
 # find_exit_pred 从 decision_core 直接导入（SSOT），不再从 replay 模块间接引用
 from stop_experiment.backtest.decision_core import find_exit_pred
@@ -122,171 +123,6 @@ def load_real_predictions_for_date(target_date):
         print(f"  [真实预测] 已加载: {day_path} ({len(df)} 行)")
         return df
     return None
-
-
-def save_holdings(date, holdings, pending_buys=None, pending_sells=None):
-    """
-    保存当日决策后持仓到 holdings/YYYY-MM-DD.parquet（账本驱动）。
-
-    Input:
-        date:          决策日
-        holdings:      dict {code: {ts_code, buy_date, buy_price, weight, days_held, signal_id, score, ...}}
-        pending_buys:  [(code, buy_price, ts_code, score, signal_id), ...] T+1 待买入
-        pending_sells: [{"code": ..., "holding": {...}, "reason": ...}, ...] T+1 待卖出
-    """
-    os.makedirs(HOLDINGS_DIR, exist_ok=True)
-    if isinstance(date, str):
-        date = pd.to_datetime(date)
-
-    rows = []
-    for code, h in holdings.items():
-        rows.append({
-            "date": date,
-            "code": code,
-            "ts_code": h.get("ts_code", code),
-            "entry_date": h.get("buy_date"),
-            "entry_price": h.get("buy_price"),
-            "weight": h.get("weight"),
-            "days_held": h.get("days_held"),
-            "signal_id": h.get("signal_id"),
-            "score": h.get("score"),
-        })
-
-    df = pd.DataFrame(rows)
-    path = os.path.join(HOLDINGS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
-    df.to_parquet(path, index=False)
-    print(f"  [持仓保存] {path} ({len(df)} 只)")
-
-def save_decisions(date, holdings_after, pending_buys, pending_sells, sell_reasons):
-    """
-    T日决策后保存决策账本到 decisions/YYYY-MM-DD.parquet。
-    三部分: hold (继续持有), sell (卖出), buy (买入)
-    """
-    os.makedirs(DECISIONS_DIR, exist_ok=True)
-    if isinstance(date, str):
-        date = pd.to_datetime(date)
-
-    rows = []
-    rank = 0
-    for code, h in holdings_after.items():
-        rows.append({
-            "decision_date": date, "ts_code": h.get("ts_code", code),
-            "signal_id": h.get("signal_id"), "action": "hold",
-            "reason": "", "rank": rank, "score": h.get("score", 0),
-            "planned_price": None, "planned_weight": h.get("weight"),
-        })
-        rank += 1
-    for item in pending_sells:
-        code = item["code"]
-        h = item.get("holding", {})
-        rows.append({
-            "decision_date": date, "ts_code": h.get("ts_code", code),
-            "signal_id": h.get("signal_id"), "action": "sell",
-            "reason": item.get("reason", ""), "rank": -1,
-            "score": h.get("score", 0), "planned_price": None,
-            "planned_weight": 0,
-        })
-    rank = 0
-    for code, bp_val, ts_code_val, sc_val, sid_val in pending_buys:
-        rows.append({
-            "decision_date": date, "ts_code": ts_code_val,
-            "signal_id": sid_val, "action": "buy",
-            "reason": "candidate_top", "rank": rank,
-            "score": sc_val, "planned_price": bp_val,
-            "planned_weight": 1.0 / DEFAULT_MAX_STOCKS,
-        })
-        rank += 1
-
-    df = pd.DataFrame(rows)
-    path = os.path.join(DECISIONS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
-    df.to_parquet(path, index=False)
-    print(f"  [决策保存] {path} ({len(df)} 条)")
-
-
-def save_executions(date, executed_buys, executed_sells, skipped_buys, skipped_sells):
-    """
-    T日开盘后保存执行账本到 executions/YYYY-MM-DD.parquet。
-    executed: 成功执行的买卖
-    skipped: 因停牌/涨跌停/无价格跳过的买卖
-    """
-    os.makedirs(EXECUTIONS_DIR, exist_ok=True)
-    if isinstance(date, str):
-        date = pd.to_datetime(date)
-
-    rows = []
-    for code, bp, ts_code, sc, sid in executed_buys:
-        rows.append({
-            "execution_date": date, "decision_date": date,
-            "ts_code": ts_code, "signal_id": sid,
-            "action": "buy", "planned_price": bp,
-            "executed_price": bp, "status": "executed",
-            "skip_reason": "",
-        })
-    for code, bp, ts_code, sc, sid, reason in skipped_buys:
-        rows.append({
-            "execution_date": date, "decision_date": date,
-            "ts_code": ts_code, "signal_id": sid,
-            "action": "buy", "planned_price": bp,
-            "executed_price": None, "status": "skipped",
-            "skip_reason": reason,
-        })
-    for item in executed_sells:
-        code = item["code"]
-        h = item.get("holding", {})
-        rows.append({
-            "execution_date": date, "decision_date": date,
-            "ts_code": h.get("ts_code", code), "signal_id": h.get("signal_id"),
-            "action": "sell", "planned_price": None,
-            "executed_price": item.get("executed_price"),
-            "status": "executed", "skip_reason": "",
-        })
-    for item in skipped_sells:
-        code = item["code"]
-        h = item.get("holding", {})
-        rows.append({
-            "execution_date": date, "decision_date": date,
-            "ts_code": h.get("ts_code", code), "signal_id": h.get("signal_id"),
-            "action": "sell", "planned_price": None,
-            "executed_price": None, "status": "skipped",
-            "skip_reason": item.get("reason", ""),
-        })
-
-    df = pd.DataFrame(rows)
-    path = os.path.join(EXECUTIONS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
-    df.to_parquet(path, index=False)
-    print(f"  [执行保存] {path} ({len(df)} 条, executed={len(executed_buys)+len(executed_sells)} skipped={len(skipped_buys)+len(skipped_sells)})")
-
-
-
-def load_holdings(date):
-    """
-    从 holdings/YYYY-MM-DD.parquet 读取持仓。
-
-    Input:
-        date: 目标日期
-
-    Output:
-        holdings dict 或 None
-    """
-    if isinstance(date, str):
-        date = pd.to_datetime(date)
-    path = os.path.join(HOLDINGS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
-    if not os.path.exists(path):
-        return None
-    df = pd.read_parquet(path)
-    holdings = {}
-    for _, row in df.iterrows():
-        code = row["code"]
-        holdings[code] = {
-            "buy_date": row.get("entry_date"),
-            "buy_price": row.get("entry_price"),
-            "weight": row.get("weight", 1.0 / DEFAULT_MAX_STOCKS),
-            "days_held": row.get("days_held", 0),
-            "ts_code": row.get("ts_code", code),
-            "signal_id": row.get("signal_id"),
-            "score": row.get("score", 0),
-        }
-    return holdings if holdings else None
 
 
 # ==================== 工具函数 ====================
@@ -824,16 +660,16 @@ def _load_engine_data(target_date=None):
     score_col = "score"
 
     test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data(
-        candidate_obs_days=V1_PARAMS["candidate_obs_days"]
+        candidate_obs_days=PRODUCTION_PARAMS["candidate_obs_days"]
     )
 
     bt_result = run_backtest(
         test_df, price_pivot, trading_days, prev_close_map, pred_lookup,
         max_stocks=DEFAULT_MAX_STOCKS,
-        strategy=V1_PARAMS.get("strategy_default", "sell_score"),
+        strategy=PRODUCTION_PARAMS.get("strategy_default", "sell_score"),
         exit_mode="model_exit",
-        stop_loss=V1_PARAMS["stop_loss"],
-        buy_cls_exit_threshold=V1_PARAMS["buy_cls_exit_threshold"],
+        stop_loss=PRODUCTION_PARAMS["stop_loss"],
+        buy_cls_exit_threshold=PRODUCTION_PARAMS["buy_cls_exit_threshold"],
         debug_snapshots=True,
         strict=True,
     )
@@ -1045,10 +881,19 @@ def _get_start_holdings(target_date, snapshots_map, trading_days, price_pivot, p
                         h["cur_ret"] = (close_p - h["buy_price"]) / h["buy_price"]
 
         with redirect_stdout(StringIO()):
-            holdings, pending_from_snap, pending_sells_from_snap, sell_reasons, _extra = decide_daily_actions(
-                step_date, holdings, pd.DataFrame(), pred_indexed, step_prev_date,
-                price_pivot=price_pivot, trading_dates=trading_days,
+            step_result = step_day(
+                step_date, holdings, [], [],
+                price_pivot, pd.DataFrame(), pred_indexed, step_prev_date,
+                {"max_stocks": PRODUCTION_PARAMS.get("max_stocks", 10),
+                 "max_hold_days": PRODUCTION_PARAMS.get("max_hold_days", 20),
+                 "stop_loss": PRODUCTION_PARAMS.get("stop_loss", -0.07),
+                 "exit_threshold": PRODUCTION_PARAMS.get("buy_cls_exit_threshold", 0.70)},
+                strict=True,
             )
+        holdings = step_result["holdings"]
+        pending_from_snap = step_result["pending_buys"]
+        pending_sells_from_snap = step_result["pending_sells"]
+        sell_reasons = step_result["sell_reasons"]
 
     print(f"  [持仓] 推进后: 持仓 {len(holdings)} 只, pending_buys {len(pending_from_snap)} 只, "
           f"pending_sells {len(pending_sells_from_snap)} 只")
@@ -1154,13 +999,13 @@ def _print_section_1_params():
     print("=" * 75)
     print(f"  版本基线:      v1_frozen_202605")
     print(f"  退出模式:      model_exit (buy_cls + stop_loss + max_hold)")
-    print(f"  止损阈值:      {V1_PARAMS['stop_loss']:.0%}")
-    print(f"  最大持有天数:  {V1_PARAMS['max_hold_days']} 天")
-    print(f"  模型退出阈值:  pred_buy_cls > {V1_PARAMS['buy_cls_exit_threshold']:.2f}")
-    print(f"  候选观测日:    obs_day in {V1_PARAMS['candidate_obs_days']}")
+    print(f"  止损阈值:      {PRODUCTION_PARAMS['stop_loss']:.0%}")
+    print(f"  最大持有天数:  {PRODUCTION_PARAMS['max_hold_days']} 天")
+    print(f"  模型退出阈值:  pred_buy_cls > {PRODUCTION_PARAMS['buy_cls_exit_threshold']:.2f}")
+    print(f"  候选观测日:    obs_day in {PRODUCTION_PARAMS['candidate_obs_days']}")
     print(f"  最大持仓数:    {DEFAULT_MAX_STOCKS} 只")
-    print(f"  排序策略:      {V1_PARAMS.get('strategy_default', 'sell_score')} (score = pred_sell_reg)")
-    print(f"  买入信号阈值:  {V1_PARAMS.get('buy_signal_threshold', -0.07):.0%}")
+    print(f"  排序策略:      {PRODUCTION_PARAMS.get('strategy_default', 'sell_score')} (score = pred_sell_reg)")
+    print(f"  买入信号阈值:  {PRODUCTION_PARAMS.get('buy_signal_threshold', -0.07):.0%}")
 
 
 def _print_section_2_holdings(holdings, prev_date):
@@ -1299,9 +1144,9 @@ def _print_section_4_exit_scan(holdings, sells, sell_reasons, prev_date, pred_in
     print(f"  prev_date (模型退出参考日): {prev_date.strftime('%Y-%m-%d') if prev_date else 'N/A'}")
     print("=" * 85)
 
-    max_hold_days = V1_PARAMS.get("max_hold_days", 20)
-    stop_loss = V1_PARAMS.get("stop_loss", -0.07)
-    exit_threshold = V1_PARAMS.get("buy_cls_exit_threshold", 0.70)
+    max_hold_days = PRODUCTION_PARAMS.get("max_hold_days", 20)
+    stop_loss = PRODUCTION_PARAMS.get("stop_loss", -0.07)
+    exit_threshold = PRODUCTION_PARAMS.get("buy_cls_exit_threshold", 0.70)
 
     if not holdings:
         print("  (空仓，无退出评估)")
@@ -1713,7 +1558,7 @@ def main():
 
     print("=" * 75)
     print("  日级推理预测报告")
-    print("  基准: V1_PARAMS (exit_mode=model_exit, stop_loss=-7%, max_hold=20d)")
+    print("  基准: PRODUCTION_PARAMS (exit_mode=model_exit, stop_loss=-7%, max_hold=20d)")
     print("=" * 75)
 
     # ---- Step 1: 确定目标日期 ----
@@ -1734,7 +1579,7 @@ def main():
         # 获取 trading_days
         from stop_experiment.backtest.dynamic_exit_backtest_v2 import _load_data
         _, _, trading_days, _, _ = _load_data(
-            candidate_obs_days=V1_PARAMS.get("candidate_obs_days", [1, 2, 3])
+            candidate_obs_days=PRODUCTION_PARAMS.get("candidate_obs_days", [1])
         )
         sorted_td = sorted(trading_days)
         target_date = min(d for d in sorted_td if d > latest_obs) if any(d > latest_obs for d in sorted_td) else sorted_td[-1]
@@ -1823,17 +1668,26 @@ def main():
     holdings_before_decision = {k: dict(v) for k, v in holdings_start.items()}
 
     with redirect_stdout(StringIO()):
-        holdings_after, pending_buys_new, pending_sells_new, sell_reasons, _extra = decide_daily_actions(
-            target_date, holdings_start, candidates, pred_indexed, prev_date_decision,
-            price_pivot=price_pivot, trading_dates=trading_days,
+        step_result = step_day(
+            target_date, holdings_start, [], [],
+            price_pivot, candidates, pred_indexed, prev_date_decision,
+            {"max_stocks": PRODUCTION_PARAMS.get("max_stocks", 10),
+             "max_hold_days": PRODUCTION_PARAMS.get("max_hold_days", 20),
+             "stop_loss": PRODUCTION_PARAMS.get("stop_loss", -0.07),
+             "exit_threshold": PRODUCTION_PARAMS.get("buy_cls_exit_threshold", 0.70)},
+            strict=True,
         )
+    holdings_after = step_result["holdings"]
+    pending_buys_new = step_result["pending_buys"]
+    pending_sells_new = step_result["pending_sells"]
+    sell_reasons = step_result["sell_reasons"]
 
     # 将 pending_sells_new 转换为便于打印的格式
     sells = [item["holding"]["ts_code"] for item in pending_sells_new]
     sell_reasons = {item["holding"]["ts_code"]: item["reason"] for item in pending_sells_new}
 
     # ---- 保存决策后持仓到 holdings 账本 ----
-    save_holdings(target_date, holdings_after, pending_buys_new, pending_sells_new)
+    save_holdings(target_date, holdings_after)
 
     # ---- 构建股票名称映射（在决策之后，收集所有涉及的 ts_code）----
     all_ts_codes = set()

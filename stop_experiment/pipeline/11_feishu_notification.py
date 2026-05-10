@@ -57,7 +57,7 @@ def _get_latest_nav():
         if eq.empty:
             return None, None, None
         latest = eq.iloc[-1]
-        return latest.get("nav"), latest.get("daily_return"), latest.get("drawdown")
+        return latest.get("nav_live"), latest.get("daily_return"), latest.get("drawdown")
     except Exception:
         return None, None, None
 
@@ -325,7 +325,7 @@ def generate_feishu_markdown(date_str):
     # 净值行（从 live_equity_curve.csv 读取）
     latest_nav, daily_ret, dd = _get_latest_nav()
     if latest_nav is not None:
-        nav_str = f"净值 {latest_nav:.4f}"
+        nav_str = f"模拟盘净值 {latest_nav:.4f}"
         if daily_ret is not None and not np.isnan(daily_ret):
             nav_str += f"  |  日收益 {daily_ret:+.2%}"
         if dd is not None and not np.isnan(dd):

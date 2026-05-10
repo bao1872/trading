@@ -181,7 +181,7 @@ Examples:
         print("[完成] 训练流水线执行完毕")
         print("  输出文件:")
         print("    - output/dataset.parquet")
-        print("    - output/models/")
+        print("    - output/models_control/")
         print("    - output/full_test_predictions.parquet")
         print("  下一步: 运行生产入口 python stop_experiment/run_daily.py")
     else:
