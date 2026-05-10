@@ -50,7 +50,7 @@ from datasource.database import get_engine
 from stop_experiment.pipeline.stop_config import (
     OBS_DAYS, SELL_CLS_THRESHOLD, BUY_CLS_THRESHOLD,
     OUTPUT_DIR, MODELS_DIR, PREDICTIONS_DIR, MODEL_SPECS,
-    V1_PARAMS,
+    V1_PARAMS, BASELINE_E0_X1_V1_PARAMS,
 )
 from stop_experiment.pipeline.factor_columns import (
     SLC_STATIC_COLS, ALL_FEATURE_COLS, META_COLS,
@@ -59,7 +59,7 @@ from stop_experiment.pipeline.compute_factors import compute_stock_factors
 from stop_experiment.backtest.simple_backtest import score_stocks
 
 
-CANDIDATE_OBS_DAYS = V1_PARAMS.get("candidate_obs_days", [1, 2, 3])
+CANDIDATE_OBS_DAYS = BASELINE_E0_X1_V1_PARAMS["candidate_obs_days"]
 SIGNAL_LOOKBACK_DAYS = max(CANDIDATE_OBS_DAYS) + 5
 OBS_COLS = ["ts_code", "signal_id", "obs_date", "obs_day",
             "pred_sell_reg", "pred_sell_cls", "pred_buy_reg", "pred_buy_cls", "score"]

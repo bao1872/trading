@@ -29,6 +29,10 @@ How to Run:
 Side Effects:
     - 只读数据库，不写入任何表
     - 输出文件到 stop_experiment/output/dataset_batches/
+
+Note:
+    OBS_DAYS=20 是训练侧观察窗（20天展开计算MFE/MAE标签），
+    与生产 candidate_obs_days=[1] 完全独立。训练需要全20天样本构建标签。
 """
 
 from __future__ import annotations

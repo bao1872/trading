@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-每日盘后统一入口 — 预测账本 → 模拟盘 → 行动计划 → [可选日报/回放]
+每日盘后统一入口 — 预测账本 → 模拟盘 → 行动计划 → 飞书通知
+
+生产口径: 统一使用主线冻结基线 (PRODUCTION_PARAMS = BASELINE_E0_X1_V1_PARAMS)
+  E0 Entry (pred_sell_reg 排序, 无 gate)
+  X1 Exit (buy_cls > 0.70)
+  obs_day = [1]
+  top10 等权
 
 用法：
   python -m stop_experiment.run_daily                        # production: 最新交易日
@@ -11,19 +17,22 @@
 流程（production）：
   Step 0: 解析目标交易日
   Step 1: 上游覆盖检查（DB 原始数据是否覆盖 T）
-  Step 2: 自动生成预测账本 (07, 幂等)
-  Step 3: 09 模拟盘 (live 模式, 落四本账)
+  Step 2: 自动生成预测账本 (07, 幂等, 使用主线基线参数)
+  Step 3: 09 模拟盘 (live 模式, 落四本账 + 净值曲线 + 交易报告)
+  Step 3b: 产物验收 (净值曲线/交易报告存在性检查)
   Step 4: 10 行动计划 (正式模式)
-  Step 5: 11 飞书通知 (production 默认开启)
+  Step 5: 11 飞书通知 (含净值/日收益/回撤)
   [可选]: 08 日报 / 06 回放
 
 输出：
-  predictions/   → 预测账本 (由 Step 2 保证)
-  live/holdings/ → 持仓账本
-  live/decisions/→ 决策账本
-  live/executions/→ 执行账本
-  live/action_plans/ → 行动计划 MD+JSON
-  reports/      → 日报 MD (--with-report)
+  predictions/         → 预测账本 (由 Step 2 保证)
+  live/executions/     → 执行账本
+  live/decisions/      → 决策账本
+  live/holdings/       → 持仓账本 (实际在 output/ 根目录)
+  live/live_equity_curve.csv  → 净值曲线 (Step 3 后处理)
+  live/live_trade_report.csv  → 交易盈亏报告 (Step 3 后处理)
+  live/action_plans/   → 行动计划 MD+JSON
+  reports/             → 日报 MD (--with-report)
 
 副作用：通过子脚本写 parquet/MD，不直接写库表
 """
@@ -41,6 +50,7 @@ if _PROJECT_ROOT not in sys.path:
 import pandas as pd
 from stop_experiment.pipeline.stop_config import (
     OUTPUT_DIR, HOLDINGS_DIR, DECISIONS_DIR, EXECUTIONS_DIR, PREDICTIONS_DIR,
+    PRODUCTION_PARAMS,
 )
 
 PD = pd
@@ -148,6 +158,39 @@ def ensure_prediction_ledger(target_date):
         return False, f"07_generate_daily_predictions 异常: {e}"
 
 
+# ==================== 产物验收 ====================
+
+def validate_daily_products(date_str):
+    """
+    每日产物存在性校验。
+    核心账本 + 净值曲线 + 交易报告 + 行动计划。
+    返回 (status, message)。
+    """
+    messages = []
+    missing_required = False
+    live_dir = os.path.join(OUTPUT_DIR, "live")
+
+    required = [
+        (os.path.join(DECISIONS_DIR, f"{date_str}.parquet"), "决策账本", True),
+        (os.path.join(EXECUTIONS_DIR, f"{date_str}.parquet"), "执行账本", True),
+        (os.path.join(live_dir, "live_equity_curve.csv"), "净值曲线", True),
+        (os.path.join(live_dir, "live_trade_report.csv"), "交易报告", True),
+        (os.path.join(live_dir, "action_plans", f"{date_str}.md"), "行动计划 MD", True),
+    ]
+
+    for path, label, required_flag in required:
+        if os.path.exists(path):
+            messages.append(f"    ✅ {label}: {path}")
+        else:
+            messages.append(f"    ❌ {label}: 未生成 — {path}")
+            if required_flag:
+                missing_required = True
+
+    if missing_required:
+        return Status.DEGRADED, "\n".join(messages)
+    return Status.SUCCESS, "\n".join(messages)
+
+
 # ==================== 子步骤执行 ====================
 
 def run_step(step_name, cmd_parts):
@@ -208,6 +251,9 @@ def main():
     print(f"  🚀 run_daily 启动")
     print(f"  模式: {args.mode}")
     print(f"  时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  生产基线: {PRODUCTION_PARAMS['profile']}")
+    print(f"    Entry=E0({PRODUCTION_PARAMS['score_col']}), Exit=X1(buy_cls>{PRODUCTION_PARAMS['buy_cls_exit_threshold']})")
+    print(f"    obs_day={PRODUCTION_PARAMS['candidate_obs_days']}, top{PRODUCTION_PARAMS['max_stocks']}等权")
     print(f"{'='*70}")
 
     # Step 0: 解析目标交易日
@@ -259,6 +305,15 @@ def main():
         ["stop_experiment.pipeline.09_paper_trading_runner", "--date", date_str, "--mode", "live"],
     )
     step_statuses["09_ledger"] = status
+
+    # Step 3b: 产物验收（仅校验，不阻断后续 Steps）
+    if status == Status.SUCCESS:
+        v_status, v_msg = validate_daily_products(date_str)
+        print(f"\n--- Step 3b: 产物验收 ---")
+        print(v_msg)
+        if v_status != Status.SUCCESS:
+            print(f"  ⚠️ 部分产物缺失，标记 DEGRADED")
+        step_statuses["products_check"] = v_status
 
     # Step 4: 10 行动计划（正式模式，缺预测直接失败）
     status, _ = run_step(
@@ -325,6 +380,8 @@ def main():
         (os.path.join(HOLDINGS_DIR, f"{date_str}.parquet"), "持仓账本"),
         (os.path.join(DECISIONS_DIR, f"{date_str}.parquet"), "决策账本"),
         (os.path.join(EXECUTIONS_DIR, f"{date_str}.parquet"), "执行账本"),
+        (os.path.join(OUTPUT_DIR, "live", "live_equity_curve.csv"), "净值曲线"),
+        (os.path.join(OUTPUT_DIR, "live", "live_trade_report.csv"), "交易报告"),
         (os.path.join(OUTPUT_DIR, "live", "action_plans",
                       f"{date_str}.md"), "行动计划 MD"),
         (os.path.join(OUTPUT_DIR, "live", "action_plans",
@@ -333,10 +390,11 @@ def main():
                       f"daily_report_{date_str}.md"), "日报"),
         (os.path.join(OUTPUT_DIR, f"daily_inference_diff_{date_str}.csv"), "06对账结果"),
     ]
+    REQUIRED_LABELS = {"预测账本", "持仓账本", "决策账本", "执行账本", "净值曲线", "交易报告", "行动计划 MD", "行动计划 JSON"}
     for path, label in candidates:
         if os.path.exists(path):
             print(f"    ✅ {label}: {path}")
-        elif label in ("预测账本", "持仓账本", "决策账本", "执行账本", "行动计划 MD", "行动计划 JSON"):
+        elif label in REQUIRED_LABELS:
             print(f"    ❌ {label}: 未生成 — {path}")
 
     print(f"\n  ✅ run_daily 完成: {overall}")

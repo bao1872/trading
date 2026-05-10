@@ -2,12 +2,19 @@
 """
 飞书消息通知 — SLC 策略证据面板
 
-用途：读取 4 本账 → 计算 Tier/Top30 追踪 → 生成飞书 Markdown → 发送
+用途：读取 4 本账 → 计算 Tier/Top30 追踪 → 读取净值曲线 → 生成飞书 Markdown → 发送
+消息包含：净值/日收益/回撤 | 持仓分组(风险/安全/待更新) | 候选高优先级 | 新买入清单
 
 用法：
   python -m stop_experiment.pipeline.11_feishu_notification --date 2026-05-08 --dry-run   # 本地预览
   python -m stop_experiment.pipeline.11_feishu_notification --date 2026-05-08              # 正式发送
   python -m stop_experiment.pipeline.11_feishu_notification --latest --dry-run              # 最新日期预览
+
+输入：
+  - live/decisions/T.parquet (决策账本)
+  - live/holdings/T.parquet (持仓账本)
+  - predictions/T.parquet (预测账本)
+  - live/live_equity_curve.csv (净值曲线，读取最新 NAV)
 
 输出：飞书卡片消息 (Markdown 格式)
 副作用：发送飞书消息 (非 dry-run 模式)
@@ -26,7 +33,8 @@ import pandas as pd
 import numpy as np
 
 from stop_experiment.pipeline.stop_config import (
-    DECISIONS_DIR, EXECUTIONS_DIR, HOLDINGS_DIR, PREDICTIONS_DIR, V1_PARAMS,
+    DECISIONS_DIR, EXECUTIONS_DIR, HOLDINGS_DIR, PREDICTIONS_DIR, OUTPUT_DIR,
+    BASELINE_E0_X1_V1_PARAMS,
 )
 
 TIER_A_SCORE = 0.2
@@ -34,9 +42,24 @@ TIER_A_BUY_CLS = 0.30
 TIER_B_SCORE = 0.1
 TIER_B_BUY_CLS = 0.70
 
-EXIT_THRESHOLD = V1_PARAMS.get("buy_cls_exit_threshold", 0.70)
-STOP_LOSS = V1_PARAMS.get("stop_loss", -0.07)
-MAX_HOLD_DAYS = V1_PARAMS.get("max_hold_days", 20)
+EXIT_THRESHOLD = BASELINE_E0_X1_V1_PARAMS.get("buy_cls_exit_threshold", 0.70)
+STOP_LOSS = BASELINE_E0_X1_V1_PARAMS.get("stop_loss", -0.07)
+MAX_HOLD_DAYS = BASELINE_E0_X1_V1_PARAMS.get("max_hold_days", 20)
+LIVE_EQUITY_PATH = os.path.join(OUTPUT_DIR, "live", "live_equity_curve.csv")
+
+
+def _get_latest_nav():
+    """从 live_equity_curve.csv 读取最新净值/日收益/回撤，无文件返回 (None, None, None)"""
+    if not os.path.exists(LIVE_EQUITY_PATH):
+        return None, None, None
+    try:
+        eq = pd.read_csv(LIVE_EQUITY_PATH)
+        if eq.empty:
+            return None, None, None
+        latest = eq.iloc[-1]
+        return latest.get("nav"), latest.get("daily_return"), latest.get("drawdown")
+    except Exception:
+        return None, None, None
 
 
 def _safe_read_parquet(dir_path, date_str, label):
@@ -54,6 +77,22 @@ def _fmt_float(v, default="N/A"):
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return default
     return f"{v:.4f}"
+
+
+def _fetch_stock_names_batch(ts_codes):
+    """批量查询 ts_code → 股票中文名称，从 stock_pools 表"""
+    if not ts_codes:
+        return {}
+    try:
+        from datasource.database import get_engine
+        from sqlalchemy import text
+        engine = get_engine()
+        sql = text("SELECT ts_code, name FROM stock_pools WHERE ts_code = ANY(:codes)")
+        with engine.connect() as conn:
+            result = conn.execute(sql, {"codes": list(ts_codes)})
+            return {row[0]: row[1] for row in result}
+    except Exception:
+        return {}
 
 
 def _fmt_pct(v, default="N/A"):
@@ -264,12 +303,35 @@ def generate_feishu_markdown(date_str):
     # Top30 池计数 (有多少只不同的股票至少出现在一次 Top30 中)
     n_top30_pool = len(top30_map)
 
+    # 构建股票名称映射
+    all_ts = set()
+    for d in risk_triggered + safe_holdings + pending_update + buy_list:
+        all_ts.add(d["ts_code"])
+    if not candidates_top10.empty:
+        for ts in candidates_top10["ts_code"].tolist():
+            all_ts.add(str(ts))
+    name_map = _fetch_stock_names_batch(all_ts)
+
+    def stock_display(ts):
+        return name_map.get(ts, ts.split(".")[0] if "." in ts else ts)
+
     # ============ 构建 Markdown ============
     lines = []
 
     # Header
     lines.append(f" SLC 策略证据面板 | {date_str} ")
     lines.append("")
+
+    # 净值行（从 live_equity_curve.csv 读取）
+    latest_nav, daily_ret, dd = _get_latest_nav()
+    if latest_nav is not None:
+        nav_str = f"净值 {latest_nav:.4f}"
+        if daily_ret is not None and not np.isnan(daily_ret):
+            nav_str += f"  |  日收益 {daily_ret:+.2%}"
+        if dd is not None and not np.isnan(dd):
+            nav_str += f"  |  回撤 {dd:.2%}"
+        lines.append(f"  {nav_str}")
+        lines.append("")
 
     # Summary line
     summary_parts = [f"持仓{n_hold}"]
@@ -291,7 +353,7 @@ def generate_feishu_markdown(date_str):
         lines.append("")
         for i, e in enumerate(risk_triggered):
             ts = e["ts_code"]
-            lines.append(f" {i+1}) {ts.split('.')[0]}  `{ts}` ")
+            lines.append(f" {i+1}) {stock_display(ts)}  `{ts}` ")
             lines.append(f" 买入 {_fmt_date(e.get('entry_date'))}  |  买入价 {e.get('entry_price', '?')}  |  持仓 {e['days_held']}天  |  entry_score {_fmt_float(e['entry_score'])}")
             t30_str = f"是({e['top30_appearances']}次)" if e['top30_appearances'] > 0 else f"否(0次)"
             t10_str = f"是(排{e['top10_best_rank']})" if e['top10_appearances'] > 0 else f"否(排{e['top10_best_rank']})"
@@ -309,7 +371,7 @@ def generate_feishu_markdown(date_str):
         lines.append("")
         for i, e in enumerate(safe_holdings):
             ts = e["ts_code"]
-            lines.append(f" {i+1}) {ts.split('.')[0]}  `{ts}` ")
+            lines.append(f" {i+1}) {stock_display(ts)}  `{ts}` ")
             lines.append(f" 买入 {_fmt_date(e.get('entry_date'))}  |  买入价 {e.get('entry_price', '?')}  |  持仓 {e['days_held']}天  |  entry_score {_fmt_float(e['entry_score'])}")
             t30_str = f"是({e['top30_appearances']}次)" if e['top30_appearances'] > 0 else f"否(0次)"
             t10_str = f"是(排{e['top10_best_rank']})" if e['top10_appearances'] > 0 else f"否(排0)"
@@ -323,7 +385,7 @@ def generate_feishu_markdown(date_str):
         lines.append("")
         for i, e in enumerate(pending_update):
             ts = e["ts_code"]
-            lines.append(f" {i+1}) {ts.split('.')[0]}  `{ts}` ")
+            lines.append(f" {i+1}) {stock_display(ts)}  `{ts}` ")
             lines.append(f" 买入 {_fmt_date(e.get('entry_date'))}  |  买入价 {e.get('entry_price', '?')}  |  持仓 {e['days_held']}天  |  entry_score {_fmt_float(e['entry_score'])}")
             t30_str = f"是({e['top30_appearances']}次)" if e['top30_appearances'] > 0 else f"否(0次)"
             t10_str = f"是(排{e['top10_best_rank']})" if e['top10_appearances'] > 0 else f"否(排0)"
@@ -345,7 +407,7 @@ def generate_feishu_markdown(date_str):
             tier = _compute_tier(sc, bcls)
             t30 = top30_map.get(ts, {"appearances": 0, "best_rank": "-"})
             t30_str = f"出现 {t30['appearances']} 次, 最优排{t30['best_rank']}" if t30['appearances'] > 0 else ""
-            lines.append(f" {i+1}) {ts.split('.')[0]}  `{ts}`  `{tier}` ")
+            lines.append(f" {i+1}) {stock_display(ts)}  `{ts}`  `{tier}` ")
             lines.append(f" score {_fmt_float(sc)}  |  buy_cls {_fmt_float(bcls)}  |  obs_day {od}")
             if t30_str:
                 lines.append(f" Top30: {t30_str}")
@@ -353,13 +415,13 @@ def generate_feishu_markdown(date_str):
 
     # ============ 五、新买入清单 ============
     if buy_list:
-        max_stocks = V1_PARAMS.get("max_stocks_default", 10)
+        max_stocks = BASELINE_E0_X1_V1_PARAMS.get("max_stocks", 10)
         avail = max_stocks - n_hold
         lines.append(f"📤 新买入清单  ({len(buy_list)}只) ")
         lines.append(f" 可用仓位: {avail}/{max_stocks}")
         for i, e in enumerate(buy_list):
             ts = e["ts_code"]
-            lines.append(f" {i+1}) {ts.split('.')[0]} `{ts}` `{e['tier']}`  score {_fmt_float(e['score_val'])}")
+            lines.append(f" {i+1}) {stock_display(ts)} `{ts}` `{e['tier']}`  score {_fmt_float(e['score_val'])}")
         lines.append("")
 
     if not any([risk_triggered, safe_holdings, pending_update, not candidates_top10.empty, buy_list]):

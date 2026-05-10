@@ -128,24 +128,32 @@ def _find_latest_decisions_date():
 
 _STOCK_NAME_CACHE = {}
 
-def _get_stock_name(ts_code):
-    code_clean = ts_code[:6] if "." in ts_code else ts_code
-    if code_clean in _STOCK_NAME_CACHE:
-        return _STOCK_NAME_CACHE.get(code_clean, code_clean)
+def _fetch_stock_names_batch(ts_codes):
+    """批量查询 ts_code → 股票名称，从 stock_pools 表"""
+    if not ts_codes:
+        return {}
     try:
-        from stop_experiment.data.fetch_ak_data import ak
-        import akshare as ak_mod
-        info = ak_mod.stock_individual_info_em(symbol=code_clean)
-        if info is not None and not info.empty:
-            name_row = info[info["item"] == "股票简称"]
-            if not name_row.empty:
-                name = str(name_row["value"].values[0])
-                _STOCK_NAME_CACHE[code_clean] = name
-                return name
+        from datasource.database import get_engine
+        from sqlalchemy import text
+        engine = get_engine()
+        sql = text("SELECT ts_code, name FROM stock_pools WHERE ts_code = ANY(:codes)")
+        with engine.connect() as conn:
+            result = conn.execute(sql, {"codes": list(ts_codes)})
+            return {row[0]: row[1] for row in result}
     except Exception:
-        pass
-    _STOCK_NAME_CACHE[code_clean] = code_clean
-    return code_clean
+        return {}
+
+
+def _build_name_map(code_set):
+    """构建 ts_code→股票中文名称 映射，批量查询 stock_pools"""
+    codes = [c for c in code_set if c]
+    return _fetch_stock_names_batch(codes)
+
+
+def _get_stock_name(ts_code):
+    """单条查询股票名称（优先用 _build_name_map 批量查询）"""
+    code_clean = ts_code[:6] if "." in ts_code else ts_code
+    return _STOCK_NAME_CACHE.get(ts_code, code_clean)
 
 
 # ==================== 报告生成 ====================
@@ -263,9 +271,9 @@ def generate_action_plan(date_str, allow_missing_predictions=False):
         all_codes.add(str(r.get("ts_code", "")))
     for _, r in hold_df_dec.iterrows():
         all_codes.add(str(r.get("ts_code", "")))
-    name_map = {}
+    name_map = _build_name_map(all_codes)
     for c in all_codes:
-        if c:
+        if c and c not in name_map:
             name_map[c] = _get_stock_name(c)
 
     # --- 构建 MD ---

@@ -68,7 +68,7 @@ import numpy as np
 import pandas as pd
 
 from stop_experiment.pipeline.stop_config import (
-    OUTPUT_DIR, BACKTEST_DIR, V1_PARAMS, PREDICTIONS_DIR, DECISIONS_DIR, EXECUTIONS_DIR, V1_BASELINE,
+    OUTPUT_DIR, BACKTEST_DIR, BASELINE_E0_X1_V1_PARAMS, PREDICTIONS_DIR, DECISIONS_DIR, EXECUTIONS_DIR,
 )
 from stop_experiment.backtest.dynamic_exit_backtest_v2 import (
     _load_data, run_backtest,
@@ -88,7 +88,7 @@ from stop_experiment.backtest.decision_core import find_exit_pred
 
 REPORT_DIR = os.path.join(OUTPUT_DIR, "daily_report")
 HOLDINGS_DIR = os.path.join(OUTPUT_DIR, "holdings")
-DEFAULT_MAX_STOCKS = V1_PARAMS.get("max_stocks_default", 10)
+DEFAULT_MAX_STOCKS = BASELINE_E0_X1_V1_PARAMS.get("max_stocks", 10)
 
 # Tier 仓位映射配置（与 tier_weight_mapping.py 保持一致）
 TIER_WEIGHTS_W1 = {"A": 1.3, "B": 1.0, "C": 0.7}
@@ -354,9 +354,9 @@ def format_feishu_card(target_date, holdings_before, sells, sell_reasons,
     Output:
         (header_title, header_template, elements_list)
     """
-    stop_loss = V1_PARAMS.get("stop_loss", -0.07)
-    exit_threshold = V1_PARAMS.get("buy_cls_exit_threshold", 0.70)
-    max_hold_days = V1_PARAMS.get("max_hold_days", 20)
+    stop_loss = BASELINE_E0_X1_V1_PARAMS.get("stop_loss", -0.07)
+    exit_threshold = BASELINE_E0_X1_V1_PARAMS.get("buy_cls_exit_threshold", 0.70)
+    max_hold_days = BASELINE_E0_X1_V1_PARAMS.get("max_hold_days", 20)
 
     elements = []
     held_codes = set(holdings_before.keys())
@@ -817,10 +817,10 @@ def _load_engine_data(target_date=None):
     df_all = pd.read_parquet(cand_path)
     df_all["obs_date"] = pd.to_datetime(df_all["obs_date"])
 
-    candidate_obs_days = V1_PARAMS.get("candidate_obs_days", [1, 2, 3])
+    candidate_obs_days = BASELINE_E0_X1_V1_PARAMS.get("candidate_obs_days", [1])
     df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
 
-    df_all = score_stocks(df_all, V1_PARAMS.get("strategy_default", "sell_score"))
+    df_all = score_stocks(df_all, "sell_score")
     score_col = "score"
 
     test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data(

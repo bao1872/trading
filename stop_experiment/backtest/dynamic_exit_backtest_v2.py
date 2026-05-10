@@ -91,6 +91,62 @@ MAX_HOLD_DAYS = 20
 TAKE_PROFIT = 0.12
 
 
+# ---- 权重分配辅助函数 ----
+
+def _calc_weights(codes, scores, mode, params):
+    """计算买入时的目标权重（归一化，不做 cap/floor）
+
+    mode: None(等权), by_rank(排名分层), by_score(线性映射, 已关闭)
+    生产仅用 None 和 by_rank(W1a研究)。
+    by_score 线已于 2026-05-10 关闭，仅保留代码不删除。
+
+    codes: 本次买入的 code 列表（已排序，索引0=rank1）
+    scores: 对应 score 列表（用于 by_score 模式）
+    mode: None | "by_rank" | "by_score"
+    params: dict，格式取决于 mode
+
+    Returns: {code: weight} dict，总和=1.0
+    """
+    n = len(codes)
+    if n == 0:
+        return {}
+
+    if mode is None:
+        w = 1.0 / n
+        return {c: w for c in codes}
+
+    if mode == "by_rank":
+        tiers = params.get("tiers", []) if params else []
+        raw = {}
+        for i, code in enumerate(codes):
+            rank = i + 1
+            mult = 1.0
+            for lo, hi, m in tiers:
+                if lo <= rank <= hi:
+                    mult = m
+                    break
+            raw[code] = mult
+        total = sum(raw.values())
+        return {c: w / total for c, w in raw.items()} if total > 0 else {c: 1.0 / n for c in codes}
+
+    if mode == "by_score":
+        lo = (params or {}).get("lo", 0.75)
+        hi = (params or {}).get("hi", 1.25)
+        s = np.array(scores)
+        s_min, s_max = s.min(), s.max()
+        if s_max - s_min < 1e-12:
+            w = 1.0 / n
+            return {c: w for c in codes}
+        normalized = (s - s_min) / (s_max - s_min)
+        mapped = lo + (hi - lo) * normalized
+        mapped = np.clip(mapped, 0.01, None)  # floor at 1% to avoid zero weight
+        total = mapped.sum()
+        return {c: float(w / total) for c, w in zip(codes, mapped)} if total > 0 else {c: 1.0 / n for c in codes}
+
+    return {c: 1.0 / n for c in codes}
+
+
+# ---- 数据加载 ----
 def _load_data(candidate_obs_days=None):
     """加载全量预测和K线"""
     full_pred_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
@@ -162,6 +218,7 @@ def run_backtest(
     buy_cls_exit_threshold=0.70,
     exit_sub_mode=None, buy_reg_exit_threshold=None,
     debug_snapshots=False,
+    weight_mode=None, weight_params=None,
 ):
     """
     通用回测引擎，exit_mode 控制退出策略:
@@ -169,6 +226,8 @@ def run_backtest(
     - rule_exit
     - model_exit (支持 exit_sub_mode: None/X1 / "sell_decay"/X3 / "or_buy_reg"/X4)
 
+    weight_mode: None(等权) | "by_rank"(排名分层) | "by_score"(分数线性映射)
+    weight_params: dict，格式取决于 weight_mode
     debug_snapshots=True 时返回逐日快照，用于与逐日推理脚本对账。
     """
     signals_df = score_stocks(signals_df, strategy)
@@ -224,15 +283,24 @@ def run_backtest(
                 executed.append((code, bp, ts_code, sc, sid))
 
             if executed:
-                n_total = len(holdings) + len(executed)
-                w = 1.0 / n_total if n_total > 0 else 1.0
+                all_codes = list(holdings.keys()) + [code for code, _, _, _, _ in executed]
+                all_scores = [holdings[code_h].get("weight_score", holdings[code_h]["score"])
+                              for code_h in holdings]
+                all_scores += [ws_map.get(sid, sc) for _, _, _, sc, sid in executed]
+                scored = sorted(zip(all_codes, all_scores), key=lambda x: x[1], reverse=True)
+                sorted_codes = [c for c, _ in scored]
+                sorted_scores = [s for _, s in scored]
+                weights = _calc_weights(sorted_codes, sorted_scores, weight_mode, weight_params)
                 for code_h in holdings:
-                    holdings[code_h]["weight"] = w
+                    holdings[code_h]["weight"] = weights.get(code_h, 0)
                 for code, bp, ts_code, sc, sid in executed:
+                    ws = ws_map.get(sid, sc)
                     holdings[code] = {
                         "buy_date": current_date, "buy_price": bp,
-                        "weight": w, "days_held": 0,
+                        "weight": weights.get(code, 0), "days_held": 0,
                         "ts_code": ts_code, "score": sc, "signal_id": sid,
+                        "weight_score": ws,
+                        "entry_weight": weights.get(code, 0),
                     }
             pending_orders = []
 
@@ -277,6 +345,7 @@ def run_backtest(
                     "sell_reason": sell_item["reason"],
                     "score": h.get("score", 0),
                     "strategy": strategy, "exit_mode": exit_mode,
+                    "weight": h.get("entry_weight", h.get("weight", 0)),
                 })
                 if code in holdings:
                     del holdings[code]
@@ -319,6 +388,12 @@ def run_backtest(
 
         pending_sells = pending_sells_new
         pending_orders = pending_buys_new
+
+        # 构建 weight_score 映射（用于 by_score 权重模式下的替代分数）
+        ws_map = {}
+        if weight_mode == "by_score" and "weight_score" in signals_df.columns:
+            for _, row in signals_df.iterrows():
+                ws_map[row["signal_id"]] = row["weight_score"]
 
         # 按 exit_mode 过滤卖出类型（修复：之前 decide_eod 总是评估全部三种退出）
         if exit_mode == "fixed_hold":

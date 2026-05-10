@@ -24,6 +24,10 @@ How to Run:
 
 Side Effects:
     - 只读parquet，输出精选信号文件
+
+Note:
+    BUY_CLS_THRESHOLD=-0.07 是训练侧标签阈值（mae_20<-7%→buy_cls=1），
+    不等于生产 Exit 阈值 (buy_cls_exit_threshold=0.70)。
 """
 
 from __future__ import annotations

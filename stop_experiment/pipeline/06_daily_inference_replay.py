@@ -54,7 +54,7 @@ import numpy as np
 import pandas as pd
 
 from stop_experiment.pipeline.stop_config import (
-    OUTPUT_DIR, BACKTEST_DIR, V1_PARAMS, PREDICTIONS_DIR,
+    OUTPUT_DIR, BACKTEST_DIR, BASELINE_E0_X1_V1_PARAMS, PREDICTIONS_DIR,
 )
 from stop_experiment.backtest.dynamic_exit_backtest_v2 import (
     _load_data, run_backtest,
@@ -119,13 +119,13 @@ def build_daily_candidate_snapshot(date, df_all, score_col="composite_score"):
     if sub.empty:
         return pd.DataFrame()
 
-    candidate_obs_days = V1_PARAMS.get("candidate_obs_days", [1, 2, 3])
+    candidate_obs_days = BASELINE_E0_X1_V1_PARAMS.get("candidate_obs_days", [1])
     sub = sub[sub["obs_day"].isin(candidate_obs_days)]
     if sub.empty:
         return pd.DataFrame()
 
     if score_col not in sub.columns:
-        sub = score_stocks(sub, V1_PARAMS.get("strategy_default", "sell_score"))
+        sub = score_stocks(sub, "sell_score")
         score_col = "score"
 
     sub = sub.sort_values(score_col, ascending=False)
@@ -144,7 +144,6 @@ def decide_daily_actions(date, holdings, candidates, pred_lookup, prev_date,
     且 n_avail 正确预扣 pending_sells。
     """
     from stop_experiment.backtest.decision_core import decide_eod
-    from stop_experiment.pipeline.stop_config import V1_PARAMS
 
     day_open_next = pd.Series(dtype=float)
     day_close = pd.Series(dtype=float)
@@ -171,10 +170,10 @@ def decide_daily_actions(date, holdings, candidates, pred_lookup, prev_date,
         prev_date=prev_date,
         day_close=day_close,
         day_open_next=day_open_next,
-        max_stocks=V1_PARAMS.get("max_stocks_default", 10),
-        max_hold_days=V1_PARAMS.get("max_hold_days", 20),
-        stop_loss=V1_PARAMS.get("stop_loss", -0.07),
-        exit_threshold=V1_PARAMS.get("buy_cls_exit_threshold", 0.70),
+        max_stocks=BASELINE_E0_X1_V1_PARAMS.get("max_stocks", 10),
+        max_hold_days=BASELINE_E0_X1_V1_PARAMS.get("max_hold_days", 20),
+        stop_loss=BASELINE_E0_X1_V1_PARAMS.get("stop_loss", -0.07),
+        exit_threshold=BASELINE_E0_X1_V1_PARAMS.get("buy_cls_exit_threshold", 0.70),
     )
 
 
@@ -479,7 +478,7 @@ def run_replay(args):
     cand_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
     df_all = pd.read_parquet(cand_path)
     df_all["obs_date"] = pd.to_datetime(df_all["obs_date"])
-    candidate_obs_days = V1_PARAMS.get("candidate_obs_days", [1, 2, 3])
+    candidate_obs_days = BASELINE_E0_X1_V1_PARAMS.get("candidate_obs_days", [1])
     df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
     print(f"\n  候选数据: {len(df_all)} 行, 日期范围: {df_all['obs_date'].min()} ~ {df_all['obs_date'].max()}")
     print(f"  Signal 总数: {df_all['signal_id'].nunique()}")

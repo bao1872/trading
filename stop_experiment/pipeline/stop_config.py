@@ -35,8 +35,12 @@ EMBARGO_DAYS = 25          # 时间序列切分 embargo 天数
 N_FOLDS = 3                # 滚动折数
 
 # ==================== 分类阈值 ====================
-SELL_CLS_THRESHOLD = 0.07  # 卖点分类阈值：mfe_20 > 7% → 还有上涨空间（不卖）
-BUY_CLS_THRESHOLD = -0.07    # Phase 2: 从 -0.05 收紧到 -0.07
+# 训练侧标签阈值，不等于生产 Exit 阈值。
+# sell_cls: mfe_20 > 7% → 还有上涨空间（不卖）
+# buy_cls:  mae_20 < -7% → 买点信号（此处 -0.07 是训练标签定义，
+#           生产 Exit 阈值 buy_cls_exit_threshold=0.70 见 BASELINE_E0_X1_V1_PARAMS）
+SELL_CLS_THRESHOLD = 0.07
+BUY_CLS_THRESHOLD = -0.07
 
 # ==================== 数据分割 ====================
 # 3年数据 train/val/test 分割（基于 obs_date，2026-05 更新）
@@ -89,7 +93,9 @@ EXECUTIONS_DIR = os.path.join(LIVE_DIR, "executions")
 # ==================== VSA 因子开关 ====================
 VSA_ENABLED = False  # 默认关闭，研究需要时改为 True
 
-# ==================== 模型退出默认参数 (Phase 1.5 验证) ====================
+# ==================== 模型退出默认参数 (Phase 1.5 验证, 历史研究口径) ====================
+# obs_day=1~3 是旧研究口径。生产口径见 BASELINE_E0_X1_V1_PARAMS (obs_day=[1])。
+# 此块保留仅用于旧实验复现/审计对比，不用于日常生产。
 MODEL_EXIT_PARAMS = {
     "buy_cls_exit_threshold": 0.7,
     "stop_loss": -0.07,
@@ -97,11 +103,9 @@ MODEL_EXIT_PARAMS = {
     "candidate_obs_days": [1, 2, 3],
 }
 
-# ==================== 版本基线 (Phase 3 Frozen: 2026-05) ====================
-# 冻结版本参数，后续所有实验/对比均基于此基线
-# 对应 buy_signal=-7% + obs_day=1~3 + model_exit + stop_loss=-7% + max_hold=20
-V1_BASELINE = "v1_frozen_202605"
-
+# ==================== V1 历史基线 (已归档, 2026-05-10 起不再用于生产) ====================
+# 生产口径见 BASELINE_E0_X1_V1_PARAMS / PRODUCTION_PARAMS。
+# 保留仅用于旧版本审计、兼容性对比，非活跃参数。
 V1_PARAMS = {
     "buy_signal_threshold": -0.07,
     "candidate_obs_days": [1, 2, 3],
@@ -111,6 +115,35 @@ V1_PARAMS = {
     "max_stocks_default": 10,
     "strategy_default": "sell_score",  # 实际 = pred_sell_reg（score_stocks）
 }
+
+# ==================== 聚合实验最优基线 (Phase 0-3 完结, 2026-05-10 冻结) ====================
+BASELINE_E0_X1_V1 = "baseline_e0_x1_v1"
+
+BASELINE_E0_X1_V1_PARAMS = {
+    "profile": BASELINE_E0_X1_V1,
+    "description": "E0 Entry (无gate, sell_reg排序) + X1 Exit (buy_cls单阈值退出)",
+    "candidate_obs_days": [1],
+    "max_stocks": 10,
+    "score_col": "pred_sell_reg",
+    "exit_mode": "model_exit",
+    "buy_cls_exit_threshold": 0.70,
+    "stop_loss": -0.07,
+    "max_hold_days": 20,
+    "buy_cost": 0.001,
+    "sell_cost": 0.001,
+    "entry_gate_sell_cls": None,
+    "entry_gate_buy_cls": None,
+    "exit_sub_mode": None,
+    "buy_reg_exit_threshold": None,
+    "frozen_at": "2026-05-10",
+    "expected_nav": 5.4621,
+    "expected_sharpe": 13.89,
+    "expected_mdd": -0.0688,
+    "expected_n_trades": 74,
+}
+
+# 每日盘后生产口径: 统一使用主线冻结基线
+PRODUCTION_PARAMS = BASELINE_E0_X1_V1_PARAMS
 
 # ==================== 新基线 (Phase 4: 3年Control, 2026-05-10 冻结) ====================
 BASELINE_3Y_CONTROL_V1 = "baseline_3y_control_v1"
