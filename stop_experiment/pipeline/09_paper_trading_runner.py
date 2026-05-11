@@ -60,7 +60,7 @@ import numpy as np
 import pandas as pd
 
 from stop_experiment.pipeline.stop_config import (
-    OUTPUT_DIR, BASELINE_E0_X1_V1_PARAMS,
+    OUTPUT_DIR, PRODUCTION_PARAMS,
     PREDICTIONS_DIR, HOLDINGS_DIR, DECISIONS_DIR, EXECUTIONS_DIR,
 )
 from stop_experiment.backtest.dynamic_exit_backtest_v2 import _load_data
@@ -70,7 +70,7 @@ from stop_experiment.pipeline.live_ledger import load_holdings, save_holdings, s
 from stop_experiment.pipeline.build_live_equity_curve import build_live_equity_curve, save_live_equity_curve
 from stop_experiment.pipeline.build_live_trade_report import build_live_trade_report, save_live_trade_report
 
-DEFAULT_MAX_STOCKS = BASELINE_E0_X1_V1_PARAMS.get("max_stocks", 10)
+DEFAULT_MAX_STOCKS = PRODUCTION_PARAMS.get("max_stocks", 10)
 
 FIRST_10_DATES = [
     "2026-03-20", "2026-03-24", "2026-04-03", "2026-04-10", "2026-04-17",
@@ -95,13 +95,11 @@ def validate_daily_inputs(target_date, holdings, price_pivot, pred_indexed, faul
         raise RuntimeError(f"[FAULT_INJECT] 模拟缺持仓文件: {target_date.strftime('%Y-%m-%d')}")
 
     # 1. 前日持仓存在（首日除外：起始日无持仓不报错）
+    #    holdings=None 时由后续 _load_latest_holdings 回溯加载，不在此 raise
     if holdings is None:
         trading_days_sorted = sorted(price_pivot.index)
         if len(trading_days_sorted) > 0 and target_date != trading_days_sorted[0]:
-            raise RuntimeError(
-                f"[VALIDATE] 缺少前日持仓: holdings/{target_date.strftime('%Y-%m-%d')}.parquet 不存在"
-                f"，且当日不是首个交易日"
-            )
+            anomalies.append("holdings_none_will_backfill")
 
     # 2. 价格数据存在
     if target_date not in price_pivot.index:
@@ -211,9 +209,9 @@ def run_single_day(target_date, df_all, price_pivot, trading_days, prev_close_ma
     # 统一日状态推进（SSOT）
     step_params = {
         "max_stocks": DEFAULT_MAX_STOCKS,
-        "max_hold_days": BASELINE_E0_X1_V1_PARAMS.get("max_hold_days", 20),
-        "stop_loss": BASELINE_E0_X1_V1_PARAMS.get("stop_loss", -0.07),
-        "exit_threshold": BASELINE_E0_X1_V1_PARAMS.get("buy_cls_exit_threshold", 0.70),
+        "max_hold_days": PRODUCTION_PARAMS.get("max_hold_days", 20),
+        "stop_loss": PRODUCTION_PARAMS.get("stop_loss", -0.07),
+        "exit_threshold": PRODUCTION_PARAMS.get("buy_cls_exit_threshold", 0.70),
     }
     step_result = step_day(
         target_date, holdings, pending_buys_prev, pending_sells_prev,
@@ -318,9 +316,9 @@ def _load_latest_holdings(target_date, trading_days):
 def run_batch(dates, df_all, price_pivot, trading_days, prev_close_map, pred_lookup):
     """批量运行，状态在日期间传递"""
     results = []
-    holdings = {}
-    pending_buys = []
-    pending_sells = []
+    holdings = None
+    pending_buys = None
+    pending_sells = None
 
     for tdate in sorted(dates):
         res = run_single_day(
@@ -369,13 +367,13 @@ def main():
             raise FileNotFoundError(f"replay 模式需要 {cand_path}，请先生成全量预测")
         df_all = pd.read_parquet(cand_path)
         df_all["obs_date"] = pd.to_datetime(df_all["obs_date"])
-        candidate_obs_days = BASELINE_E0_X1_V1_PARAMS.get("candidate_obs_days", [1])
+        candidate_obs_days = PRODUCTION_PARAMS.get("candidate_obs_days", [1])
         df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
         df_all = score_stocks(df_all, "sell_score")
         print(f"  候选: {len(df_all)} 行 (全量预测)")
 
         test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data(
-            candidate_obs_days=BASELINE_E0_X1_V1_PARAMS["candidate_obs_days"]
+            candidate_obs_days=PRODUCTION_PARAMS["candidate_obs_days"]
         )
     else:
         # live 模式：只读当日预测账本，pred_lookup 从实时预测构建
@@ -391,7 +389,7 @@ def main():
             df_all["obs_date"] = pd.to_datetime(args.date)
         if "obs_day" not in df_all.columns:
             df_all["obs_day"] = 1
-        candidate_obs_days = BASELINE_E0_X1_V1_PARAMS.get("candidate_obs_days", [1])
+        candidate_obs_days = PRODUCTION_PARAMS.get("candidate_obs_days", [1])
         df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
         if "score" not in df_all.columns:
             df_all = score_stocks(df_all, "sell_score")

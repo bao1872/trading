@@ -12,6 +12,9 @@ Purpose:
     复用 SSOT 决策函数 decide_daily_actions + build_daily_candidate_snapshot，
     确保报告中的买卖决策与回测引擎 100% 一致。
 
+    使用统一策略引擎 (strategy_runner.run_range) 生成 backtest ledger，
+    不再直接调用 dynamic_exit_backtest_v2.run_backtest。
+
     新增双轨仓位映射（基于 tier_weight_mapping.py 实验结论）：
     - W1 (轻分层 A:1.3, C:0.7): 低风险基准版，模拟盘主用
     - W3 (强分层 A:2.0, C:0.3): 高收益实验版，对照组跟踪
@@ -57,7 +60,6 @@ import os
 import argparse
 import copy
 import json
-import importlib.util
 from datetime import datetime
 from contextlib import redirect_stdout
 from io import StringIO
@@ -68,28 +70,34 @@ import numpy as np
 import pandas as pd
 
 from stop_experiment.pipeline.stop_config import (
-    OUTPUT_DIR, BACKTEST_DIR, BASELINE_E0_X1_V1_PARAMS, PRODUCTION_PARAMS, PREDICTIONS_DIR, DECISIONS_DIR, EXECUTIONS_DIR,
+    OUTPUT_DIR, BACKTEST_DIR, PRODUCTION_PARAMS,
+    PREDICTIONS_DIR, DECISIONS_DIR, EXECUTIONS_DIR, BACKTEST_LEDGER_DIR,
 )
 from stop_experiment.pipeline.live_ledger import load_holdings, save_holdings, save_decisions, save_executions
-from stop_experiment.backtest.dynamic_exit_backtest_v2 import (
-    _load_data, run_backtest,
-)
+from stop_experiment.backtest.dynamic_exit_backtest_v2 import _load_data
+from stop_experiment.engine.strategy_runner import run_range
 from stop_experiment.backtest.simple_backtest import score_stocks
 from stop_experiment.backtest.daily_state_machine import step_day
-
-_SIX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "06_daily_inference_replay.py")
-_six_spec = importlib.util.spec_from_file_location("_daily_inference_replay", _SIX_PATH)
-_six_mod = importlib.util.module_from_spec(_six_spec)
-_six_spec.loader.exec_module(_six_mod)
-build_daily_candidate_snapshot = _six_mod.build_daily_candidate_snapshot
-# find_exit_pred 从 decision_core 直接导入（SSOT），不再从 replay 模块间接引用
 from stop_experiment.backtest.decision_core import find_exit_pred
 
 # ==================== 常量 ====================
 
 REPORT_DIR = os.path.join(OUTPUT_DIR, "daily_report")
 HOLDINGS_DIR = os.path.join(OUTPUT_DIR, "holdings")
-DEFAULT_MAX_STOCKS = BASELINE_E0_X1_V1_PARAMS.get("max_stocks", 10)
+DEFAULT_MAX_STOCKS = PRODUCTION_PARAMS.get("max_stocks", 10)
+
+
+def _build_daily_candidate_snapshot(target_date, df_all, score_col="score"):
+    """构建指定日期的候选池快照（从 df_all 中筛选 obs_date=target_date 的行）"""
+    if "obs_date" not in df_all.columns:
+        return pd.DataFrame()
+    candidates = df_all[df_all["obs_date"] == target_date].copy()
+    if candidates.empty:
+        return pd.DataFrame()
+    if score_col in candidates.columns:
+        candidates = candidates.sort_values(score_col, ascending=False)
+    candidates = candidates.drop_duplicates(subset=["ts_code"], keep="first")
+    return candidates
 
 # Tier 仓位映射配置（与 tier_weight_mapping.py 保持一致）
 TIER_WEIGHTS_W1 = {"A": 1.3, "B": 1.0, "C": 0.7}
@@ -190,9 +198,9 @@ def format_feishu_card(target_date, holdings_before, sells, sell_reasons,
     Output:
         (header_title, header_template, elements_list)
     """
-    stop_loss = BASELINE_E0_X1_V1_PARAMS.get("stop_loss", -0.07)
-    exit_threshold = BASELINE_E0_X1_V1_PARAMS.get("buy_cls_exit_threshold", 0.70)
-    max_hold_days = BASELINE_E0_X1_V1_PARAMS.get("max_hold_days", 20)
+    stop_loss = PRODUCTION_PARAMS.get("stop_loss", -0.07)
+    exit_threshold = PRODUCTION_PARAMS.get("buy_cls_exit_threshold", 0.70)
+    max_hold_days = PRODUCTION_PARAMS.get("max_hold_days", 20)
 
     elements = []
     held_codes = set(holdings_before.keys())
@@ -223,7 +231,7 @@ def format_feishu_card(target_date, holdings_before, sells, sell_reasons,
         elif cr is not None and cr < stop_loss:
             hit = True
         elif sid is not None and dh > 1 and prev_date_decision is not None:
-            pred = pred_indexed_for_report.get((int(sid), prev_date_decision))
+            pred = find_exit_pred(sid, prev_date_decision, pred_indexed_for_report)
             if pred is not None:
                 bc_val = pred.get("pred_buy_cls", np.nan)
                 if not np.isnan(bc_val) and bc_val > exit_threshold:
@@ -270,7 +278,7 @@ def format_feishu_card(target_date, holdings_before, sells, sell_reasons,
         bc_val = np.nan
         model_avail = sid is not None and dh > 1 and prev_date_decision is not None
         if model_avail:
-            pred = pred_indexed_for_report.get((int(sid), prev_date_decision))
+            pred = find_exit_pred(sid, prev_date_decision, pred_indexed_for_report)
             if pred is not None:
                 bc_val = pred.get("pred_buy_cls", np.nan)
 
@@ -628,7 +636,7 @@ def _run_generate_full_predictions():
 
 def _load_engine_data(target_date=None):
     """
-    加载回测引擎所需的全量数据，运行回测获取 snapshots。
+    加载回测引擎所需的全量数据，确保 backtest ledger 可用。
 
     如果提供 target_date，会先检测数据是否过期，过期则自动更新。
 
@@ -641,19 +649,16 @@ def _load_engine_data(target_date=None):
         price_pivot:    价格宽表
         trading_days:   交易日列表
         pred_indexed:   {(int(sid), dt): pred_dict}
-        snapshots_map:  {date: snapshot_dict}
     """
-    # ① 检测并更新数据（如果提供了 target_date）
     if target_date is not None:
         print("\n[数据更新检查]")
         _check_and_update_full_test_predictions(target_date)
 
-    # ② 加载数据
     cand_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
     df_all = pd.read_parquet(cand_path)
     df_all["obs_date"] = pd.to_datetime(df_all["obs_date"])
 
-    candidate_obs_days = BASELINE_E0_X1_V1_PARAMS.get("candidate_obs_days", [1])
+    candidate_obs_days = PRODUCTION_PARAMS.get("candidate_obs_days", [1])
     df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
 
     df_all = score_stocks(df_all, "sell_score")
@@ -663,23 +668,18 @@ def _load_engine_data(target_date=None):
         candidate_obs_days=PRODUCTION_PARAMS["candidate_obs_days"]
     )
 
-    bt_result = run_backtest(
-        test_df, price_pivot, trading_days, prev_close_map, pred_lookup,
-        max_stocks=DEFAULT_MAX_STOCKS,
-        strategy=PRODUCTION_PARAMS.get("strategy_default", "sell_score"),
-        exit_mode="model_exit",
-        stop_loss=PRODUCTION_PARAMS["stop_loss"],
-        buy_cls_exit_threshold=PRODUCTION_PARAMS["buy_cls_exit_threshold"],
-        debug_snapshots=True,
-        strict=True,
+    run_range(
+        mode="backtest",
+        params=PRODUCTION_PARAMS,
+        write_ledgers=True,
+        postprocess=False,
     )
 
-    snapshots_map = {s["date"]: s for s in bt_result["snapshots"]}
     pred_indexed = {}
     for (sid, dt), pred in pred_lookup.items():
         pred_indexed[(int(sid), dt)] = pred
 
-    return df_all, score_col, price_pivot, trading_days, pred_indexed, snapshots_map
+    return df_all, score_col, price_pivot, trading_days, pred_indexed
 
 
 def _ensure_pred_coverage(target_date, pred_indexed, trading_days):
@@ -770,18 +770,17 @@ def _build_candidate_pool(target_date, df_all_raw, pred_indexed, trading_days):
     )
 
 
-def _get_start_holdings(target_date, snapshots_map, trading_days, price_pivot, pred_indexed):
+def _get_start_holdings(target_date, trading_days, price_pivot, pred_indexed):
     """
     获取 target_date 决策前的持仓状态。
 
     优先级:
-    1. holdings/prev_date.parquet（账本驱动，真实持仓历史）
-    2. snapshots_map[prev_date]（回测快照，deprecated，兼容旧数据）
-    3. 手动推进（从最新 holdings/snapshot 推进到 prev_date）
+    1. live/holdings/prev_date.parquet（账本驱动，真实持仓历史）
+    2. backtest_ledger/holdings/prev_date.parquet（回测 ledger 回退）
+    3. 手动推进（从最新 holdings 推进到 prev_date）
 
     Input:
         target_date:    目标决策日（T日）
-        snapshots_map:  {date: snapshot}（deprecated 兼容）
         trading_days:   交易日列表
         price_pivot:    价格宽表
         pred_indexed:   预测查找表
@@ -798,35 +797,25 @@ def _get_start_holdings(target_date, snapshots_map, trading_days, price_pivot, p
         print(f"  [持仓] 无法确定前一日: target={target_date}")
         return {}, [], [], None
 
-    # ① 优先从 holdings 账本恢复
-    from_snapshots = load_holdings(prev_date)
-    if from_snapshots is not None:
-        print(f"  [持仓] 来源: holdings/{prev_date.strftime('%Y-%m-%d')}.parquet, "
-              f"持仓 {len(from_snapshots)} 只")
-        return from_snapshots, [], [], prev_date
+    # ① 优先从 live holdings 账本恢复
+    from_live = load_holdings(prev_date)
+    if from_live is not None:
+        print(f"  [持仓] 来源: live/holdings/{prev_date.strftime('%Y-%m-%d')}.parquet, "
+              f"持仓 {len(from_live)} 只")
+        return from_live, [], [], prev_date
 
-    # ② 回退到 snapshots_map（deprecated）
-    if prev_date in snapshots_map:
-        print(f"  [持仓] 来源: {prev_date.strftime('%Y-%m-%d')} snapshot (deprecated)")
-        snap = snapshots_map[prev_date]
-        holdings = {k: dict(v) for k, v in snap.get("holdings_after", {}).items()}
-        buys = snap.get("buys", [])
-        pending_buys = [(b["code"], b["buy_price"], b["ts_code"], b["score"], b["signal_id"]) for b in buys]
-        to_sell_codes = snap.get("to_sell", [])
-        sell_reasons_map = snap.get("sell_reasons", {})
-        pending_sells = []
-        for code in to_sell_codes:
-            holding = holdings.get(code, {})
-            pending_sells.append({
-                "code": code,
-                "holding": dict(holding),
-                "reason": sell_reasons_map.get(holding.get("ts_code", code), ""),
-            })
-        return holdings, pending_buys, pending_sells, prev_date
+    # ② 回退到 backtest ledger
+    bt_holdings_dir = os.path.join(BACKTEST_LEDGER_DIR, "holdings")
+    from_bt = load_holdings(prev_date, base_dir=bt_holdings_dir)
+    if from_bt is not None:
+        print(f"  [持仓] 来源: backtest_ledger/holdings/{prev_date.strftime('%Y-%m-%d')}.parquet, "
+              f"持仓 {len(from_bt)} 只")
+        return from_bt, [], [], prev_date
 
-    # ③ 手动推进（从最新 holdings 或 snapshot）
+    # ③ 手动推进（从最新 holdings）
     latest_holdings = None
-    # 先尝试从最新的 holdings 文件恢复
+    latest_snap_date = None
+
     for d in sorted(trading_days, reverse=True):
         h = load_holdings(d)
         if h is not None:
@@ -834,17 +823,19 @@ def _get_start_holdings(target_date, snapshots_map, trading_days, price_pivot, p
             latest_snap_date = d
             break
 
-    if latest_holdings is None and snapshots_map:
-        # 回退到最新 snapshot
-        latest_snap_date = max(snapshots_map.keys())
-        snap = snapshots_map[latest_snap_date]
-        latest_holdings = {k: dict(v) for k, v in snap.get("holdings_after", {}).items()}
-        print(f"  [持仓] 推进起点: {latest_snap_date.strftime('%Y-%m-%d')} snapshot (deprecated)")
-    elif latest_holdings is None:
+    if latest_holdings is None:
+        for d in sorted(trading_days, reverse=True):
+            h = load_holdings(d, base_dir=bt_holdings_dir)
+            if h is not None:
+                latest_holdings = h
+                latest_snap_date = d
+                break
+
+    if latest_holdings is None:
         print(f"  [持仓] 无可用持仓数据: target={target_date}")
         return {}, [], [], prev_date
-    else:
-        print(f"  [持仓] 推进起点: holdings/{latest_snap_date.strftime('%Y-%m-%d')}.parquet")
+
+    print(f"  [持仓] 推进起点: {latest_snap_date.strftime('%Y-%m-%d')}")
 
     holdings = latest_holdings
     pending_from_snap = []
@@ -937,7 +928,7 @@ def _build_3day_top30(target_date, df_all, candidates_current, trading_days):
         if d == prev_date and candidates_current is not None and not candidates_current.empty:
             top10_built = candidates_current.head(10).copy()
         else:
-            top10_built = build_daily_candidate_snapshot(d, df_all, score_col="score")
+            top10_built = _build_daily_candidate_snapshot(d, df_all, score_col="score")
             if top10_built.empty:
                 continue
             top10_built = top10_built.head(10).copy()
@@ -1196,18 +1187,9 @@ def _print_section_4_exit_scan(holdings, sells, sell_reasons, prev_date, pred_in
         bc_val = np.nan
         model_available = sid is not None and ddh > 1 and prev_date is not None
         if model_available:
-            # 只使用精确匹配，不允许回退到过期预测
-            # 如果 prev_date 无预测数据，说明数据过期，立即报错
-            pred_exact = pred_indexed.get((int(sid), prev_date))
+            pred_exact = find_exit_pred(sid, prev_date, pred_indexed)
             if pred_exact is not None:
                 bc_val = pred_exact.get("pred_buy_cls", np.nan)
-            else:
-                # 数据过期，抛出错误，不使用过期预测
-                raise ValueError(
-                    f"预测数据过期：signal_id={sid}, prev_date={prev_date}，"
-                    f"但 pred_indexed 中无此日期的预测数据。"
-                    f"请先运行上游流水线更新研究数据（01_build_dataset → 02_train_gbdt_models → 07_generate_daily_predictions）"
-                )
 
         if sold and actual_reason == "model_risk":
             label = f"🔴 检查3 (model_risk): pred_buy_cls={bc_val:.4f} > {exit_threshold:.2f}? → **触发退出**" \
@@ -1588,15 +1570,15 @@ def main():
 
     # ---- Step 2: 加载引擎数据（传入 target_date 检测并更新数据）----
     print("\n⏳ 加载引擎数据...")
-    df_all, score_col, price_pivot, trading_days, pred_indexed, snapshots_map = _load_engine_data(target_date)
-    print(f"  候选: {len(df_all)} 行, 交易日: {len(trading_days)}, 快照: {len(snapshots_map)} 日")
+    df_all, score_col, price_pivot, trading_days, pred_indexed = _load_engine_data(target_date)
+    print(f"  候选: {len(df_all)} 行, 交易日: {len(trading_days)}")
 
     # ---- Step 3: 确保 pred 覆盖 ----
     pred_indexed, prev_date_pred, synth_pred = _ensure_pred_coverage(target_date, pred_indexed, trading_days)
 
     # ---- Step 4: 获取起始持仓 ----
     holdings_start, pending_buys_start, pending_sells_start, prev_date_holdings = _get_start_holdings(
-        target_date, snapshots_map, trading_days, price_pivot, pred_indexed,
+        target_date, trading_days, price_pivot, pred_indexed,
     )
 
     # ---- Step 5: 构建候选池 ----
@@ -1738,19 +1720,23 @@ def main():
     exec_path_report = os.path.join(EXECUTIONS_DIR, f"{target_date.strftime('%Y-%m-%d')}.parquet")
     if os.path.exists(exec_path_report):
         exec_df = pd.read_parquet(exec_path_report)
-        skipped = exec_df[exec_df["status"] == "skipped"]
-        sell_skip = skipped[skipped["action"] == "sell"]
-        buy_skip = skipped[skipped["action"] == "buy"]
-        for _, row in sell_skip.iterrows():
-            skipped_sells_for_report.append({
-                "code": row["ts_code"], "holding": {"ts_code": row["ts_code"]},
-                "reason": row["skip_reason"],
-            })
-        for _, row in buy_skip.iterrows():
-            skipped_buys_for_report.append((
-                row["ts_code"], row["planned_price"], row["ts_code"],
-                None, row["signal_id"], row["skip_reason"],
-            ))
+        if exec_df.empty or "status" not in exec_df.columns:
+            skipped = pd.DataFrame()
+        else:
+            skipped = exec_df[exec_df["status"] == "skipped"]
+        if not skipped.empty and "action" in skipped.columns:
+            sell_skip = skipped[skipped["action"] == "sell"]
+            buy_skip = skipped[skipped["action"] == "buy"]
+            for _, row in sell_skip.iterrows():
+                skipped_sells_for_report.append({
+                    "code": row["ts_code"], "holding": {"ts_code": row["ts_code"]},
+                    "reason": row["skip_reason"],
+                })
+            for _, row in buy_skip.iterrows():
+                skipped_buys_for_report.append((
+                    row["ts_code"], row["planned_price"], row["ts_code"],
+                    None, row["signal_id"], row["skip_reason"],
+                ))
     predictions_file = os.path.join(PREDICTIONS_DIR, f"{target_date.strftime('%Y-%m-%d')}.parquet")
     predictions_exist = os.path.exists(predictions_file)
     _print_section_anomaly(target_date, sells, pending_buys_new,

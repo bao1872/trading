@@ -2,7 +2,8 @@
 """
 每日盘后统一入口 — 预测账本 → 模拟盘 → 行动计划 → 飞书通知
 
-生产口径: 统一使用主线冻结基线 (PRODUCTION_PARAMS = BASELINE_E0_X1_V1_PARAMS)
+生产口径: 统一使用主线冻结基线 (PRODUCTION_PARAMS = BASELINE_V2_PARAMS)
+  3年全量数据训练 (4929只股票/74374条信号)
   E0 Entry (pred_sell_reg 排序, 无 gate)
   X1 Exit (buy_cls > 0.70)
   obs_day = [1]
@@ -47,9 +48,12 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+import shutil
+
 import pandas as pd
 from stop_experiment.pipeline.stop_config import (
     OUTPUT_DIR, HOLDINGS_DIR, DECISIONS_DIR, EXECUTIONS_DIR, PREDICTIONS_DIR,
+    REPLAY_LEDGER_DIR, LIVE_DIR,
     PRODUCTION_PARAMS,
 )
 
@@ -223,6 +227,54 @@ def run_step(step_name, cmd_parts):
         return Status.FAILED, str(e)
 
 
+# ==================== replay → live 同步 ====================
+
+def sync_replay_to_live(date_str):
+    """
+    replay 模式下 strategy_runner 只写 replay_ledger/，
+    需将目标日期的持仓/决策/执行/净值曲线/交易报告同步到 live 目录，
+    确保后续 live 模式运行能读取正确的前日持仓。
+    """
+    synced = []
+    missing = []
+
+    file_map = [
+        (os.path.join(REPLAY_LEDGER_DIR, "holdings", f"{date_str}.parquet"),
+         os.path.join(HOLDINGS_DIR, f"{date_str}.parquet")),
+        (os.path.join(REPLAY_LEDGER_DIR, "decisions", f"{date_str}.parquet"),
+         os.path.join(DECISIONS_DIR, f"{date_str}.parquet")),
+        (os.path.join(REPLAY_LEDGER_DIR, "executions", f"{date_str}.parquet"),
+         os.path.join(EXECUTIONS_DIR, f"{date_str}.parquet")),
+    ]
+
+    for src, dst in file_map:
+        if os.path.exists(src):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+            synced.append(os.path.basename(dst))
+        else:
+            missing.append(os.path.basename(dst))
+
+    csv_map = [
+        (os.path.join(REPLAY_LEDGER_DIR, "live_equity_curve.csv"),
+         os.path.join(LIVE_DIR, "live_equity_curve.csv")),
+        (os.path.join(REPLAY_LEDGER_DIR, "live_trade_report.csv"),
+         os.path.join(LIVE_DIR, "live_trade_report.csv")),
+    ]
+    for src, dst in csv_map:
+        if os.path.exists(src):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+            synced.append(os.path.basename(dst))
+        else:
+            missing.append(os.path.basename(dst))
+
+    msg_parts = [f"同步完成: {', '.join(synced)}"]
+    if missing:
+        msg_parts.append(f"缺失未同步: {', '.join(missing)}")
+    return len(missing) == 0, "; ".join(msg_parts)
+
+
 # ==================== 主流程 ====================
 
 def main():
@@ -314,10 +366,16 @@ def main():
 
     mode = "replay" if use_replay else "live"
     print(f"  使用 mode={mode} (date_str={date_str} in full_test={'Y' if use_replay else 'N'})")
-    status, _ = run_step(
-        "Step3-09模拟盘",
-        ["stop_experiment.pipeline.09_paper_trading_runner", "--date", date_str, "--mode", mode],
-    )
+    if mode == "replay":
+        status, _ = run_step(
+            "Step3-统一引擎(replay)",
+            ["stop_experiment.engine.strategy_runner", "--mode", "replay", "--end-date", date_str],
+        )
+    else:
+        status, _ = run_step(
+            "Step3-09模拟盘(live)",
+            ["stop_experiment.pipeline.09_paper_trading_runner", "--date", date_str, "--mode", "live"],
+        )
     step_statuses["09_ledger"] = status
 
     # Step 3b: 产物验收（仅校验，不阻断后续 Steps）
@@ -375,6 +433,16 @@ def main():
         ["stop_experiment.pipeline.12_build_operator_packet", "--date", date_str],
     )
     step_statuses["12_operator_packet"] = status
+
+    # 最终同步: replay 模式下，所有 pipeline 步骤完成后，
+    # 将 replay_ledger 数据同步到 live 目录，确保一致性。
+    # （08 日报等步骤可能覆盖 holdings，必须在最后同步）
+    if mode == "replay" and step_statuses.get("09_ledger") == Status.SUCCESS:
+        print(f"\n--- Final-sync: replay → live 最终同步 ---")
+        sync_ok, sync_msg = sync_replay_to_live(date_str)
+        print(f"  {sync_msg}")
+        if not sync_ok:
+            print(f"  ⚠️ 部分文件同步失败，live 目录数据可能不一致")
 
     # 汇总
     print(f"\n{'='*70}")

@@ -122,7 +122,8 @@ def build_market_snapshot(date_str: str, dec_df: pd.DataFrame) -> str:
 
 
 def build_account_snapshot(date_str: str, eq_df: pd.DataFrame,
-                          hold_df: pd.DataFrame, name_map: dict | None = None) -> str:
+                          hold_df: pd.DataFrame, name_map: dict | None = None,
+                          consistency_ok: bool = True) -> str:
     day_eq = eq_df[eq_df["date"] == pd.to_datetime(date_str)]
     if day_eq.empty:
         return f"# 账户快照 {date_str}\n\n无数据"
@@ -131,7 +132,8 @@ def build_account_snapshot(date_str: str, eq_df: pd.DataFrame,
     nav = row["nav_live"]
     daily_ret = row.get("daily_return", 0)
     dd = row.get("drawdown", 0)
-    n_pos = int(row.get("n_positions", 0))
+    n_pos = len(hold_df) if not hold_df.empty else 0
+    total_weight = hold_df["weight"].sum() if not hold_df.empty and "weight" in hold_df.columns else 0.0
     name_map = name_map or {}
 
     top3_gains = []
@@ -152,12 +154,12 @@ def build_account_snapshot(date_str: str, eq_df: pd.DataFrame,
         f"- 当日收益: {daily_ret:+.2%}" if isinstance(daily_ret, (int, float)) else f"- 当日收益: N/A",
         f"- 当前回撤: {dd:.2%}" if isinstance(dd, (int, float)) else f"- 当前回撤: N/A",
         f"- 持仓数: {n_pos}只",
-        f"- 总仓位: {n_pos * 10}%" if n_pos <= 10 else f"- 总仓位: 100%",
+        f"- 总仓位: {total_weight:.0%}",
         "",
     ]
 
     if top3_gains:
-        lines.append("## 前3大持仓（按score）")
+        lines.append("## 前3大持仓（按预测score）")
         for i, g in enumerate(top3_gains, 1):
             lines.append(f"{i}. {g}")
         lines.append("")
@@ -165,7 +167,7 @@ def build_account_snapshot(date_str: str, eq_df: pd.DataFrame,
     lines.extend([
         "## 系统状态灯",
         "- 参数一致性: PASS",
-        "- 回测/模拟盘状态一致: PASS",
+        f"- 回测/模拟盘状态一致: {'PASS' if consistency_ok else 'WARN'}",
         "- 输出完整性: PASS",
         "- live预测源一致性: WARN（已知问题，当前生产不依赖）",
     ])
@@ -182,6 +184,7 @@ def _load_prediction_fallback(date_str):
 
 
 def build_t1_action_plan(date_str: str, dec_df: pd.DataFrame,
+                        hold_df: pd.DataFrame = None,
                         name_map: dict | None = None) -> str:
     if dec_df.empty:
         return f"# T+1 操作决策 {date_str}\n\n无决策数据"
@@ -244,10 +247,12 @@ def build_t1_action_plan(date_str: str, dec_df: pd.DataFrame,
         _fallback = _load_prediction_fallback(date_str)
         if _fallback is not None and not _fallback.empty:
             held_codes = set()
-            if not holds.empty:
+            if hold_df is not None and not hold_df.empty and "ts_code" in hold_df.columns:
+                held_codes = {str(tc)[:6] for tc in hold_df["ts_code"].dropna().unique()}
+            elif not holds.empty:
                 held_codes = {str(r.get("ts_code", ""))[:6] for _, r in holds.iterrows()}
-            if not sells.empty:
-                held_codes -= {str(r.get("ts_code", ""))[:6] for _, r in sells.iterrows()}
+                if not sells.empty:
+                    held_codes -= {str(r.get("ts_code", ""))[:6] for _, r in sells.iterrows()}
             lines.append("| 排名 | 代码 | 名称 | score | buy_cls | sell_reg | 状态 |")
             lines.append("|------|------|------|-------|---------|----------|------|")
             for i, (_, r) in enumerate(_fallback.head(10).iterrows()):
@@ -397,6 +402,16 @@ def build_operator_packet(date_str: str) -> dict:
         all_codes.update(_fb["ts_code"].dropna().unique())
     name_map = _fetch_stock_names(list(all_codes))
 
+    # 一致性校验：净值曲线持仓数 vs holdings 实际持仓数
+    eq_n_pos = 0
+    day_eq = eq_df[eq_df["date"] == pd.to_datetime(date_str)]
+    if not day_eq.empty:
+        eq_n_pos = int(day_eq.iloc[0].get("n_positions", 0))
+    actual_n_pos = len(hold_df) if not hold_df.empty else 0
+    consistency_ok = (eq_n_pos == actual_n_pos)
+    if not consistency_ok:
+        print(f"  [警告] 净值曲线持仓数({eq_n_pos})与持仓账本({actual_n_pos})不一致，以持仓账本为准")
+
     results = {}
 
     with open(os.path.join(out_dir, "01_market_snapshot.md"), "w", encoding="utf-8") as f:
@@ -405,12 +420,12 @@ def build_operator_packet(date_str: str) -> dict:
         results["01_market_snapshot"] = "OK"
 
     with open(os.path.join(out_dir, "02_account_snapshot.md"), "w", encoding="utf-8") as f:
-        content = build_account_snapshot(date_str, eq_df, hold_df, name_map)
+        content = build_account_snapshot(date_str, eq_df, hold_df, name_map, consistency_ok)
         f.write(content)
         results["02_account_snapshot"] = "OK"
 
     with open(os.path.join(out_dir, "03_t1_action_plan.md"), "w", encoding="utf-8") as f:
-        content = build_t1_action_plan(date_str, dec_df, name_map)
+        content = build_t1_action_plan(date_str, dec_df, hold_df, name_map)
         f.write(content)
         results["03_t1_action_plan"] = "OK"
 

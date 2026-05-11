@@ -50,7 +50,7 @@ from datasource.database import get_engine
 from stop_experiment.pipeline.stop_config import (
     OBS_DAYS, SELL_CLS_THRESHOLD, BUY_CLS_THRESHOLD,
     OUTPUT_DIR, MODELS_DIR, PREDICTIONS_DIR, MODEL_SPECS,
-    PRODUCTION_PARAMS, BASELINE_E0_X1_V1_PARAMS,
+    PRODUCTION_PARAMS,
 )
 from stop_experiment.pipeline.factor_columns import (
     SLC_STATIC_COLS, ALL_FEATURE_COLS, META_COLS,
@@ -59,8 +59,8 @@ from stop_experiment.pipeline.compute_factors import compute_stock_factors
 from stop_experiment.backtest.simple_backtest import score_stocks
 
 
-CANDIDATE_OBS_DAYS = BASELINE_E0_X1_V1_PARAMS["candidate_obs_days"]
-SIGNAL_LOOKBACK_DAYS = max(CANDIDATE_OBS_DAYS) + 5
+CANDIDATE_OBS_DAYS = PRODUCTION_PARAMS["candidate_obs_days"]
+SIGNAL_LOOKBACK_DAYS = OBS_DAYS + 5
 OBS_COLS = ["ts_code", "signal_id", "obs_date", "obs_day",
             "pred_sell_reg", "pred_sell_cls", "pred_buy_reg", "pred_buy_cls", "score"]
 
@@ -127,8 +127,11 @@ def _build_candidates(target_date, engine):
     min_signal = signals["signal_date"].min()
     max_signal = signals["signal_date"].max()
 
-    # 读 K 线（扩展范围确保因子 lookback + 标签 forward）
-    kline_start = (pd.Timestamp(min_signal) - pd.Timedelta(days=150)).strftime("%Y-%m-%d")
+    # 读 K 线（扩展范围确保因子 lookback 与训练管线一致）
+    # 训练时 batch_kline_start = min(selection_date) - 150天，最早信号约 2023-03
+    # 即训练 K 线从约 2022-10 开始。为确保滚动因子有足够 warm-up，
+    # 从 target_date - 1300天（约 3.5 年）开始加载，与训练口径对齐
+    kline_start = (pd.Timestamp(target_dt) - pd.Timedelta(days=1300)).strftime("%Y-%m-%d")
     kline_end = (pd.Timestamp(max_signal) + pd.Timedelta(days=OBS_DAYS + 50)).strftime("%Y-%m-%d")
 
     kline_dict = {}
@@ -216,6 +219,12 @@ def _save_predictions(df, target_date):
     os.makedirs(PREDICTIONS_DIR, exist_ok=True)
     out_path = os.path.join(PREDICTIONS_DIR, f"{date_str}.parquet")
 
+    if "obs_day" in df.columns:
+        before = len(df)
+        df = df[df["obs_day"].isin(CANDIDATE_OBS_DAYS)].copy()
+        if len(df) < before:
+            print(f"  [过滤] obs_day∈{CANDIDATE_OBS_DAYS}: {before} → {len(df)} 行")
+
     available_cols = [c for c in OBS_COLS if c in df.columns]
     df_save = df[available_cols].copy()
     df_save.to_parquet(out_path, index=False)
@@ -235,6 +244,23 @@ def generate_daily_predictions(target_date, force=False):
     if os.path.exists(out_path) and not force:
         existing = pd.read_parquet(out_path)
         return True, f"预测账本已存在 ({len(existing)} 行)，跳过。--force 可强制覆盖", out_path
+
+    # 优先从 full_test_predictions 提取（确保与训练口径完全一致）
+    ftp_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
+    if os.path.exists(ftp_path) and not force:
+        ftp = pd.read_parquet(ftp_path)
+        if "obs_date" in ftp.columns:
+            ftp["obs_date"] = pd.to_datetime(ftp["obs_date"])
+            day_data = ftp[ftp["obs_date"] == target_date].copy()
+            if not day_data.empty:
+                if "obs_day" in day_data.columns:
+                    day_data = day_data[day_data["obs_day"].isin(CANDIDATE_OBS_DAYS)].copy()
+                os.makedirs(PREDICTIONS_DIR, exist_ok=True)
+                available_cols = [c for c in OBS_COLS if c in day_data.columns]
+                day_save = day_data[available_cols].copy()
+                day_save.to_parquet(out_path, index=False)
+                print(f"  [提取] 从 full_test_predictions 提取 {date_str}: {len(day_save)} 行")
+                return True, f"从 full_test_predictions 提取 ({len(day_save)} 行)", out_path
 
     print(f"\n{'='*60}")
     print(f"  07 单日推理: {date_str}")
@@ -257,6 +283,13 @@ def generate_daily_predictions(target_date, force=False):
         # Step 3: 因子库 + 派生（复用 Step 2 的 kline_dict，不重复查询 DB）
         print(f"\n[Step 3] 拼接因子库 + 派生特征...")
         df_day = _merge_and_derive(df_day, kline_dict)
+
+        # 过滤不可买入样本（与训练管线对齐）
+        if "can_buy" in df_day.columns:
+            before_cb = len(df_day)
+            df_day = df_day[df_day["can_buy"] == 1].copy()
+            if len(df_day) < before_cb:
+                print(f"  [过滤] can_buy==1: {before_cb} → {len(df_day)} 行")
 
         # Step 4-5: 推理 + 打分
         print(f"\n[Step 4-5] 模型推理 + 打分...")

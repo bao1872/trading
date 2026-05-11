@@ -35,6 +35,7 @@ from glob import glob
 from stop_experiment.tests_consistency import (
     OUTPUT_DIR, PREDICTIONS_DIR, PRED_MEAN_TOL, PRED_MAX_TOL, fmt_pass,
 )
+from stop_experiment.pipeline.stop_config import PRODUCTION_PARAMS
 
 PRED_COLS = ["pred_sell_reg", "pred_sell_cls", "pred_buy_reg", "pred_buy_cls"]
 MERGE_KEYS = ["ts_code", "signal_id", "obs_day"]
@@ -71,7 +72,14 @@ def compare_prediction_sources() -> dict:
         live_df = pd.read_parquet(pf)
         live_df["obs_date"] = pd.to_datetime(live_df["obs_date"])
 
-        full_day = full_df[full_df["obs_date"] == date].copy()
+        candidate_obs_days = PRODUCTION_PARAMS.get("candidate_obs_days", [1])
+        if "obs_day" in live_df.columns:
+            live_df = live_df[live_df["obs_day"].isin(candidate_obs_days)].copy()
+        if "obs_day" in full_df.columns:
+            full_day_base = full_df[full_df["obs_date"] == date]
+            full_day = full_day_base[full_day_base["obs_day"].isin(candidate_obs_days)].copy()
+        else:
+            full_day = full_df[full_df["obs_date"] == date].copy()
         if full_day.empty:
             all_issues.append(f"{date_str}: full_test 中无该日数据")
             date_results.append({"date": date_str, "status": "SKIP", "match_rate": 0})
