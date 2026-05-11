@@ -509,22 +509,11 @@ def main(args):
 
     # 按 selection_date 排序确保时间有序
     signals = signals.sort_values("selection_date").reset_index(drop=True)
-    ts_codes = sorted(signals["ts_code"].unique())
     min_date = signals["selection_date"].min()
     max_date = signals["selection_date"].max()
     n_signals = len(signals)
 
-    # 2. 批量加载K线（所有股票一次性加载）
-    print(f"\n[2/5] 批量加载K线 ({len(ts_codes)} 只股票)...")
-    kline_start = pd.Timestamp(min_date) - pd.Timedelta(days=150)
-    kline_end = pd.Timestamp(max_date) + pd.Timedelta(days=60)
-
-    with engine.connect() as conn:
-        kline_dict = load_batch_kline(conn, ts_codes, str(kline_start.date()), str(kline_end.date()))
-
-    print(f"  加载K线: {len(kline_dict)}/{len(ts_codes)} 只股票有数据")
-
-    # 3. 确定批次数
+    # 2. 确定批次数
     if args.sample_limit and args.batch_size == DEFAULT_BATCH_SIZE:
         batch_size = min(args.sample_limit, 500)
     else:
@@ -535,9 +524,11 @@ def main(args):
     if args.batch_total > 0:
         n_batches = args.batch_total
 
-    print(f"\n[3/5] 分批构建: {n_signals} 条信号 → {n_batches} 批 (每批 ~{batch_size} 条)")
+    print(f"\n[2/5] 分批构建: {n_signals} 条信号 → {n_batches} 批 (每批 ~{batch_size} 条)")
+    print(f"  日期范围: {min_date} ~ {max_date}")
+    print(f"  K线按批次按需加载（降低内存占用）")
 
-    # 4. 逐批构建
+    # 3. 逐批构建（每批独立加载K线，处理完释放）
     batch_infos = []
     total_rows = 0
 
@@ -552,16 +543,30 @@ def main(args):
         end = min(start + batch_size, n_signals)
         signals_batch = signals.iloc[start:end]
 
+        # 按批次加载K线（只加载该批次涉及的股票）
+        batch_ts_codes = sorted(signals_batch["ts_code"].unique())
+        batch_kline_start = pd.Timestamp(signals_batch["selection_date"].min()) - pd.Timedelta(days=150)
+        batch_kline_end = pd.Timestamp(signals_batch["selection_date"].max()) + pd.Timedelta(days=60)
+
+        print(f"\n  加载K线: Batch {batch_idx}, {len(batch_ts_codes)} 只股票...")
+        with engine.connect() as conn:
+            kline_dict = load_batch_kline(
+                conn, batch_ts_codes,
+                str(batch_kline_start.date()), str(batch_kline_end.date()),
+            )
+        print(f"  加载K线: {len(kline_dict)}/{len(batch_ts_codes)} 只股票有数据")
+
         info = build_batch(signals_batch, kline_dict, batch_idx)
         batch_infos.append(info)
         total_rows += info["rows"]
 
-        # 释放内存
+        # 释放该批次K线内存
+        del kline_dict
         gc.collect()
 
         print(f"\n  累计: {total_rows} 行, {len(batch_infos)} 批完成")
 
-    # 5. 保存 manifest
+    # 4. 保存 manifest
     print(f"\n[5/5] 保存 manifest...")
     manifest = build_manifest(batch_infos, total_rows)
     manifest_path = os.path.join(BATCHES_DIR, "manifest.json")

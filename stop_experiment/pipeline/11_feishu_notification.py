@@ -34,7 +34,7 @@ import numpy as np
 
 from stop_experiment.pipeline.stop_config import (
     DECISIONS_DIR, EXECUTIONS_DIR, HOLDINGS_DIR, PREDICTIONS_DIR, OUTPUT_DIR,
-    BASELINE_E0_X1_V1_PARAMS,
+    PRODUCTION_PARAMS,
 )
 
 TIER_A_SCORE = 0.2
@@ -42,9 +42,9 @@ TIER_A_BUY_CLS = 0.30
 TIER_B_SCORE = 0.1
 TIER_B_BUY_CLS = 0.70
 
-EXIT_THRESHOLD = BASELINE_E0_X1_V1_PARAMS.get("buy_cls_exit_threshold", 0.70)
-STOP_LOSS = BASELINE_E0_X1_V1_PARAMS.get("stop_loss", -0.07)
-MAX_HOLD_DAYS = BASELINE_E0_X1_V1_PARAMS.get("max_hold_days", 20)
+EXIT_THRESHOLD = PRODUCTION_PARAMS.get("buy_cls_exit_threshold", 0.70)
+STOP_LOSS = PRODUCTION_PARAMS.get("stop_loss", -0.07)
+MAX_HOLD_DAYS = PRODUCTION_PARAMS.get("max_hold_days", 20)
 LIVE_EQUITY_PATH = os.path.join(OUTPUT_DIR, "live", "live_equity_curve.csv")
 
 
@@ -415,7 +415,7 @@ def generate_feishu_markdown(date_str):
 
     # ============ 五、新买入清单 ============
     if buy_list:
-        max_stocks = BASELINE_E0_X1_V1_PARAMS.get("max_stocks", 10)
+        max_stocks = PRODUCTION_PARAMS.get("max_stocks", 10)
         avail = max_stocks - n_hold
         lines.append(f"📤 新买入清单  ({len(buy_list)}只) ")
         lines.append(f" 可用仓位: {avail}/{max_stocks}")

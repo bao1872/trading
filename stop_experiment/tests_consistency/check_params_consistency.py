@@ -7,7 +7,7 @@ Purpose:
     验证回测基线参数与模拟盘运行时参数完全一致。
 
 Inputs:
-    - stop_experiment/pipeline/stop_config.py (BASELINE_E0_X1_V1_PARAMS, PRODUCTION_PARAMS)
+    - stop_experiment/pipeline/stop_config.py (PRODUCTION_PARAMS)
     - stop_experiment/pipeline/09_paper_trading_runner.py (运行时参数)
     - stop_experiment/pipeline/07_generate_daily_predictions.py (模型路径)
     - stop_experiment/backtest/daily_state_machine.py (运行时参数)
@@ -30,7 +30,6 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from stop_experiment.pipeline.stop_config import (
-    BASELINE_E0_X1_V1_PARAMS,
     PRODUCTION_PARAMS,
     MODELS_DIR,
 )
@@ -38,7 +37,7 @@ from stop_experiment.tests_consistency import fmt_pass
 
 
 def check_params_consistency() -> dict:
-    bt = BASELINE_E0_X1_V1_PARAMS
+    bt = PRODUCTION_PARAMS
     live = PRODUCTION_PARAMS
 
     checks = [

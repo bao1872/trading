@@ -193,9 +193,9 @@ def _fmt_date(val):
 
 
 if __name__ == "__main__":
-    from stop_experiment.pipeline.stop_config import BACKTEST_DIR, BASELINE_E0_X1_V1_PARAMS
+    from stop_experiment.pipeline.stop_config import BACKTEST_DIR, PRODUCTION_PARAMS
 
-    p = BASELINE_E0_X1_V1_PARAMS
+    p = PRODUCTION_PARAMS
     print(f"冒烟测试: trade_report ({p['profile']})")
 
     trades_path = os.path.join(BACKTEST_DIR, f"{p['profile']}_trades.csv")

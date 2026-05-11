@@ -66,9 +66,13 @@ def run_step(name, module_path, extra_args=None):
         cmd.extend(extra_args)
 
     print(f"[训练] {name}: {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    result = subprocess.run(
+        cmd,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        capture_output=False,
+    )
     if result.returncode != 0:
-        print(f"[ERROR] {name} 失败，停止后续步骤")
+        print(f"[ERROR] {name} 失败 (exit code {result.returncode})，停止后续步骤")
         return False
     return True
 
@@ -143,7 +147,8 @@ Examples:
 
     # Step 2: 模型训练
     if not args.skip_train:
-        steps.append(("模型训练", "stop_experiment.pipeline.02_train_gbdt_models", extra))
+        train_extra = extra + ["--exclude-vsa"]
+        steps.append(("模型训练", "stop_experiment.pipeline.02_train_gbdt_models", train_extra))
     else:
         print("[跳过] 模型训练 (--skip-train)")
 

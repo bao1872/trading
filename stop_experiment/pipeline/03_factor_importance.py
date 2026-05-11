@@ -241,7 +241,7 @@ def main(args):
 
     # 1. 加载重要性数据
     print("\n[1/4] 加载因子重要性...")
-    imp_path = os.path.join(OUTPUT_DIR, "feature_importance.csv")
+    imp_path = os.path.join(MODELS_DIR, "feature_importance.csv")
     imp_df = pd.read_csv(imp_path)
     print(f"  记录数: {len(imp_df)}, 模型数: {imp_df['model_name'].nunique()}")
 

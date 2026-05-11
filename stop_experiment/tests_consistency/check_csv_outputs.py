@@ -45,9 +45,9 @@ from stop_experiment.tests_consistency import (
     fmt_pass, check_no_nan_inf,
     BASELINE_PREFIX,
 )
-from stop_experiment.pipeline.stop_config import BASELINE_E0_X1_V1_PARAMS
+from stop_experiment.pipeline.stop_config import PRODUCTION_PARAMS
 
-MAX_STOCKS = BASELINE_E0_X1_V1_PARAMS.get("max_stocks", 10)
+MAX_STOCKS = PRODUCTION_PARAMS.get("max_stocks", 10)
 
 
 def _check_live_equity_curve() -> dict:

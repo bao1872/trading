@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np
 import pandas as pd
 
-from stop_experiment.pipeline.stop_config import OUTPUT_DIR, BUY_CLS_THRESHOLD, PRODUCTION_PARAMS
+from stop_experiment.pipeline.stop_config import OUTPUT_DIR, MODELS_DIR, BUY_CLS_THRESHOLD, PRODUCTION_PARAMS
 
 
 def compute_composite_score(df: pd.DataFrame) -> pd.DataFrame:
@@ -135,7 +135,7 @@ def main(args):
 
     # 1. 加载数据
     print("\n[1/3] 加载带评分数据集...")
-    input_path = os.path.join(OUTPUT_DIR, "candidate_with_scores.parquet")
+    input_path = os.path.join(MODELS_DIR, "candidate_with_scores.parquet")
     df = pd.read_parquet(input_path)
     print(f"  总行数: {len(df)}")
 

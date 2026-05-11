@@ -38,20 +38,16 @@ N_FOLDS = 3                # 滚动折数
 # 训练侧标签阈值，不等于生产 Exit 阈值。
 # sell_cls: mfe_20 > 7% → 还有上涨空间（不卖）
 # buy_cls:  mae_20 < -7% → 买点信号（此处 -0.07 是训练标签定义，
-#           生产 Exit 阈值 buy_cls_exit_threshold=0.70 见 BASELINE_E0_X1_V1_PARAMS）
+#           生产 Exit 阈值 buy_cls_exit_threshold=0.70 见 BASELINE_V2_PARAMS）
 SELL_CLS_THRESHOLD = 0.07
 BUY_CLS_THRESHOLD = -0.07
 
 # ==================== 数据分割 ====================
 # 3年数据 train/val/test 分割（基于 obs_date，2026-05 更新）
-# 数据范围: 2023-03 ~ 2026-05，信号 53K+ vs 旧 14K
+# 数据范围: 2023-03 ~ 2026-05，信号 74K+，4929 只股票
 OBS_TRAIN_END = "2025-06-30"   # train: obs_date <= OBS_TRAIN_END - EMBARGO_DAYS  (~2023-03 ~ 2025-06)
 OBS_VAL_END = "2025-12-31"     # val:   OBS_TRAIN_END < obs_date <= OBS_VAL_END   (~2025-07 ~ 2025-12)
                                 # test:  obs_date > OBS_VAL_END                    (~2026-01 ~ 2026-05)
-
-# 旧口径常量（保留用于审计对比，仅 lookahead_bias_check.py 等诊断脚本使用）
-TRAIN_END = "2025-11-30"       # 旧口径: selection_date <= TRAIN_END
-VAL_END = "2026-02-28"         # 旧口径: selection_date <= VAL_END
 
 # ==================== LightGBM 超参数 ====================
 LGB_PARAMS = {
@@ -84,6 +80,8 @@ MODELS_DIR = os.path.join(OUTPUT_DIR, "models_control")       # baseline_3y_cont
 MODELS_TREATMENT_DIR = os.path.join(OUTPUT_DIR, "models")     # VSA版（研究保留，目录当前不存在）
 FIGURES_DIR = os.path.join(OUTPUT_DIR, "figures")
 BACKTEST_DIR = os.path.join(OUTPUT_DIR, "backtest")
+BACKTEST_LEDGER_DIR = os.path.join(OUTPUT_DIR, "backtest_ledger")
+REPLAY_LEDGER_DIR = os.path.join(OUTPUT_DIR, "replay_ledger")
 PREDICTIONS_DIR = os.path.join(OUTPUT_DIR, "predictions")
 HOLDINGS_DIR = os.path.join(OUTPUT_DIR, "holdings")
 LIVE_DIR = os.path.join(OUTPUT_DIR, "live")
@@ -93,12 +91,12 @@ EXECUTIONS_DIR = os.path.join(LIVE_DIR, "executions")
 # ==================== VSA 因子开关 ====================
 VSA_ENABLED = False  # 默认关闭，研究需要时改为 True
 
-# ==================== 聚合实验最优基线 (Phase 0-3 完结, 2026-05-10 冻结) ====================
-BASELINE_E0_X1_V1 = "baseline_e0_x1_v1"
+# ==================== 生产基线 (3年全量数据训练, 2026-05-11 冻结) ====================
+BASELINE_V2 = "baseline_v2_3y"
 
-BASELINE_E0_X1_V1_PARAMS = {
-    "profile": BASELINE_E0_X1_V1,
-    "description": "E0 Entry (无gate, sell_reg排序) + X1 Exit (buy_cls单阈值退出)",
+BASELINE_V2_PARAMS = {
+    "profile": BASELINE_V2,
+    "description": "3年全量数据训练 (4929只股票/74374条信号) + E0 Entry + X1 Exit",
     "candidate_obs_days": [1],
     "max_stocks": 10,
     "score_col": "pred_sell_reg",
@@ -112,17 +110,11 @@ BASELINE_E0_X1_V1_PARAMS = {
     "entry_gate_buy_cls": None,
     "exit_sub_mode": None,
     "buy_reg_exit_threshold": None,
-    "frozen_at": "2026-05-10",
-    "expected_nav": 5.4621,
-    "expected_sharpe": 13.89,
-    "expected_mdd": -0.0688,
-    "expected_n_trades": 74,
+    "frozen_at": "2026-05-11",
+    "expected_nav": 6.1722,
+    "expected_sharpe": 14.77,
+    "expected_mdd": -0.0671,
+    "expected_n_trades": 59,
 }
 
-# 每日盘后生产口径: 统一使用主线冻结基线
-PRODUCTION_PARAMS = BASELINE_E0_X1_V1_PARAMS
-
-# 向后兼容别名（_archive 归档脚本仍引用旧名称，统一指向生产口径）
-MODEL_EXIT_PARAMS = PRODUCTION_PARAMS
-V1_PARAMS = PRODUCTION_PARAMS
-BASELINE_3Y_PARAMS = PRODUCTION_PARAMS
+PRODUCTION_PARAMS = BASELINE_V2_PARAMS

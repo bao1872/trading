@@ -40,9 +40,9 @@ from stop_experiment.tests_consistency import (
     load_live_equity_curve, load_live_trade_report,
     fmt_pass, fmt_diff,
 )
-from stop_experiment.pipeline.stop_config import BASELINE_E0_X1_V1_PARAMS
+from stop_experiment.pipeline.stop_config import PRODUCTION_PARAMS
 
-MAX_STOCKS = BASELINE_E0_X1_V1_PARAMS.get("max_stocks", 10)
+MAX_STOCKS = PRODUCTION_PARAMS.get("max_stocks", 10)
 
 
 def _compare_nav_curves() -> dict:

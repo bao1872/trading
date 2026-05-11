@@ -42,18 +42,19 @@ import numpy as np
 import pandas as pd
 
 from stop_experiment.pipeline.stop_config import (
-    HOLDINGS_DIR, DECISIONS_DIR, EXECUTIONS_DIR,
-    BASELINE_E0_X1_V1_PARAMS,
+    HOLDINGS_DIR, DECISIONS_DIR, EXECUTIONS_DIR, LIVE_DIR,
+    PRODUCTION_PARAMS,
 )
 
-DEFAULT_MAX_STOCKS = BASELINE_E0_X1_V1_PARAMS.get("max_stocks", 10)
+DEFAULT_MAX_STOCKS = PRODUCTION_PARAMS.get("max_stocks", 10)
 
 
-def load_holdings(date):
+def load_holdings(date, base_dir=None):
     """从 holdings/YYYY-MM-DD.parquet 读取持仓"""
     if isinstance(date, str):
         date = pd.to_datetime(date)
-    path = os.path.join(HOLDINGS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
+    _dir = base_dir or HOLDINGS_DIR
+    path = os.path.join(_dir, f"{date.strftime('%Y-%m-%d')}.parquet")
     if not os.path.exists(path):
         return None
     df = pd.read_parquet(path)
@@ -72,9 +73,10 @@ def load_holdings(date):
     return holdings if holdings else None
 
 
-def save_holdings(date, holdings):
+def save_holdings(date, holdings, base_dir=None):
     """保存当日决策后持仓到 holdings/YYYY-MM-DD.parquet"""
-    os.makedirs(HOLDINGS_DIR, exist_ok=True)
+    _dir = base_dir or HOLDINGS_DIR
+    os.makedirs(_dir, exist_ok=True)
     if isinstance(date, str):
         date = pd.to_datetime(date)
     rows = []
@@ -90,14 +92,16 @@ def save_holdings(date, holdings):
             "score": h.get("score"),
         })
     df = pd.DataFrame(rows)
-    path = os.path.join(HOLDINGS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
+    path = os.path.join(_dir, f"{date.strftime('%Y-%m-%d')}.parquet")
     df.to_parquet(path, index=False)
     print(f"  [持仓保存] {path} ({len(df)} 只)")
 
 
-def save_decisions(date, holdings, pending_buys, pending_sells, sell_reasons, extra=None, day_close=None):
+def save_decisions(date, holdings, pending_buys, pending_sells, sell_reasons, extra=None, day_close=None, base_dir=None):
     """T日收盘后保存决策账本。cur_ret 优先从 extra details 取，兜底用 day_close+buy_price 计算。"""
-    os.makedirs(DECISIONS_DIR, exist_ok=True)
+    _base = base_dir or LIVE_DIR
+    _dec_dir = os.path.join(_base, "decisions")
+    os.makedirs(_dec_dir, exist_ok=True)
     if isinstance(date, str):
         date = pd.to_datetime(date)
 
@@ -188,14 +192,16 @@ def save_decisions(date, holdings, pending_buys, pending_sells, sell_reasons, ex
             "pred_buy_reg": cand.get("pred_buy_reg"),
         })
     df = pd.DataFrame(rows)
-    path = os.path.join(DECISIONS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
+    path = os.path.join(_dec_dir, f"{date.strftime('%Y-%m-%d')}.parquet")
     df.to_parquet(path, index=False)
     print(f"  [决策保存] {path} ({len(df)} 条)")
 
 
-def save_executions(date, executed_buys, executed_sells, skipped_buys, skipped_sells):
+def save_executions(date, executed_buys, executed_sells, skipped_buys, skipped_sells, base_dir=None):
     """T日开盘后保存执行账本到 executions/YYYY-MM-DD.parquet"""
-    os.makedirs(EXECUTIONS_DIR, exist_ok=True)
+    _base = base_dir or LIVE_DIR
+    _exec_dir = os.path.join(_base, "executions")
+    os.makedirs(_exec_dir, exist_ok=True)
     if isinstance(date, str):
         date = pd.to_datetime(date)
     rows = []
@@ -236,7 +242,7 @@ def save_executions(date, executed_buys, executed_sells, skipped_buys, skipped_s
             "skip_reason": item.get("reason", ""),
         })
     df = pd.DataFrame(rows)
-    path = os.path.join(EXECUTIONS_DIR, f"{date.strftime('%Y-%m-%d')}.parquet")
+    path = os.path.join(_exec_dir, f"{date.strftime('%Y-%m-%d')}.parquet")
     df.to_parquet(path, index=False)
     nb = len(executed_buys) + len(executed_sells)
     ns = len(skipped_buys) + len(skipped_sells)

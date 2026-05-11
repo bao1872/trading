@@ -83,14 +83,21 @@ def _derive_latest_nav(eq_df):
     return nav, daily_ret, dd
 
 
-def _load_holdings_index():
+def _load_holdings_index(base_dir=None):
     """
     加载所有持仓账本，构建逐日持仓索引。
+
+    Args:
+        base_dir: ledger 根目录（含 holdings/ 子目录），None 则用 HOLDINGS_DIR
 
     Returns:
         {date: {code: {weight, days_held}}}
     """
-    files = sorted(glob(os.path.join(HOLDINGS_DIR, "*.parquet")))
+    if base_dir is not None:
+        _dir = os.path.join(base_dir, "holdings") if os.path.isdir(os.path.join(base_dir, "holdings")) else base_dir
+    else:
+        _dir = HOLDINGS_DIR
+    files = sorted(glob(os.path.join(_dir, "*.parquet")))
     index = {}
     for f in files:
         df = pd.read_parquet(f)
@@ -109,23 +116,17 @@ def _load_holdings_index():
 
 
 def build_live_equity_curve(price_pivot, initial_cash=1.0,
-                            buy_cost=BUY_COST, sell_cost=SELL_COST):
+                            buy_cost=BUY_COST, sell_cost=SELL_COST,
+                            base_dir=None):
     """
     从持仓账本重建净值曲线，使用与回测一致的加权收益率法。
-
-    回测公式（SSOT dynamic_exit_backtest_v2.run_backtest L406-L434）：
-        daily_ret = sum(holdings[code].weight * stock_ret)
-        nav *= (1 + daily_ret)
-    其中:
-        days_held==1: stock_ret = (close - open) / open
-        days_held> 1: stock_ret = (close_today - close_yesterday) / close_yesterday
 
     Returns:
         DataFrame: date, cash, market_value, equity, nav_live, n_positions, daily_return, drawdown
     """
     td_sorted = sorted(price_pivot.index)
 
-    holdings_by_day = _load_holdings_index()
+    holdings_by_day = _load_holdings_index(base_dir=base_dir)
     if not holdings_by_day:
         print("  [净值曲线] 无持仓记录，返回空 DataFrame")
         return pd.DataFrame()
@@ -233,9 +234,9 @@ def get_latest_nav(eq_df):
 # ==================== 自测入口 ====================
 if __name__ == "__main__":
     from stop_experiment.backtest.dynamic_exit_backtest_v2 import _load_data
-    from stop_experiment.pipeline.stop_config import BASELINE_E0_X1_V1_PARAMS
+    from stop_experiment.pipeline.stop_config import PRODUCTION_PARAMS
 
-    p = BASELINE_E0_X1_V1_PARAMS
+    p = PRODUCTION_PARAMS
     print(f"冒烟测试: build_live_equity_curve")
     _, price, _, _, _ = _load_data(candidate_obs_days=p["candidate_obs_days"])
     eq_df = build_live_equity_curve(price)

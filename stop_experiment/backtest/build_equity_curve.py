@@ -228,10 +228,10 @@ def _extract_code(ts_code):
 
 
 if __name__ == "__main__":
-    from stop_experiment.pipeline.stop_config import BACKTEST_DIR, BASELINE_E0_X1_V1_PARAMS
+    from stop_experiment.pipeline.stop_config import BACKTEST_DIR, PRODUCTION_PARAMS
     from stop_experiment.backtest.dynamic_exit_backtest_v2 import _load_data
 
-    p = BASELINE_E0_X1_V1_PARAMS
+    p = PRODUCTION_PARAMS
     print(f"冒烟测试: build_equity_curve ({p['profile']})")
 
     trades_path = os.path.join(BACKTEST_DIR, f"{p['profile']}_trades.csv")

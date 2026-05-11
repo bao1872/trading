@@ -91,10 +91,18 @@ def _translate_reason(reason):
     return _TRANSLATE.get(reason, reason)
 
 
-def _load_all_live_data():
+def _load_all_live_data(base_dir=None):
     """加载所有 executions + decisions + holdings 数据"""
-    # Executions (可能有空文件)
-    exec_files = sorted(glob(os.path.join(EXECUTIONS_DIR, "*.parquet")))
+    if base_dir is not None:
+        _exec_dir = os.path.join(base_dir, "executions")
+        _dec_dir = os.path.join(base_dir, "decisions")
+        _hold_dir = os.path.join(base_dir, "holdings")
+    else:
+        _exec_dir = EXECUTIONS_DIR
+        _dec_dir = DECISIONS_DIR
+        _hold_dir = HOLDINGS_DIR
+
+    exec_files = sorted(glob(os.path.join(_exec_dir, "*.parquet")))
     exec_dfs = []
     for f in exec_files:
         df = pd.read_parquet(f)
@@ -107,7 +115,7 @@ def _load_all_live_data():
         exec_df["code"] = exec_df["ts_code"].apply(_extract_code)
 
     # Decisions (卖出原因)
-    dec_files = sorted(glob(os.path.join(DECISIONS_DIR, "*.parquet")))
+    dec_files = sorted(glob(os.path.join(_dec_dir, "*.parquet")))
     dec_dfs = []
     for f in dec_files:
         df = pd.read_parquet(f)
@@ -119,7 +127,7 @@ def _load_all_live_data():
         dec_df["decision_date"] = pd.to_datetime(dec_df["decision_date"])
 
     # Holdings (入场评分)
-    hold_files = sorted(glob(os.path.join(HOLDINGS_DIR, "*.parquet")))
+    hold_files = sorted(glob(os.path.join(_hold_dir, "*.parquet")))
     hold_dfs = []
     for f in hold_files:
         df = pd.read_parquet(f)
@@ -131,14 +139,14 @@ def _load_all_live_data():
     return exec_df, dec_df, hold_df
 
 
-def build_live_trade_report(buy_cost=BUY_COST, sell_cost=SELL_COST):
+def build_live_trade_report(buy_cost=BUY_COST, sell_cost=SELL_COST, base_dir=None):
     """
     从 live 账本重建交易盈亏报告。
 
     Returns:
         (report_df, summary_dict): 交易明细和汇总
     """
-    exec_df, dec_df, hold_df = _load_all_live_data()
+    exec_df, dec_df, hold_df = _load_all_live_data(base_dir=base_dir)
 
     if exec_df.empty:
         print("  [交易报告] 无执行记录，返回空")

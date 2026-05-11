@@ -1,221 +1,501 @@
-明确建议如下。
+按你这次上传的**最新版代码**，我给你的具体重构建议只有一句话：
 
-## 先定结论
+## **不要再让 `dynamic_exit_backtest_v2.py` 继续当主引擎。**
 
-**你现在不要再继续加功能。先把当前版本定成“可用的手动交易操作系统 v1”。**
+**以后只保留一套执行引擎：以 `09_paper_trading_runner.py + daily_state_machine.py + decision_core.py + live_ledger.py` 为唯一内核。**
+回测、回放、生产都只是这个引擎的不同 **mode**。
 
-原因很清楚：
-
-1. **主线生产链已经能跑通**
-
-   * 每日盘后可以产出 T+1 建议
-   * 有账户净值曲线
-   * 有历史交易报告
-   * 有操作包。
-
-2. **模拟盘核心完整性已经过关**
-
-   * 参数一致性 PASS
-   * 决策一致性 PASS
-   * 状态一致性 PASS
-   * CSV 输出基本 PASS
-   * 只有 Layer 2 预测源仍是已知问题。
-
-3. **你当前最大问题已经从“功能缺失”变成“界面和流程太乱”**
-   所以现在最重要的不是继续扩逻辑，而是**收口、固定、形成日常使用流程**。
+这不是方向建议，是**具体改法**。
 
 ---
 
-# 我建议你下一步只做 3 件事
+# 一、我基于最新版代码的判断
 
-## 1. 立刻冻结“日常使用口径”
+你现在代码里已经有一个“半成品统一引擎”了：
 
-以后你每天盘后只看这 3 个东西：
+## 已经适合当唯一内核的部分
 
-### A. 操作包
+* `backtest/decision_core.py`
+  统一决策核
+* `backtest/daily_state_machine.py`
+  统一日状态推进
+* `pipeline/live_ledger.py`
+  统一账本读写
+* `pipeline/09_paper_trading_runner.py`
+  已经在用 `step_day()` 跑单日和批量
+* `pipeline/build_live_equity_curve.py`
+* `pipeline/build_live_trade_report.py`
+* `pipeline/12_build_operator_packet.py`
 
-路径：
+## 还在拖后腿的部分
 
-* `output/live/operator_packets/YYYY-MM-DD/`
+* `backtest/dynamic_exit_backtest_v2.py`
+  还在自己维护一套独立日循环、交易记录、净值逻辑
+* `backtest/run_baseline.py`
+  还是直接调用 `dynamic_exit_backtest_v2._load_data/run_backtest`
+* `pipeline/06_daily_inference_replay.py`
+  现在是“双系统混用”最严重的地方：一边 import `run_backtest`，一边又 import `step_day`
 
-你主要看：
-
-* `02_account_snapshot.md`
-* `03_t1_action_plan.md`
-* `04_trade_history_summary.md`
-* `05_equity_curve.png`
-
-### B. 飞书摘要
-
-飞书只负责提醒，不负责承载全部细节。
-
-### C. 账本只做底层存证
-
-这些你平时不要主动看，除非排错：
-
-* `holdings/*.parquet`
-* `live/decisions/*.parquet`
-* `live/executions/*.parquet`
-
-**这是第一条硬规则。**
-否则你还是会每天陷进一堆底层文件里。
+**这就是你现在口径混乱的根。**
 
 ---
 
-## 2. 把 `run_daily.py` 定成唯一入口
+# 二、你要的目标架构：单引擎，多模式
 
-以后不要再手动分别跑：
+我建议你直接做成下面这个结构。
 
-* 07
-* 09
-* 10
-* 11
-* 12
+## 新的唯一执行入口
 
-**统一只跑 `run_daily.py`。**
+新建一个文件：
 
-你现在已经把 Step 7 接进去了，所以以后生产流程就固定为：
+**`stop_experiment/engine/strategy_runner.py`**
+如果你不想新建目录，也可以放在：
 
-```text
-run_daily.py
-→ 07 predictions
-→ 09 paper trading
-→ 10 T+1 action plan
-→ 11 feishu summary
-→ 12 operator packet
+**`stop_experiment/pipeline/strategy_runner.py`**
+
+我建议新建 `engine/`，因为它不属于纯 pipeline，也不属于纯 backtest。
+
+---
+
+## 这个文件只暴露两个函数
+
+### 1. `run_day()`
+
+负责单日推进
+
+```python
+def run_day(
+    date,
+    holdings,
+    pending_buys,
+    pending_sells,
+    predictions_df,
+    price_pivot,
+    trading_days,
+    prev_close_map,
+    params,
+    write_ledgers=False,
+    ledger_base_dir=None,
+):
+    ...
 ```
 
-### 你要做的唯一动作
+它内部只做这几件事：
 
-给自己定一个固定命令，比如：
+1. 用统一的 candidate pool builder 生成当日候选池
+2. 计算 prev_decision_date
+3. 调 `step_day()`
+4. 如果 `write_ledgers=True`，就调用 `live_ledger` 写：
 
-```bash
-python stop_experiment/run_daily.py --date YYYY-MM-DD
+   * holdings
+   * decisions
+   * executions
+5. 返回统一结果结构
+
+---
+
+### 2. `run_range()`
+
+负责多日连续运行
+
+```python
+def run_range(
+    start_date,
+    end_date,
+    mode,                 # "backtest" | "replay" | "live"
+    prediction_source,    # "full_test" | "daily_parquet"
+    params,
+    initial_holdings=None,
+    write_ledgers=True,
+    ledger_base_dir=None,
+    postprocess=True,
+):
+    ...
 ```
 
-然后把它写到 README 最前面，作为唯一生产入口。
+它内部只做：
+
+1. 按日期循环
+2. 每天读取 predictions
+3. 每天调用 `run_day()`
+4. 循环结束后调用统一后处理：
+
+   * `build_live_equity_curve`
+   * `build_live_trade_report`
+   * `12_build_operator_packet`（只在 live 模式）
 
 ---
 
-## 3. 暂停所有“策略扩展”，只保留一个技术债
+# 三、三种模式怎么定义
 
-**现在唯一值得继续追的技术问题，就是 Layer 2 预测源不一致。**
+## mode = `backtest`
 
-这件事你已经查得很清楚了：
+用途：研究基线、历史回测
 
-* live 模式下，`07_generate_daily_predictions.py` 从 DB 实时拉特征
-* 和训练/回测时的特征源有差异
-* 导致预测不同
-* top10 overlap 很低。
+* `prediction_source = "full_test"`
+* 初始持仓 = 空仓
+* 输出 ledger 到：
 
-### 这件事怎么处理
+  * `output/backtest_ledger/`
+* 最后生成：
 
-我建议你把它单独列成一个项目，不和日常盘后系统混做。
+  * `baseline_e0_x1_v1_nav.csv`
+  * `baseline_e0_x1_v1_trades.csv`
+  * equity curve
+  * trade report
 
-项目名就叫：
-
-**“冻结 live 预测特征源”**
-
-在没解决之前，明确写死一句话：
-
-> **当前生产系统可用，但 live 预测和回测预测并非同一来源；一致性检查以 replay 为准，生产使用 operator packet。**
-
-也就是说，**先接受这个已知问题，不要因此阻塞日常使用。**
+**注意：backtest 不再自己算净值和交易表，而是从同一套 ledger 重建。**
 
 ---
 
-# 你现在不要做的事
+## mode = `replay`
 
-## 不要做 1：不要继续重构回测主引擎
+用途：一致性验证
 
-现在已经够用了。
-再重构只会把系统重新搞乱。
+* `prediction_source = "full_test"`
+* 初始持仓 = 空仓 / 指定起始状态
+* 输出 ledger 到：
 
-## 不要做 2：不要继续扩仓位实验
-
-W1a 已经有阶段性答案了，但现在还没必要切到生产。
-先保持生产等权。
-
-## 不要做 3：不要再加更多报表
-
-你现在不是缺报表，是缺“只看哪几个”的纪律。
+  * `output/replay_ledger/`
+* 只用于跟 backtest 对账
 
 ---
 
-# 我建议你给自己定一个固定日常流程
+## mode = `live`
 
-## 每天收盘后
+用途：每日盘后生产
 
-只做这 4 步：
+* `prediction_source = "daily_parquet"`
+* 初始持仓 = `load_holdings()`
+* 输出 ledger 到：
 
-### Step 1
+  * `output/live/...`
+* 自动生成：
+
+  * equity curve
+  * trade report
+  * action plan
+  * operator packet
+
+---
+
+# 四、具体到文件，怎么改
+
+## 1. 保留并继续用的文件
+
+这些不需要推倒重写：
+
+* `backtest/decision_core.py`
+* `backtest/daily_state_machine.py`
+* `pipeline/live_ledger.py`
+* `pipeline/build_live_equity_curve.py`
+* `pipeline/build_live_trade_report.py`
+* `pipeline/12_build_operator_packet.py`
+
+这些就是你未来唯一引擎的核心零件。
+
+---
+
+## 2. 必须重构的文件
+
+### A. `pipeline/09_paper_trading_runner.py`
+
+**不要再叫 paper_trading_runner 了。**
+
+处理方式：
+
+* 把它重命名为：
+
+  * `engine/strategy_runner.py`
+  * 或 `pipeline/strategy_runner.py`
+* 当前 09 里的这些函数直接迁进去：
+
+  * `validate_daily_inputs`
+  * `validate_daily_outputs`
+  * `_build_candidate_pool`
+  * `run_single_day`
+  * `run_batch`
+
+### B. `backtest/run_baseline.py`
+
+改成一个**薄 wrapper**：
+
+```python
+from stop_experiment.engine.strategy_runner import run_range
+...
+run_range(
+    start_date=...,
+    end_date=...,
+    mode="backtest",
+    prediction_source="full_test",
+    params=BASELINE_E0_X1_V1_PARAMS,
+    ledger_base_dir=...,
+)
+```
+
+它以后不再直接 import：
+
+* `_load_data`
+* `run_backtest`
+
+### C. `pipeline/06_daily_inference_replay.py`
+
+这是必须重写的。
+
+现在它最混乱，因为它同时依赖：
+
+* `dynamic_exit_backtest_v2.run_backtest`
+* `daily_state_machine.step_day`
+
+**改法：**
+它以后只允许调用：
+
+```python
+run_range(..., mode="replay", prediction_source="full_test")
+```
+
+然后把输出结果和 backtest ledger 对比。
+**不准再自己拼另一套 replay 逻辑。**
+
+### D. `run_daily.py`
+
+保持为 orchestration 层，但把 Step 3 改成：
+
+```python
+python -m stop_experiment.engine.strategy_runner --mode live --date ...
+```
+
+而不是调用旧的 `09_paper_trading_runner.py`。
+
+---
+
+## 3. 降级为 legacy wrapper 的文件
+
+### `backtest/dynamic_exit_backtest_v2.py`
+
+不要再继续扩它。
+
+处理方式：
+
+* 保留一段时间，防止旧脚本炸
+* 但只允许它做两件事：
+
+  1. 读取旧数据
+  2. 调用新的 `run_range(mode="backtest")`
+
+也就是说，**它以后只是兼容壳，不再是主实现。**
+
+---
+
+# 五、参数源必须同时收敛
+
+你现在最新版 `stop_config.py` 里有这几句：
+
+* `PRODUCTION_PARAMS = BASELINE_E0_X1_V1_PARAMS`
+* `V1_PARAMS = PRODUCTION_PARAMS`
+* `BASELINE_3Y_PARAMS = PRODUCTION_PARAMS`
+
+这能临时救火，但长期一定继续制造混乱。
+
+## 我的建议
+
+### 第一阶段
+
+先保留兼容别名，但在代码里新增一条规则：
+
+**新代码只能 import：**
+
+* `PRODUCTION_PARAMS`
+* `BASELINE_E0_X1_V1_PARAMS`
+
+**不准再新增任何地方 import `V1_PARAMS`。**
+
+### 第二阶段
+
+等 `run_baseline / 06 / 09 / run_daily` 都迁完后，**删除**：
+
+* `V1_PARAMS`
+* `BASELINE_3Y_PARAMS`
+  这些兼容别名。
+
+---
+
+# 六、账本路径也要统一，不要再散
+
+你现在账本有点分散：
+
+* `output/holdings/`
+* `output/live/decisions/`
+* `output/live/executions/`
+
+我建议重构时统一成：
+
+## 统一 ledger base dir
+
+让 `live_ledger.py` 支持传 `base_dir`：
+
+```python
+load_holdings(date, base_dir=...)
+save_holdings(date, holdings, base_dir=...)
+save_decisions(date, ..., base_dir=...)
+save_executions(date, ..., base_dir=...)
+```
+
+然后不同 mode 用不同目录：
+
+### backtest
+
+* `output/backtest_ledger/holdings/`
+* `output/backtest_ledger/decisions/`
+* `output/backtest_ledger/executions/`
+
+### replay
+
+* `output/replay_ledger/...`
+
+### live
+
+* `output/live_ledger/...`
+
+如果你暂时不想动目录结构，也至少要把 `base_dir` 参数化，不要再写死路径。
+
+---
+
+# 七、后处理也要统一，不要回测一套、生产一套
+
+你现在已经有：
+
+* `build_live_equity_curve.py`
+* `build_live_trade_report.py`
+
+这其实已经够了。
+
+## 我的明确建议
+
+以后所有模式都走这两套后处理。
+
+### backtest
+
+不再单独用：
+
+* `backtest/build_equity_curve.py`
+* `backtest/trade_report.py`
+
+而是统一从 ledger 重建。
+
+如果你想保留旧文件，也可以把它们改成 wrapper：
+
+```python
+from stop_experiment.pipeline.build_live_equity_curve import ...
+from stop_experiment.pipeline.build_live_trade_report import ...
+```
+
+---
+
+# 八、你现在最值得做的重构顺序
+
+## Phase 1：先抽出统一 runner
+
+新建 `engine/strategy_runner.py`，把 09 的主循环迁进去。
+先别追求完美，先能跑 live。
+
+## Phase 2：让 run_daily 改调统一 runner
+
+这一步最重要，因为它直接影响生产链。
+
+## Phase 3：让 run_baseline 改调统一 runner
+
+这一步完成后，backtest 和 live 就已经同壳了。
+
+## Phase 4：重写 06 replay
+
+让 replay 不再有第二套执行逻辑。
+
+## Phase 5：把 dynamic_exit_backtest_v2 降级为兼容壳
+
+到这一步，双系统才算真的结束。
+
+---
+
+# 九、具体验收标准
+
+你要的不只是“看起来统一”，而是必须用下面标准验收。
+
+## 验收 1：Baseline 不变
 
 运行：
 
 ```bash
-python stop_experiment/run_daily.py --date YYYY-MM-DD
+python stop_experiment/backtest/run_baseline.py
 ```
 
-### Step 2
+结果必须仍然是：
 
-看飞书摘要
-确认：
+* NAV ≈ 5.4621
+* Sharpe ≈ 13.89
+* MDD ≈ -0.0688
+* n_trades = 74
 
-* 账户净值
-* 当日收益
-* 明日买几只 / 卖几只
+## 验收 2：Replay 对齐
 
-### Step 3
+运行：
 
-打开操作包，只看两份：
+```bash
+python -m stop_experiment.pipeline.06_daily_inference_replay ...
+```
 
-* `02_account_snapshot.md`
-* `03_t1_action_plan.md`
+必须满足：
 
-### Step 4
+* 决策一致
+* 交易一致
+* 状态一致
 
-手动下单
-按 `03_t1_action_plan.md` 执行。
+## 验收 3：Live 不退化
+
+运行：
+
+```bash
+python stop_experiment/run_daily.py --date <最新日期>
+```
+
+必须继续产出：
+
+* decisions
+* executions
+* holdings
+* live_equity_curve.csv
+* live_trade_report.csv
+* action plan
+* operator packet
+
+## 验收 4：代码层禁止双实现
+
+最后全局搜索时，除了 legacy wrapper 外：
+
+* 不准再有任何文件直接 import `dynamic_exit_backtest_v2.run_backtest`
+* 不准再有第二套独立日循环
 
 ---
 
-# 我建议你再补两个很小的动作
+# 十、我给你的最终建议
 
-## 动作 A：把操作包目录做成“最新快捷入口”
+## 必须做
 
-例如额外生成一个：
+1. **新建 `engine/strategy_runner.py`**
+2. **把 09 的核心主循环迁进去**
+3. **让 run_daily / run_baseline / 06 都改调它**
+4. **把 dynamic_exit_backtest_v2 降级成 wrapper**
+5. **让后处理统一从 ledger 重建**
 
-* `output/live/operator_packets/latest/`
+## 不要做
 
-永远指向最新日期。
-这样你不用每天找目录。
-
-## 动作 B：把 `run_daily.py` 成功后在终端最后打印一句
-
-类似：
-
-```text
-今日操作包：
-output/live/operator_packets/2026-05-08/
-重点查看：
-- 02_account_snapshot.md
-- 03_t1_action_plan.md
-```
-
-这会让你日常使用顺很多。
+1. 不要继续在 `dynamic_exit_backtest_v2.py` 上补丁
+2. 不要继续让 06 自己维护 replay 逻辑
+3. 不要继续保留 `V1_PARAMS` 作为新代码参数源
+4. 不要同时维护两套净值曲线和交易报告生成方式
 
 ---
 
-# 最终明确建议
+## 一句话总结
 
-**现在就停手，不再扩功能。**
-
-接下来只做这三件事：
-
-1. **冻结当前版本为“手动交易操作系统 v1”**
-2. **以后只通过 `run_daily.py` 使用系统**
-3. **把 Layer 2 预测源不一致单独列为唯一待修技术债**
-
-一句话总结：
-
-**你现在已经够用了，下一步不是继续开发，而是强制自己只用“飞书摘要 + 操作包 + run_daily.py”这条简化流程。**
+**基于你这次上传的最新版代码，最正确的重构不是“再补同步”，而是：以 `09_paper_trading_runner + daily_state_machine + live_ledger` 为唯一执行内核，回测、回放、生产全部改成调用同一个 `strategy_runner`。**

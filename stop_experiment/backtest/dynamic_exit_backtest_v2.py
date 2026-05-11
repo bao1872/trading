@@ -4,7 +4,7 @@
 动态退出稳健性收口验证引擎 v2 (SSOT)
 
 Purpose:
-    核心回测引擎（Single Source of Truth）。
+    研究用回测引擎（实验参数探索）。
     buy-only 动态退出（buy_cls > 0.7）+ 月度切片 + 三类退出对比 + 多日试探。
 
     引擎特性:
@@ -26,10 +26,15 @@ Purpose:
     - three-way : 三类退出全参数对比 (A vs B vs C)
     - multi-day : obs_day=1 only vs 1~3 候选池试探
 
+    重要声明:
+    - run_backtest 为本模块内部函数，仅供 single/slice/three-way/multi-day 研究模式使用
+    - 生产链路（回测/回放/模拟盘）请使用 stop_experiment.engine.strategy_runner.run_range()
+    - 禁止从外部模块 import run_backtest
+
 Pipeline Position:
-    核心回测引擎（训练验证 + 实验研究共用）。
+    研究用回测引擎（实验参数探索，非生产链路）。
     上游: full_test_predictions.parquet, DB
-    下游: 06_daily_inference_replay.py, 实验脚本
+    下游: 无（研究脚本自含）
 
 Inputs:
     - stop_experiment/output/full_test_predictions.parquet
@@ -221,7 +226,11 @@ def run_backtest(
     weight_mode=None, weight_params=None,
 ):
     """
-    通用回测引擎，exit_mode 控制退出策略:
+    [内部专用] 研究用回测引擎 — 仅供本模块 single/slice/three-way/multi-day 模式调用。
+    生产链路请使用 stop_experiment.engine.strategy_runner.run_range(mode="backtest")。
+    禁止从外部模块 import 此函数。
+
+    exit_mode 控制退出策略:
     - fixed_hold
     - rule_exit
     - model_exit (支持 exit_sub_mode: None/X1 / "sell_decay"/X3 / "or_buy_reg"/X4)

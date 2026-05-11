@@ -46,7 +46,7 @@ PRED_MEAN_TOL = 1e-6
 PRED_MAX_TOL = 1e-5
 WEIGHT_SUM_TOL = 0.01
 
-BASELINE_PREFIX = "baseline_e0_x1_v1"
+BASELINE_PREFIX = "baseline_v2_3y"
 
 
 def load_backtest_nav() -> pd.DataFrame:

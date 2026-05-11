@@ -677,7 +677,6 @@ def start_streamlit():
     ]
     
     try:
-        # 使用 Popen 启动后台进程
         process = subprocess.Popen(
             streamlit_cmd,
             cwd=str(PROJECT_ROOT),
@@ -694,6 +693,41 @@ def start_streamlit():
     
     except Exception as e:
         logger.error(f"❌ Streamlit 启动失败: {e}", exc_info=True)
+        return None
+
+
+def start_trading_workbench():
+    logger.info("=" * 60)
+    logger.info("启动交易工作台 Streamlit 应用...")
+    logger.info("=" * 60)
+    
+    workbench_cmd = [
+        sys.executable, "-m", "streamlit", "run",
+        str(PROJECT_ROOT / "vis" / "trading_workbench" / "app.py"),
+        "--server.port", "8502",
+        "--server.address", "0.0.0.0",
+        "--server.headless", "true",
+        "--server.enableCORS", "false",
+        "--server.enableXsrfProtection", "false",
+    ]
+    
+    try:
+        process = subprocess.Popen(
+            workbench_cmd,
+            cwd=str(PROJECT_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        
+        logger.info(f"✅ 交易工作台已启动 (PID: {process.pid})")
+        logger.info(f"   访问地址: http://localhost:8502")
+        logger.info(f"   命令: {' '.join(workbench_cmd)}")
+        
+        return process
+    
+    except Exception as e:
+        logger.error(f"❌ 交易工作台启动失败: {e}", exc_info=True)
         return None
 
 
@@ -721,6 +755,20 @@ def main():
             streamlit_status = "启动失败"
     else:
         logger.warning("Streamlit 可视化应用未启用（ENABLE_STREAMLIT=false）")
+
+    # 启动交易工作台（后台运行，端口 8502）
+    ENABLE_WORKBENCH = os.getenv('ENABLE_WORKBENCH', 'true').lower() == 'true'
+    workbench_process = None
+    workbench_status = "未启用"
+
+    if ENABLE_WORKBENCH:
+        workbench_process = start_trading_workbench()
+        if workbench_process:
+            workbench_status = f"已启动 (PID: {workbench_process.pid})"
+        else:
+            workbench_status = "启动失败"
+    else:
+        logger.warning("交易工作台未启用（ENABLE_WORKBENCH=false）")
     
     # 创建调度器
     scheduler = TaskScheduler(use_async=False)
@@ -815,6 +863,12 @@ def main():
             streamlit_process.terminate()
             streamlit_process.wait(timeout=5)
             logger.info("Streamlit 进程已终止")
+        # 关闭时终止交易工作台进程
+        if workbench_process and workbench_process.poll() is None:
+            logger.info("正在终止交易工作台进程...")
+            workbench_process.terminate()
+            workbench_process.wait(timeout=5)
+            logger.info("交易工作台进程已终止")
 
 
 if __name__ == '__main__':
