@@ -1,0 +1,28 @@
+{
+  "description": "特征版本注册表 — 记录所有已注册的特征工程版本，含因子列表、派生规则、缺失值策略",
+  "versions": {
+    "fv_202605_v1": {
+      "description": "57基础因子 (VSA关闭), 3年全量数据 (2023-03~2026-05), 4929只股票/74374条信号",
+      "feature_columns_file": "pipeline/factor_columns.py",
+      "feature_count": 57,
+      "categories": ["slc", "trend", "position", "momentum", "volume", "risk", "rhythm", "dynamic", "derived"],
+      "vsa_enabled": false,
+      "excluded_columns": [
+        "bbmacd_slope_3",
+        "bbmacd_cross_upper",
+        "bbmacd_cross_lower",
+        "bbmacd_cross_up_lower",
+        "bbmacd_cross_down_upper",
+        "sell_stop_triggered",
+        "buy_stop_triggered",
+        "bbmacd_state",
+        "last_event_type"
+      ],
+      "derived_rules_version": "drv_202605_v1",
+      "missing_value_policy": "fillna_0",
+      "created_at": "2026-05-11",
+      "status": "production"
+    }
+  },
+  "active": "fv_202605_v1"
+}

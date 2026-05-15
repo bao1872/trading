@@ -1,0 +1,33 @@
+{
+  "description": "策略版本注册表 — 记录所有已注册的策略参数配置，含回测性能基线",
+  "strategies": {
+    "sv_e0_x1_obs123_th070_v1": {
+      "description": "E0 Entry + X1 model_exit + obs_day=[1,2,3] + buy_cls_exit_threshold=0.70 + stop_loss=-0.07",
+      "params": {
+        "candidate_obs_days": [1, 2, 3],
+        "max_stocks": 10,
+        "score_col": "pred_sell_reg",
+        "exit_mode": "model_exit",
+        "buy_cls_exit_threshold": 0.70,
+        "stop_loss": -0.07,
+        "max_hold_days": 20,
+        "buy_cost": 0.001,
+        "sell_cost": 0.001,
+        "entry_gate_sell_cls": null,
+        "entry_gate_buy_cls": null,
+        "exit_sub_mode": null,
+        "buy_reg_exit_threshold": null
+      },
+      "expected_metrics": {
+        "nav": 6.1722,
+        "sharpe": 14.77,
+        "mdd": -0.0671,
+        "n_trades": 59
+      },
+      "frozen_at": "2026-05-11",
+      "created_at": "2026-05-11",
+      "status": "production"
+    }
+  },
+  "active": "sv_e0_x1_obs123_th070_v1"
+}

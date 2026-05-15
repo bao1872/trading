@@ -1,0 +1,67 @@
+{
+  "description": "模型版本注册表 — 记录所有已训练的模型版本，含模型文件路径、训练参数、评估指标",
+  "models": {
+    "mv_20260510_3y_v1": {
+      "description": "3年全量 LightGBM 4模型 (buy_cls/reg + sell_cls/reg), train/val/test 分割, embargo=25天",
+      "feature_version": "fv_202605_v1",
+      "label_version": "lv_202605_v1",
+      "training_data": "dataset.parquet (2023-03 ~ 2026-05, 74K+ signals, 4929 stocks)",
+      "training_params": {
+        "num_leaves": 16,
+        "max_depth": 5,
+        "min_data_in_leaf": 50,
+        "learning_rate": 0.03,
+        "feature_fraction": 0.7,
+        "bagging_fraction": 0.8,
+        "bagging_freq": 5,
+        "embargo_days": 25,
+        "n_folds": 3
+      },
+      "artifacts": {
+        "buy_cls": "output/models_control/buy_cls_final.txt",
+        "buy_reg": "output/models_control/buy_reg_final.txt",
+        "sell_cls": "output/models_control/sell_cls_final.txt",
+        "sell_reg": "output/models_control/sell_reg_final.txt"
+      },
+      "metrics": {
+        "sell_cls_auc": 0.68,
+        "buy_cls_auc": 0.67,
+        "sell_reg_mae": 0.045,
+        "buy_reg_mae": 0.038
+      },
+      "created_at": "2026-05-10",
+      "status": "production"
+    },
+    "mv_20260512_retrain_v1": {
+      "description": "自动注册 (训练目录: output/models_control)",
+      "feature_version": "fv_202605_v1",
+      "label_version": "lv_202605_v1",
+      "training_data": "dataset.parquet",
+      "artifacts": {
+        "buy_cls": "output/models_control/buy_cls_final.txt",
+        "buy_reg": "output/models_control/buy_reg_final.txt",
+        "sell_cls": "output/models_control/sell_cls_final.txt",
+        "sell_reg": "output/models_control/sell_reg_final.txt"
+      },
+      "metrics": {},
+      "created_at": "2026-05-12",
+      "status": "production"
+    },
+    "mv_20260512_retrain_v2": {
+      "description": "自动注册 (训练目录: output/models_control)",
+      "feature_version": "fv_202605_v1",
+      "label_version": "lv_202605_v1",
+      "training_data": "dataset.parquet",
+      "artifacts": {
+        "buy_cls": "output/models_control/buy_cls_final.txt",
+        "buy_reg": "output/models_control/buy_reg_final.txt",
+        "sell_cls": "output/models_control/sell_cls_final.txt",
+        "sell_reg": "output/models_control/sell_reg_final.txt"
+      },
+      "metrics": {},
+      "created_at": "2026-05-12",
+      "status": "production"
+    }
+  },
+  "active": "mv_20260512_retrain_v2"
+}

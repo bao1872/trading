@@ -1,0 +1,15 @@
+{
+  "description": "运行配置 Profiles — 将 feature_version + model_version + strategy_version 绑定为可执行配置",
+  "profiles": {
+    "production": {
+      "description": "生产基线 — 3年全量 57因子 4GBDT E0+X1 obs=[1,2,3] th=0.70",
+      "feature_version": "fv_202605_v1",
+      "model_version": "mv_20260512_retrain_v2",
+      "strategy_version": "sv_e0_x1_obs123_th070_v1",
+      "prediction_policy": "frozen_for_test_dates_live_for_new_dates",
+      "status": "production",
+      "activated_at": "2026-05-11"
+    }
+  },
+  "active": "production"
+}
