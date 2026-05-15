@@ -1,0 +1,34 @@
+{
+  "conclusion": "well_calibrated",
+  "calibration_quality": {
+    "val_sell_cls_ece": 0.05079413546586358,
+    "val_buy_cls_ece": 0.02515483320471698,
+    "test_sell_cls_ece": 0.048961096933717994,
+    "test_buy_cls_ece": 0.06158003099701937,
+    "overall": "good"
+  },
+  "threshold_recommendation": {
+    "current_threshold": 0.7,
+    "current_precision": 0.8297083649680675,
+    "current_recall": 0.413444704904899,
+    "best_f1_threshold": 0.3,
+    "best_f1": 0.7604535858538796,
+    "best_f1_precision": 0.6707859754542105,
+    "best_f1_recall": 0.87779294382956
+  },
+  "percentile_vs_fixed": {
+    "fixed_trigger_rate": 0.27987467241084785,
+    "p80_trigger_rate": 0.20015513744243957,
+    "rate_diff": -0.07971953496840828,
+    "p80_avg_cutoff": 0.7636378977292285,
+    "p80_avg_precision": 0.8364105320334805,
+    "fixed_avg_precision": 0.8297083649680675,
+    "conclusion": "p80_triggers_less"
+  },
+  "details": {
+    "val_sell_cls_ece": 0.05079413546586358,
+    "val_buy_cls_ece": 0.02515483320471698,
+    "test_sell_cls_ece": 0.048961096933717994,
+    "test_buy_cls_ece": 0.06158003099701937
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "overfitting_detected": true,
+  "overfitting_severity": "strong",
+  "param_sensitivity": "medium",
+  "bootstrap_robust": true,
+  "details": {
+    "sv_top3_nav_range": 0.6625782281347732,
+    "sv_top3_nav_mean": 6.0319282748305625,
+    "param_sensitivity_ratio": 0.1098451768565476,
+    "ft_max_nav_decay": -0.6151261367109709,
+    "ft_mean_nav_decay": -0.5952759458447131,
+    "bootstrap_ci_lower": 264393.6823571073,
+    "worst3_nav_drop_pct": 0.41721737438029344
+  }
+}

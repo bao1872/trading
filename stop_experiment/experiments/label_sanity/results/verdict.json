@@ -1,0 +1,14 @@
+{
+  "conclusion": "label_quality_concern",
+  "label_idealization_risk": "high",
+  "volatility_confusion_risk": "low",
+  "alternative_label_viability": "partial",
+  "details": {
+    "pct_mfe_above_and_mae_deep": 0.5480389596423578,
+    "atr_mfe_spearman": 0.23354028847989614,
+    "high_low_atr_mfe_ratio": 1.8633273658195257,
+    "ic_sell_signal": 0.5955004590097225,
+    "ic_good_trade": 0.365559462907936,
+    "ic_good_to_sell_ratio": 0.6138693218067993
+  }
+}

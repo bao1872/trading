@@ -1,0 +1,13 @@
+{
+  "best_scheme_sv": "D_composite",
+  "best_scheme_ft": "A_sell_reg_baseline",
+  "scheme_c_vs_baseline": {
+    "sv_nav_diff": 0.0869660817054676,
+    "ft_nav_diff": -0.11831656336397312
+  },
+  "recommendation": "scheme_C_mixed_results",
+  "details": {
+    "sv_best_nav": 5.6252354173780725,
+    "ft_best_nav": 2.024570312964973
+  }
+}
