@@ -56,6 +56,7 @@ from sqlalchemy import text
 from stop_experiment.pipeline.stop_config import (
     OBS_DAYS, SELL_CLS_THRESHOLD, BUY_CLS_THRESHOLD,
     OUTPUT_DIR, DATASET_PATH,
+    FACTOR_WARMUP_DAYS, FACTOR_FORWARD_DAYS,
 )
 from stop_experiment.pipeline.factor_columns import (
     SLC_STATIC_COLS, DYNAMIC_COLS, DERIVED_COLS,
@@ -545,8 +546,8 @@ def main(args):
 
         # 按批次加载K线（只加载该批次涉及的股票）
         batch_ts_codes = sorted(signals_batch["ts_code"].unique())
-        batch_kline_start = pd.Timestamp(signals_batch["selection_date"].min()) - pd.Timedelta(days=150)
-        batch_kline_end = pd.Timestamp(signals_batch["selection_date"].max()) + pd.Timedelta(days=60)
+        batch_kline_start = pd.Timestamp(signals_batch["selection_date"].min()) - pd.Timedelta(days=FACTOR_WARMUP_DAYS)
+        batch_kline_end = pd.Timestamp(signals_batch["selection_date"].max()) + pd.Timedelta(days=FACTOR_FORWARD_DAYS)
 
         print(f"\n  加载K线: Batch {batch_idx}, {len(batch_ts_codes)} 只股票...")
         with engine.connect() as conn:

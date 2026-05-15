@@ -53,7 +53,8 @@ EXPERIMENT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(EXPERIMENT_DIR, "results")
 
 STRATEGY_VAL_START = pd.Timestamp("2026-01-01")
-STRATEGY_VAL_END = pd.Timestamp("2026-03-31")
+STRATEGY_VAL_END = pd.Timestamp("2026-02-28")
+STRATEGY_EVAL_END = pd.Timestamp("2026-03-31")
 FINAL_TEST_START = pd.Timestamp("2026-04-01")
 FINAL_TEST_END = pd.Timestamp("2026-05-31")
 
@@ -102,19 +103,22 @@ def load_and_split_data():
         raise ValueError("final_test 期间无信号数据")
 
     sv_td_start = sv_signals["obs_date"].min() - pd.Timedelta(days=PRE_BUFFER_DAYS)
-    sv_td_end = sv_signals["obs_date"].max() + pd.Timedelta(days=EXIT_BUFFER_DAYS)
+    sv_td_end = STRATEGY_EVAL_END + pd.Timedelta(days=EXIT_BUFFER_DAYS)
     sv_td = [d for d in trading_days if sv_td_start <= d <= sv_td_end]
+    sv_eval_td = [d for d in sv_td if d <= STRATEGY_EVAL_END]
 
     ft_td_start = ft_signals["obs_date"].min() - pd.Timedelta(days=PRE_BUFFER_DAYS)
     ft_td_end = ft_signals["obs_date"].max() + pd.Timedelta(days=EXIT_BUFFER_DAYS)
     ft_td = [d for d in trading_days if ft_td_start <= d <= ft_td_end]
 
     print(f"  strategy_val 交易日: {len(sv_td)} ({sv_td[0].date() if sv_td else 'N/A'} ~ {sv_td[-1].date() if sv_td else 'N/A'})")
+    print(f"  strategy_val 评估截止: {STRATEGY_EVAL_END.date()} ({len(sv_eval_td)} 交易日)")
     print(f"  final_test   交易日: {len(ft_td)} ({ft_td[0].date() if ft_td else 'N/A'} ~ {ft_td[-1].date() if ft_td else 'N/A'})")
 
     return {
         "sv_signals": sv_signals,
         "sv_td": sv_td,
+        "sv_eval_td": sv_eval_td,
         "ft_signals": ft_signals,
         "ft_td": ft_td,
         "price_pivot": price_pivot,
@@ -148,7 +152,11 @@ def run_param_search(data):
             stop_loss=stop_loss,
             strict=True,
         )
-        s = compute_summary(result)
+        nav_df = result["nav_df"]
+        eval_end = STRATEGY_EVAL_END
+        nav_df_eval = nav_df[nav_df["date"] <= eval_end]
+        result_eval = {**result, "nav_df": nav_df_eval}
+        s = compute_summary(result_eval)
         rows.append({
             "buy_cls_exit_threshold": buy_cls_th,
             "top_k": top_k,

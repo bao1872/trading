@@ -65,6 +65,8 @@ from stop_experiment.pipeline.stop_config import (
     OBS_DAYS, SELL_CLS_THRESHOLD, BUY_CLS_THRESHOLD,
     OUTPUT_DIR, MODELS_DIR, PREDICTIONS_DIR, MODEL_SPECS,
     PRODUCTION_PARAMS, CANDIDATE_OBS_DAYS,
+    FACTOR_WARMUP_DAYS, FACTOR_FORWARD_DAYS,
+    filter_production_candidates,
 )
 from stop_experiment.pipeline.factor_columns import (
     SLC_STATIC_COLS, ALL_FEATURE_COLS, META_COLS,
@@ -75,6 +77,7 @@ from stop_experiment.backtest.simple_backtest import score_stocks
 SIGNAL_LOOKBACK_DAYS = OBS_DAYS + 5
 OBS_COLS = ["ts_code", "stock_name", "signal_id", "obs_date", "obs_day",
             "pred_sell_reg", "pred_sell_cls", "pred_buy_reg", "pred_buy_cls", "score",
+            "pred_sell_reg_rank", "pred_sell_cls_rank", "pred_buy_cls_rank", "pred_buy_reg_rank",
             "can_buy"]
 
 
@@ -155,12 +158,8 @@ def _build_candidates(target_date, engine, position_codes: list = None):
     min_signal = signals["signal_date"].min()
     max_signal = signals["signal_date"].max()
 
-    # 读 K 线（扩展范围确保因子 lookback 与训练管线一致）
-    # 训练时 batch_kline_start = min(selection_date) - 150天，最早信号约 2023-03
-    # 即训练 K 线从约 2022-10 开始。为确保滚动因子有足够 warm-up，
-    # 从 target_date - 1300天（约 3.5 年）开始加载，与训练口径对齐
-    kline_start = (pd.Timestamp(target_dt) - pd.Timedelta(days=1300)).strftime("%Y-%m-%d")
-    kline_end = (pd.Timestamp(max_signal) + pd.Timedelta(days=OBS_DAYS + 50)).strftime("%Y-%m-%d")
+    kline_start = (pd.Timestamp(target_dt) - pd.Timedelta(days=FACTOR_WARMUP_DAYS)).strftime("%Y-%m-%d")
+    kline_end = (pd.Timestamp(max_signal) + pd.Timedelta(days=FACTOR_FORWARD_DAYS)).strftime("%Y-%m-%d")
 
     kline_dict = {}
     with engine.connect() as conn:
@@ -254,6 +253,18 @@ def _predict_and_score(df):
         df[f"pred_{model_name}"] = model.predict(df[feature_cols])
 
     df = score_stocks(df, strategy=PRODUCTION_PARAMS.get("strategy_default", "sell_score"))
+
+    if len(df) > 1:
+        df["pred_sell_reg_rank"] = df["pred_sell_reg"].rank(pct=True)
+        df["pred_sell_cls_rank"] = df["pred_sell_cls"].rank(pct=True)
+        df["pred_buy_cls_rank"] = df["pred_buy_cls"].rank(pct=True)
+        df["pred_buy_reg_rank"] = df["pred_buy_reg"].rank(pct=True)
+    else:
+        df["pred_sell_reg_rank"] = 1.0
+        df["pred_sell_cls_rank"] = 1.0
+        df["pred_buy_cls_rank"] = 1.0
+        df["pred_buy_reg_rank"] = 1.0
+
     return df
 
 
@@ -269,12 +280,10 @@ def _save_predictions(df, target_date):
         if "signal_id" in df.columns:
             df_cand = df[df["signal_id"] >= 0]
             df_pos = df[df["signal_id"] < 0]
-            df_cand = df_cand[df_cand["obs_day"].isin(CANDIDATE_OBS_DAYS)]
+            df_cand = filter_production_candidates(df_cand)
             df = pd.concat([df_cand, df_pos], ignore_index=True)
         else:
-            df = df[df["obs_day"].isin(CANDIDATE_OBS_DAYS)]
-        if "ts_code" in df.columns and "obs_date" in df.columns:
-            df = df.sort_values("obs_day").drop_duplicates(subset=["ts_code", "obs_date"], keep="first")
+            df = filter_production_candidates(df)
         if len(df) < before:
             print(f"  [过滤] obs_day∈{CANDIDATE_OBS_DAYS}+去重: {before} → {len(df)} 行")
 
@@ -409,9 +418,7 @@ def generate_daily_predictions(target_date, force=False, position_codes: list = 
             day_data = ftp[ftp["obs_date"] == target_date].copy()
             if not day_data.empty:
                 if "obs_day" in day_data.columns:
-                    day_data = day_data[day_data["obs_day"].isin(CANDIDATE_OBS_DAYS)].copy()
-                    if "ts_code" in day_data.columns and "obs_date" in day_data.columns:
-                        day_data = day_data.sort_values("obs_day").drop_duplicates(subset=["ts_code", "obs_date"], keep="first")
+                    day_data = filter_production_candidates(day_data)
                 # full_test_predictions 不含 stock_name，从 stop_loss_selection 补充
                 if "stock_name" not in day_data.columns:
                     try:
@@ -566,9 +573,7 @@ def backfill_predictions(start_date, end_date, force=False):
                     day_data = ftp[ftp["obs_date"] == td].copy()
                     if not day_data.empty:
                         if "obs_day" in day_data.columns:
-                            day_data = day_data[day_data["obs_day"].isin(CANDIDATE_OBS_DAYS)].copy()
-                            if "ts_code" in day_data.columns and "obs_date" in day_data.columns:
-                                day_data = day_data.sort_values("obs_day").drop_duplicates(subset=["ts_code", "obs_date"], keep="first")
+                            day_data = filter_production_candidates(day_data)
                         print(f"  [FTP] 提取 {len(day_data)} 行")
 
             if day_data is not None and not day_data.empty:
@@ -625,7 +630,7 @@ def _build_position_rows(ts_codes: list, target_date, engine) -> tuple:
         - kline_dict: {ts_code: DataFrame} 用于 merge_factor_lib_features
     """
     target_dt = pd.to_datetime(target_date) if isinstance(target_date, str) else target_date
-    kline_start = (target_dt - pd.Timedelta(days=1300)).strftime("%Y-%m-%d")
+    kline_start = (target_dt - pd.Timedelta(days=FACTOR_WARMUP_DAYS)).strftime("%Y-%m-%d")
     kline_end = target_dt.strftime("%Y-%m-%d")
 
     with engine.connect() as conn:

@@ -74,6 +74,7 @@ import matplotlib.pyplot as plt
 
 from stop_experiment.pipeline.stop_config import (
     OUTPUT_DIR, BACKTEST_DIR, BUY_COST, SELL_COST,
+    filter_production_candidates,
 )
 from stop_experiment.backtest.simple_backtest import (
     load_daily_prices, build_price_pivot,
@@ -153,7 +154,7 @@ def _calc_weights(codes, scores, mode, params):
 
 # ---- 数据加载 ----
 def _load_data():
-    """加载全量预测和K线。生产口径 obs_day=1 硬编码。"""
+    """加载全量预测和K线。使用 filter_production_candidates 统一候选池口径。"""
     full_pred_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
     if not os.path.exists(full_pred_path):
         raise FileNotFoundError(f"{full_pred_path} 不存在，请先运行 generate_full_predictions.py")
@@ -177,7 +178,7 @@ def _load_data():
             ts_key = (ts_code, row["obs_date"])
             prediction_lookup[ts_key] = pred_dict
 
-    test_df = full_pred[full_pred["obs_day"] == 1].copy()
+    test_df = filter_production_candidates(full_pred)
 
     if test_df.empty:
         raise ValueError("无可回测数据")
@@ -489,7 +490,7 @@ def run_single(args):
     print("单组回测对比")
     print("=" * 50)
 
-    test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data([1])
+    test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data()
     print(f"  候选: {len(test_df)}, 交易日: {len(trading_days)}")
 
     exit_opts = [
@@ -527,7 +528,7 @@ def run_time_slice_validation(args):
     print("月度切片验证: 固定持有 vs 模型退出")
     print("=" * 60)
 
-    test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data([1])
+    test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data()
     test_df["month"] = test_df["obs_date"].dt.to_period("M")
 
     months = sorted(test_df["month"].unique())
@@ -657,7 +658,7 @@ def run_three_way_comparison(args):
     print("三类退出基线对比: fixed_hold / rule_exit / model_exit")
     print("=" * 60)
 
-    test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data([1])
+    test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data()
     print(f"  候选: {len(test_df)}, 交易日: {len(trading_days)}")
 
     top_k_list = [5, 10, 20]
@@ -771,7 +772,7 @@ def run_multi_day_candidate(args):
     print("=" * 60)
 
     # obs_day=1 only
-    df1, pp, td, pm, pl = _load_data([1])
+    df1, pp, td, pm, pl = _load_data()
     print(f"  obs_day=1 only: {len(df1)} 候选, {len(td)} 交易日")
 
     for exit_mode in ["fixed_hold", "model_exit"]:
@@ -787,10 +788,8 @@ def run_multi_day_candidate(args):
                   f"sharpe={s.get('sharpe', 0):.2f} n={s.get('n_trades', 0)}")
 
     # obs_day=1~3
-    df3, pp3, td3, pm3, pl3 = _load_data([1, 2, 3])
-    # 同一 signal_id 每天只保留最新的 obs_day
-    df3 = df3.sort_values(["signal_id", "obs_day"], ascending=[True, False])
-    df3 = df3.drop_duplicates(subset=["signal_id", "obs_date"], keep="first")
+    df3, pp3, td3, pm3, pl3 = _load_data()
+    df3 = filter_production_candidates(df3)
     print(f"\n  obs_day=1~3 (去重后): {len(df3)} 候选, {len(td3)} 交易日")
 
     for exit_mode in ["fixed_hold", "model_exit"]:

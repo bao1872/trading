@@ -29,6 +29,10 @@ OBS_DAYS = 20              # 信号触发后的观察期天数（最长持有观
 # ==================== 候选池 obs_day 范围 ====================
 CANDIDATE_OBS_DAYS = [1, 2, 3]  # 生产候选池 obs_day 范围（原 [1]，2026-05-13 扩展为 [1,2,3]）
 
+# ==================== K线 warm-up / forward ====================
+FACTOR_WARMUP_DAYS = 600        # 因子计算K线回看天数（约2.4年，覆盖DSA/BBMacd完整warm-up）
+FACTOR_FORWARD_DAYS = OBS_DAYS + 50  # 标签计算前瞻天数
+
 # ==================== 交易成本 ====================
 BUY_COST = 0.0005          # 买入成本（佣金万五）
 SELL_COST = 0.0010         # 卖出成本（佣金万五 + 印花税千一）
@@ -122,3 +126,20 @@ BASELINE_V2_PARAMS = {
 }
 
 PRODUCTION_PARAMS = BASELINE_V2_PARAMS
+
+
+# ==================== 候选池过滤（SSOT） ====================
+
+def filter_production_candidates(df):
+    """生产候选池过滤（SSOT）：obs_day ∈ CANDIDATE_OBS_DAYS + (ts_code, obs_date) 去重保留 obs_day 最小。
+
+    所有需要生产口径候选池的脚本（07/dynamic_exit_backtest_v2/generate_full_predictions/实验）
+    必须调用此函数，禁止内联重写过滤逻辑。
+    """
+    import pandas as pd
+    df = df[df["obs_day"].isin(CANDIDATE_OBS_DAYS)].copy()
+    df = df.sort_values("obs_day").drop_duplicates(
+        subset=["ts_code", "obs_date"],
+        keep="first",
+    )
+    return df
