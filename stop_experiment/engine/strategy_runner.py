@@ -1,40 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-统一策略执行引擎 — 单引擎，多模式
+统一策略执行引擎 — 回测模式
 
 Purpose:
-    回测、回放、模拟盘共用同一执行内核 (decision_core + daily_state_machine + live_ledger)，
-    消除双引擎口径分叉问题。
-
-Modes:
-    backtest: 历史回测，写入 backtest_ledger/
-    replay:   一致性回放，写入 replay_ledger/，与 backtest_ledger 对账
-    live:     每日盘后生产，写入 live/
+    回测执行引擎，使用 prediction_store 作为唯一预测源，
+    写入 backtest_ledger/ 产出持仓/决策/执行/净值/交易报告。
 
 Inputs:
-    - full_test_predictions.parquet (backtest/replay)
-    - predictions/YYYY-MM-DD.parquet (live)
+    - prediction_store (唯一预测源)
     - K线价格数据
 
 Outputs:
-    - {mode}_ledger/holdings/YYYY-MM-DD.parquet
-    - {mode}_ledger/decisions/YYYY-MM-DD.parquet
-    - {mode}_ledger/executions/YYYY-MM-DD.parquet
-    - 净值曲线 + 交易报告 (后处理)
+    - backtest_ledger/holdings/YYYY-MM-DD.parquet
+    - backtest_ledger/decisions/YYYY-MM-DD.parquet
+    - backtest_ledger/executions/YYYY-MM-DD.parquet
+    - backtest_ledger/live_equity_curve.csv
+    - backtest_ledger/live_trade_report.csv
 
 How to Run:
-    # 回测
-    python -m stop_experiment.engine.strategy_runner --mode backtest
-
-    # 回放对账
-    python -m stop_experiment.engine.strategy_runner --mode replay --verify
-
-    # 模拟盘
-    python -m stop_experiment.engine.strategy_runner --mode live --date 2026-05-08
-
-    # 模拟盘批量
-    python -m stop_experiment.engine.strategy_runner --mode live --batch-all
+    python -m stop_experiment.engine.strategy_runner --profile production --start-date 2026-01-05 --end-date 2026-05-08
 
 Side Effects:
     - 写 ledger 文件 (parquet)
@@ -47,7 +32,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -55,30 +39,17 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from stop_experiment.backtest.daily_state_machine import step_day
-from stop_experiment.backtest.simple_backtest import score_stocks
+from stop_experiment.backtest.simple_backtest import score_stocks, load_daily_prices, build_price_pivot
 from stop_experiment.pipeline.live_ledger import (
     load_holdings, save_holdings, save_decisions, save_executions,
 )
 from stop_experiment.pipeline.stop_config import (
-    OUTPUT_DIR, PREDICTIONS_DIR, HOLDINGS_DIR, DECISIONS_DIR, EXECUTIONS_DIR,
-    LIVE_DIR, BACKTEST_LEDGER_DIR, REPLAY_LEDGER_DIR,
+    OUTPUT_DIR, BACKTEST_LEDGER_DIR,
     PRODUCTION_PARAMS,
-    BUY_COST, SELL_COST,
+    BUY_COST, SELL_COST, CANDIDATE_OBS_DAYS,
 )
 
 DEFAULT_MAX_STOCKS = 10
-
-MODE_BASE_DIR = {
-    "backtest": BACKTEST_LEDGER_DIR,
-    "replay": REPLAY_LEDGER_DIR,
-    "live": LIVE_DIR,
-}
-
-
-def _resolve_base_dir(mode, base_dir=None):
-    if base_dir is not None:
-        return base_dir
-    return MODE_BASE_DIR.get(mode, LIVE_DIR)
 
 
 def _resolve_prev_decision_date(target_date, trading_days, pred_lookup):
@@ -140,6 +111,14 @@ def _get_day_open_next(target_date, price_pivot, trading_days):
     return None
 
 
+def validate_daily_inputs(target_date, holdings, price_pivot, pred_lookup):
+    if target_date not in price_pivot.index:
+        raise RuntimeError(f"[VALIDATE] 缺少当日价格数据: {target_date.strftime('%Y-%m-%d')}")
+    day_close = price_pivot.loc[target_date, "close"]
+    if day_close.isna().all():
+        raise RuntimeError(f"[VALIDATE] 当日收盘价全部缺失: {target_date.strftime('%Y-%m-%d')}")
+
+
 def run_day(
     date,
     holdings,
@@ -153,14 +132,12 @@ def run_day(
     params,
     write_ledgers=False,
     base_dir=None,
+    holdings_base_dir=None,
 ):
-    """单日推进 — 唯一日状态推进入口"""
     if isinstance(date, str):
         date = pd.to_datetime(date)
 
     prev_dt = _resolve_prev_decision_date(date, trading_days, pred_lookup)
-
-    day_close = price_pivot.loc[date, "close"]
     day_open_next = _get_day_open_next(date, price_pivot, trading_days)
 
     step_params = {
@@ -178,8 +155,8 @@ def run_day(
     )
 
     if write_ledgers:
-        _base = _resolve_base_dir("custom", base_dir)
-        _hold_dir = os.path.join(_base, "holdings")
+        _base = base_dir or BACKTEST_LEDGER_DIR
+        _hold_dir = holdings_base_dir or os.path.join(_base, "holdings")
         save_executions(
             date,
             step_result["executed_buys"],
@@ -195,7 +172,7 @@ def run_day(
             step_result["pending_sells"],
             step_result["sell_reasons"],
             extra=step_result.get("extra", {}),
-            day_close=day_close,
+            day_close=price_pivot.loc[date, "close"],
             base_dir=_base,
         )
         save_holdings(date, step_result["holdings"], base_dir=_hold_dir)
@@ -206,45 +183,73 @@ def run_day(
 def run_range(
     start_date=None,
     end_date=None,
-    mode="backtest",
-    prediction_source=None,
+    profile=None,
     params=None,
     initial_holdings=None,
     write_ledgers=True,
     postprocess=True,
     base_dir=None,
-    verify=False,
 ):
-    """多日连续运行 — 统一回测/回放/模拟盘入口"""
+    if profile is not None:
+        try:
+            from stop_experiment.registries import resolve_profile_params
+            resolved = resolve_profile_params(profile)
+            print(f"  [profile] {profile} → strategy_version={resolved.get('strategy_version')}")
+        except Exception as e:
+            print(f"  [profile] 无法解析 profile '{profile}': {e}, 使用默认 params")
+            resolved = {}
+        if params is None:
+            params = resolved
+        elif isinstance(params, dict) and isinstance(resolved, dict):
+            merged = dict(resolved)
+            merged.update(params)
+            params = merged
     if params is None:
         params = PRODUCTION_PARAMS
-    if prediction_source is None:
-        prediction_source = "full_test" if mode in ("backtest", "replay") else "daily_parquet"
 
-    _base = _resolve_base_dir(mode, base_dir)
+    _base = base_dir or BACKTEST_LEDGER_DIR
 
     print(f"\n{'='*70}")
-    print(f"  统一策略引擎 — mode={mode}, prediction_source={prediction_source}")
+    print(f"  策略引擎 — 回测模式")
     print(f"  ledger: {_base}")
     print(f"{'='*70}")
 
-    # ---- 加载数据 ----
-    if prediction_source == "full_test":
+    daily = load_daily_prices("2024-01-01", "2027-01-01")
+    price_pivot, trading_days, prev_close_map = build_price_pivot(daily)
+    sorted_td = sorted(trading_days)
+
+    if start_date is not None:
+        sd = pd.to_datetime(start_date) if isinstance(start_date, str) else start_date
+    else:
+        sd = sorted_td[0]
+    if end_date is not None:
+        ed = pd.to_datetime(end_date) if isinstance(end_date, str) else end_date
+    else:
+        ed = sorted_td[-1]
+    target_dates = [d for d in sorted_td if sd <= d <= ed]
+
+    pname = profile or "production"
+    from stop_experiment.registries.prediction_store import read_prediction_store_range
+    df_all, pred_lookup = read_prediction_store_range(pname, target_dates)
+
+    if df_all.empty:
+        print("  [LEGACY] prediction_store 无数据，fallback 到 full_test_predictions.parquet (已过时)")
         from stop_experiment.backtest.dynamic_exit_backtest_v2 import _load_data
-        candidate_obs_days = params.get("candidate_obs_days", [1])
-        test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data(
-            candidate_obs_days=candidate_obs_days
-        )
+        test_df, price_pivot2, trading_days2, prev_close_map2, pred_lookup2 = _load_data()
+        if not (not price_pivot.empty and price_pivot2.empty):
+            price_pivot, trading_days, prev_close_map = price_pivot2, trading_days2, prev_close_map2
+        pred_lookup = pred_lookup2
         df_all = test_df.copy()
         if "obs_date" in df_all.columns:
             df_all["obs_date"] = pd.to_datetime(df_all["obs_date"])
-        df_all = df_all[df_all["obs_day"].isin(candidate_obs_days)].copy()
+        df_all = df_all[df_all["obs_day"].isin(CANDIDATE_OBS_DAYS)].copy()
+        if "ts_code" in df_all.columns and "obs_date" in df_all.columns:
+            df_all = df_all.sort_values("obs_day").drop_duplicates(subset=["ts_code", "obs_date"], keep="first")
         df_all = score_stocks(df_all, "sell_score")
-        print(f"  候选: {len(df_all)} 行 (全量预测), 交易日: {len(trading_days)}")
+        print(f"  候选: {len(df_all)} 行 (LEGACY full_test), 交易日: {len(trading_days)}")
     else:
-        raise NotImplementedError("daily_parquet 模式请使用 run_daily.py 或 09_paper_trading_runner.py")
+        print(f"  候选: {len(df_all)} 行 (prediction_store), 交易日: {len(trading_days)}, pred_lookup: {len(pred_lookup)}")
 
-    # ---- 确定日期范围 ----
     sorted_td = sorted(trading_days)
     dates = list(sorted_td)
     if start_date is not None:
@@ -256,7 +261,6 @@ def run_range(
 
     print(f"  运行日期: {len(dates)} 日 ({dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')})\n")
 
-    # ---- 日循环 ----
     holdings = dict(initial_holdings) if initial_holdings else {}
     pending_buys = []
     pending_sells = []
@@ -291,7 +295,6 @@ def run_range(
         print(f"  {tdate.strftime('%Y-%m-%d')}: hold={n_hold} buy_exec={n_buys} sell_exec={n_sells} "
               f"pb={len(pending_buys)} ps={len(pending_sells)}")
 
-    # ---- 后处理 ----
     if postprocess and write_ledgers:
         from stop_experiment.pipeline.build_live_equity_curve import (
             build_live_equity_curve, save_live_equity_curve,
@@ -314,10 +317,6 @@ def run_range(
             final_nav = eq_df["nav_live"].iloc[-1]
             print(f"  最终 NAV: {final_nav:.4f}")
 
-    # ---- 对账 ----
-    if verify and mode == "replay":
-        _verify_ledgers(BACKTEST_LEDGER_DIR, REPLAY_LEDGER_DIR)
-
     return {
         "results": results,
         "final_holdings": holdings,
@@ -325,95 +324,25 @@ def run_range(
     }
 
 
-def _verify_ledgers(bt_dir, rp_dir):
-    """对比两个 ledger 目录的 holdings/decisions/executions"""
-    print(f"\n{'='*70}")
-    print(f"对账: {bt_dir} vs {rp_dir}")
-    print(f"{'='*70}")
-
-    bt_hold = os.path.join(bt_dir, "holdings") if not bt_dir.endswith("holdings") else bt_dir
-    rp_hold = os.path.join(rp_dir, "holdings") if not rp_dir.endswith("holdings") else rp_dir
-
-    bt_dec = os.path.join(bt_dir, "decisions")
-    rp_dec = os.path.join(rp_dir, "decisions")
-
-    mismatches = 0
-    total = 0
-
-    # 对比 holdings
-    if os.path.isdir(bt_hold) and os.path.isdir(rp_hold):
-        bt_files = set(os.listdir(bt_hold))
-        rp_files = set(os.listdir(rp_hold))
-        common = bt_files & rp_files
-        for f in sorted(common):
-            bt_df = pd.read_parquet(os.path.join(bt_hold, f))
-            rp_df = pd.read_parquet(os.path.join(rp_hold, f))
-            total += 1
-            if not bt_df.equals(rp_df):
-                mismatches += 1
-                print(f"  [HOLDINGS MISMATCH] {f}: bt={len(bt_df)} rp={len(rp_df)}")
-        missing_bt = bt_files - rp_files
-        missing_rp = rp_files - bt_files
-        if missing_bt:
-            print(f"  [MISSING in replay] {sorted(missing_bt)}")
-            mismatches += len(missing_bt)
-        if missing_rp:
-            print(f"  [MISSING in backtest] {sorted(missing_rp)}")
-            mismatches += len(missing_rp)
-
-    # 对比 decisions
-    if os.path.isdir(bt_dec) and os.path.isdir(rp_dec):
-        bt_files = set(os.listdir(bt_dec))
-        rp_files = set(os.listdir(rp_dec))
-        common = bt_files & rp_files
-        for f in sorted(common):
-            bt_df = pd.read_parquet(os.path.join(bt_dec, f))
-            rp_df = pd.read_parquet(os.path.join(rp_dec, f))
-            total += 1
-            if len(bt_df) != len(rp_df):
-                mismatches += 1
-                print(f"  [DECISIONS MISMATCH] {f}: bt={len(bt_df)} rp={len(rp_df)}")
-
-    if mismatches == 0:
-        print(f"  对账通过: {total} 个文件完全一致")
-    else:
-        print(f"  对账失败: {mismatches} 处不一致 (共 {total} 个文件)")
-
-
 def main():
-    parser = argparse.ArgumentParser(description="统一策略执行引擎")
-    parser.add_argument("--mode", choices=["backtest", "replay", "live"], default="backtest")
-    parser.add_argument("--date", type=str, default=None, help="单日 YYYY-MM-DD")
+    parser = argparse.ArgumentParser(description="策略执行引擎 — 回测模式")
+    parser.add_argument("--profile", type=str, default=None,
+                        help="运行 profile (如 production)")
     parser.add_argument("--start-date", type=str, default=None)
     parser.add_argument("--end-date", type=str, default=None)
-    parser.add_argument("--batch-all", action="store_true")
-    parser.add_argument("--verify", action="store_true", help="replay 模式对账")
     parser.add_argument("--no-postprocess", action="store_true", help="跳过后处理")
     args = parser.parse_args()
 
-    if args.mode == "live":
-        raise NotImplementedError(
-            "live 模式请使用 run_daily.py 或 09_paper_trading_runner.py\n"
-            "strategy_runner 的 live 模式将在 Phase 5 完成后启用"
-        )
-
-    start = args.start_date
-    end = args.end_date
-    if args.date:
-        start = args.date
-        end = args.date
-
     result = run_range(
-        start_date=start,
-        end_date=end,
-        mode=args.mode,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        profile=args.profile,
         write_ledgers=True,
         postprocess=not args.no_postprocess,
-        verify=args.verify,
     )
 
     print(f"\n{'='*70}")
-    print(f"  运行完成: mode={args.mode}, ledger={result['base_dir']}")
+    print(f"  运行完成: ledger={result['base_dir']}")
     print(f"{'='*70}")
 
 

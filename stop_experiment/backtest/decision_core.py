@@ -37,24 +37,30 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np
 import pandas as pd
 
+BUY_BUFFER = 5
 
-def find_exit_pred(signal_id, prev_date, pred_lookup):
+
+def find_exit_pred(signal_id, prev_date, pred_lookup, ts_code=None):
     """
-    严格精确匹配：查找 (signal_id, prev_date) 的预测。
+    查找持仓股票在前一交易日的预测。
 
-    不再使用回退逻辑（不再查找 <= prev_date 的最新日期），
-    因为使用过期预测做决策是危险的（回测和 replay 口径不一致）。
+    优先按 (signal_id, prev_date) 精确匹配，
+    fallback 到 (ts_code, prev_date) 按股票代码匹配。
 
     Input:
         signal_id:    信号 ID
         prev_date:    当前决策日的前一个交易日
-        pred_lookup:  {(signal_id, obs_date): pred_dict}
+        pred_lookup:  {(signal_id, obs_date): pred_dict} 和 {(ts_code, obs_date): pred_dict}
+        ts_code:      股票代码（用于 fallback 查找）
 
     Output:
         pred_dict 或 None
     """
     sid_int = int(signal_id)
-    return pred_lookup.get((sid_int, prev_date))
+    result = pred_lookup.get((sid_int, prev_date))
+    if result is None and ts_code:
+        result = pred_lookup.get((ts_code, prev_date))
+    return result
 
 
 def evaluate_model_exit(holding, code, prev_date, pred_lookup, threshold=None):
@@ -82,7 +88,8 @@ def evaluate_model_exit(holding, code, prev_date, pred_lookup, threshold=None):
     _threshold = threshold if threshold is not None else PRODUCTION_PARAMS.get("buy_cls_exit_threshold", 0.70)
 
     if signal_id is not None and days_held > 1 and prev_date is not None:
-        pred = find_exit_pred(signal_id, prev_date, pred_lookup)
+        ts_code = holding.get("ts_code")
+        pred = find_exit_pred(signal_id, prev_date, pred_lookup, ts_code=ts_code)
         if pred is not None:
             bc = pred.get("pred_buy_cls", np.nan)
             if not np.isnan(bc) and bc > _threshold:
@@ -182,14 +189,14 @@ def evaluate_eod_exits(holdings, prev_date, pred_lookup,
         # c. model_exit (supporting sub-modes: X1/X3/X4)
         sid = h.get("signal_id")
         if sid is not None and prev_date is not None and h["days_held"] > 1:
-            pred = find_exit_pred(sid, prev_date, pred_lookup)
+            tc = h.get("ts_code")
+            pred = find_exit_pred(sid, prev_date, pred_lookup, ts_code=tc)
             if pred is not None:
                 bc = pred.get("pred_buy_cls", np.nan)
 
                 if exit_sub_mode == "sell_decay":
-                    # X3: buy_cls > threshold 且 sell_reg 较前日下降
                     sr = pred.get("pred_sell_reg", np.nan)
-                    prev_pred = find_exit_pred(sid, prev_decision_date, pred_lookup) if prev_decision_date else None
+                    prev_pred = find_exit_pred(sid, prev_decision_date, pred_lookup, ts_code=tc) if prev_decision_date else None
                     sr_prev = prev_pred.get("pred_sell_reg", np.nan) if prev_pred else np.nan
                     if (not np.isnan(bc) and bc > _threshold and
                             not np.isnan(sr) and not np.isnan(sr_prev) and sr < sr_prev):
@@ -285,7 +292,8 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
         if h["days_held"] > 1 and prev_date is not None:
             sid = h.get("signal_id")
             if sid is not None:
-                pred = find_exit_pred(sid, prev_date, pred_lookup)
+                tc = h.get("ts_code")
+                pred = find_exit_pred(sid, prev_date, pred_lookup, ts_code=tc)
                 if pred is not None:
                     bc = pred.get("pred_buy_cls", np.nan)
 
@@ -295,7 +303,7 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
 
                     if exit_sub_mode == "sell_decay":
                         sr = pred.get("pred_sell_reg", np.nan)
-                        prev_pred = find_exit_pred(sid, prev_decision_date, pred_lookup) if prev_decision_date else None
+                        prev_pred = find_exit_pred(sid, prev_decision_date, pred_lookup, ts_code=tc) if prev_decision_date else None
                         sr_prev = prev_pred.get("pred_sell_reg", np.nan) if prev_pred else np.nan
                         if (not np.isnan(bc) and bc > exit_threshold and
                                 not np.isnan(sr) and not np.isnan(sr_prev) and sr < sr_prev):
@@ -315,7 +323,9 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
     # ---- 3. 新买入 ----
     # n_avail: 预留 pending_sells 的仓位（sell 在下日开盘执行后释放额度）
     # holdings 此时仍包含 pending_sells（尚未执行），所以 n_avail = max - (|H| - |S|) = max - |H| + |S|
+    # BUY_BUFFER: 多生成替补候选，当 T+1 执行时因涨停/停牌跳过可替补
     n_avail = max_stocks - len(holdings) + len(pending_sells)
+    n_generate = n_avail + BUY_BUFFER
     pending_buys = []
     if n_avail > 0 and not candidates.empty and day_open_next is not None:
         score_col = "score" if "score" in candidates.columns else "composite_score"
@@ -328,7 +338,7 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
         used_codes = set()
 
         for _, row in cand_sorted.iterrows():
-            if len(used_codes) >= n_avail:
+            if len(used_codes) >= n_generate:
                 break
 
             ts_code = row.get("ts_code") or row.get("code")
@@ -357,11 +367,13 @@ def decide_eod(decision_date, holdings, candidates, pred_lookup, prev_date,
     # ---- extra: rich reason for action plan ----
     buy_details = []
     for idx, (code, bp, ts_code, sc, sid) in enumerate(pending_buys):
+        is_reserve = idx >= n_avail
+        role = "替补" if is_reserve else "主候选"
         buy_details.append({
             "code": code, "ts_code": ts_code, "signal_id": sid,
             "score": sc if isinstance(sc, (int, float)) else (float(sc) if sc is not None else 0),
-            "rank": idx + 1, "obs_day": None,
-            "why": f"候选池排序第{idx+1} → 组合空位允许 → 不在持仓中 → 生成T+1买入单",
+            "rank": idx + 1, "obs_day": None, "is_reserve": is_reserve,
+            "why": f"候选池排序第{idx+1}({role}) → 组合空位允许 → 不在持仓中 → 生成T+1买入单",
         })
     sell_details = []
     for item in pending_sells:

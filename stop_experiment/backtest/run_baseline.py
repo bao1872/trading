@@ -38,7 +38,7 @@ def main():
 
     print("=" * 60)
     print(f"基线回测 (统一引擎)")
-    print(f"  obs_day={p.get('candidate_obs_days', [1])}, max_stocks={p.get('max_stocks_default', 10)}, "
+    print(f"  obs_day∈[1,2,3], max_stocks={p.get('max_stocks_default', 10)}, "
           f"exit_th={p.get('buy_cls_exit_threshold', 0.70)}")
     print(f"  ledger: {BACKTEST_LEDGER_DIR}")
     print("=" * 60)

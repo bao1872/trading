@@ -1,501 +1,361 @@
-按你这次上传的**最新版代码**，我给你的具体重构建议只有一句话：
+结论先说：**验证集会间接影响最终模型参数**，但不应该像训练集那样直接参与每一轮梯度更新。你这个项目里，验证集实际有两层影响：
 
-## **不要再让 `dynamic_exit_backtest_v2.py` 继续当主引擎。**
+1. **早停阶段**：`val` 用来决定 `best_iteration`，也就是树的数量。
+2. **最终模型阶段**：代码又用 `train + val` 重训 `_final.txt` 模型，所以验证集最终被纳入了最终模型训练样本。
 
-**以后只保留一套执行引擎：以 `09_paper_trading_runner.py + daily_state_machine.py + decision_core.py + live_ledger.py` 为唯一内核。**
-回测、回放、生产都只是这个引擎的不同 **mode**。
-
-这不是方向建议，是**具体改法**。
+所以严格说：**当前项目里的验证数据会影响最终输出模型参数**。这不一定错，但要明确：此时 `val` 已经不再是完全独立验证集，真正独立评估只能看 `test`，也就是 `obs_date > 2025-12-31`。
 
 ---
 
-# 一、我基于最新版代码的判断
+## 你现在的问题：回测 NAV 很高，但实盘 sell_cls / sell_reg 很低
 
-你现在代码里已经有一个“半成品统一引擎”了：
-
-## 已经适合当唯一内核的部分
-
-* `backtest/decision_core.py`
-  统一决策核
-* `backtest/daily_state_machine.py`
-  统一日状态推进
-* `pipeline/live_ledger.py`
-  统一账本读写
-* `pipeline/09_paper_trading_runner.py`
-  已经在用 `step_day()` 跑单日和批量
-* `pipeline/build_live_equity_curve.py`
-* `pipeline/build_live_trade_report.py`
-* `pipeline/12_build_operator_packet.py`
-
-## 还在拖后腿的部分
-
-* `backtest/dynamic_exit_backtest_v2.py`
-  还在自己维护一套独立日循环、交易记录、净值逻辑
-* `backtest/run_baseline.py`
-  还是直接调用 `dynamic_exit_backtest_v2._load_data/run_backtest`
-* `pipeline/06_daily_inference_replay.py`
-  现在是“双系统混用”最严重的地方：一边 import `run_backtest`，一边又 import `step_day`
-
-**这就是你现在口径混乱的根。**
+我看了你上传的代码，最可疑的不是“验证集是否污染模型”，而是下面几类问题。
 
 ---
 
-# 二、你要的目标架构：单引擎，多模式
+## 1. 回测可能吃到了“离线全量特征”，实盘吃的是“在线临时构造特征”
 
-我建议你直接做成下面这个结构。
-
-## 新的唯一执行入口
-
-新建一个文件：
-
-**`stop_experiment/engine/strategy_runner.py`**
-如果你不想新建目录，也可以放在：
-
-**`stop_experiment/pipeline/strategy_runner.py`**
-
-我建议新建 `engine/`，因为它不属于纯 pipeline，也不属于纯 backtest。
-
----
-
-## 这个文件只暴露两个函数
-
-### 1. `run_day()`
-
-负责单日推进
+你的 `07_generate_daily_predictions.py` 有一个关键逻辑：
 
 ```python
-def run_day(
-    date,
-    holdings,
-    pending_buys,
-    pending_sells,
-    predictions_df,
-    price_pivot,
-    trading_days,
-    prev_close_map,
-    params,
-    write_ledgers=False,
-    ledger_base_dir=None,
-):
+# 优先从 full_test_predictions 提取
+ftp_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
+if os.path.exists(ftp_path) and not force:
     ...
+    day_data = ftp[ftp["obs_date"] == target_date].copy()
 ```
 
-它内部只做这几件事：
+也就是说：
 
-1. 用统一的 candidate pool builder 生成当日候选池
-2. 计算 prev_decision_date
-3. 调 `step_day()`
-4. 如果 `write_ledgers=True`，就调用 `live_ledger` 写：
+* 回测 / replay 很可能直接读 `full_test_predictions.parquet`
+* 而 live / force 推理时才会重新从 DB 构造候选、K线、因子、派生特征，再模型预测
 
-   * holdings
-   * decisions
-   * executions
-5. 返回统一结果结构
+这会导致一个非常典型的问题：
 
----
+> 回测 NAV 很高，是因为用的是训练管线产出的离线预测；
+> 实盘 sell_reg / sell_cls 很低，是因为实盘实时构造出来的特征分布和训练时不一致。
 
-### 2. `run_range()`
-
-负责多日连续运行
+尤其你这里实时推理有：
 
 ```python
-def run_range(
-    start_date,
-    end_date,
-    mode,                 # "backtest" | "replay" | "live"
-    prediction_source,    # "full_test" | "daily_parquet"
-    params,
-    initial_holdings=None,
-    write_ledgers=True,
-    ledger_base_dir=None,
-    postprocess=True,
-):
-    ...
+kline_start = target_date - 1300 days
 ```
 
-它内部只做：
-
-1. 按日期循环
-2. 每天读取 predictions
-3. 每天调用 `run_day()`
-4. 循环结束后调用统一后处理：
-
-   * `build_live_equity_curve`
-   * `build_live_trade_report`
-   * `12_build_operator_packet`（只在 live 模式）
-
----
-
-# 三、三种模式怎么定义
-
-## mode = `backtest`
-
-用途：研究基线、历史回测
-
-* `prediction_source = "full_test"`
-* 初始持仓 = 空仓
-* 输出 ledger 到：
-
-  * `output/backtest_ledger/`
-* 最后生成：
-
-  * `baseline_e0_x1_v1_nav.csv`
-  * `baseline_e0_x1_v1_trades.csv`
-  * equity curve
-  * trade report
-
-**注意：backtest 不再自己算净值和交易表，而是从同一套 ledger 重建。**
-
----
-
-## mode = `replay`
-
-用途：一致性验证
-
-* `prediction_source = "full_test"`
-* 初始持仓 = 空仓 / 指定起始状态
-* 输出 ledger 到：
-
-  * `output/replay_ledger/`
-* 只用于跟 backtest 对账
-
----
-
-## mode = `live`
-
-用途：每日盘后生产
-
-* `prediction_source = "daily_parquet"`
-* 初始持仓 = `load_holdings()`
-* 输出 ledger 到：
-
-  * `output/live/...`
-* 自动生成：
-
-  * equity curve
-  * trade report
-  * action plan
-  * operator packet
-
----
-
-# 四、具体到文件，怎么改
-
-## 1. 保留并继续用的文件
-
-这些不需要推倒重写：
-
-* `backtest/decision_core.py`
-* `backtest/daily_state_machine.py`
-* `pipeline/live_ledger.py`
-* `pipeline/build_live_equity_curve.py`
-* `pipeline/build_live_trade_report.py`
-* `pipeline/12_build_operator_packet.py`
-
-这些就是你未来唯一引擎的核心零件。
-
----
-
-## 2. 必须重构的文件
-
-### A. `pipeline/09_paper_trading_runner.py`
-
-**不要再叫 paper_trading_runner 了。**
-
-处理方式：
-
-* 把它重命名为：
-
-  * `engine/strategy_runner.py`
-  * 或 `pipeline/strategy_runner.py`
-* 当前 09 里的这些函数直接迁进去：
-
-  * `validate_daily_inputs`
-  * `validate_daily_outputs`
-  * `_build_candidate_pool`
-  * `run_single_day`
-  * `run_batch`
-
-### B. `backtest/run_baseline.py`
-
-改成一个**薄 wrapper**：
+而训练构造 batch 时是：
 
 ```python
-from stop_experiment.engine.strategy_runner import run_range
-...
-run_range(
-    start_date=...,
-    end_date=...,
-    mode="backtest",
-    prediction_source="full_test",
-    params=BASELINE_E0_X1_V1_PARAMS,
-    ledger_base_dir=...,
-)
+batch_kline_start = min(selection_date) - 150 days
+batch_kline_end = max(selection_date) + 60 days
 ```
 
-它以后不再直接 import：
+这两套 K 线 warm-up、信号展开、因子计算窗口不完全一致。对 DSA、BBMacd、PAVP、ATR Rope 这类状态因子来说，**只要历史窗口、起始点、复权、停牌处理、K线源有细微不同，模型输出就会明显变形**。
 
-* `_load_data`
-* `run_backtest`
+### 建议
 
-### C. `pipeline/06_daily_inference_replay.py`
+你现在第一优先级不是调模型，而是跑这个一致性检查：
 
-这是必须重写的。
+```bash
+python -m stop_experiment.tests_consistency.compare_prediction_sources
+```
 
-现在它最混乱，因为它同时依赖：
+重点看同一天同一个 `signal_id + obs_day` 下：
 
-* `dynamic_exit_backtest_v2.run_backtest`
-* `daily_state_machine.step_day`
+* `pred_sell_reg` 差异
+* `pred_sell_cls` 差异
+* top10 overlap
+* live 特征构造是否和 `full_test_predictions` 一致
 
-**改法：**
-它以后只允许调用：
+如果这个检查不通过，说明实盘低分不是模型判断市场差，而是**在线特征与离线特征不一致**。
+
+---
+
+## 2. 你的回测基准 NAV 可能来自极强的 test 内参数选择，有过拟合风险
+
+`stop_config.py` 里写了：
 
 ```python
-run_range(..., mode="replay", prediction_source="full_test")
+expected_nav = 6.1722
+expected_sharpe = 14.77
+expected_mdd = -0.0671
+expected_n_trades = 59
 ```
 
-然后把输出结果和 backtest ledger 对比。
-**不准再自己拼另一套 replay 逻辑。**
+这个回测结果非常高，而且交易次数只有 59 笔。这里要警惕：
 
-### D. `run_daily.py`
+> 低交易次数 + 多参数搜索 + test 回测选最优，很容易得到“漂亮但不可迁移”的 NAV。
 
-保持为 orchestration 层，但把 Step 3 改成：
+你代码里有很多策略组合：
+
+* `candidate_obs_days`
+* `score_col`
+* `buy_cls_exit_threshold`
+* `stop_loss`
+* `max_hold_days`
+* `exit_mode`
+* `exit_sub_mode`
+* top-k
+* fixed_hold / model_exit
+
+如果这些是在 2026 test 段反复调出来的，那 test 实际已经变成“调参集”，不是独立验证集。
+
+### 建议
+
+把时间切成四层，而不是三层：
+
+| 层级                 | 用途                    |
+| ------------------ | --------------------- |
+| train              | 训练模型                  |
+| val                | early stopping / 模型选择 |
+| strategy_val       | 调交易参数，如阈值、top-k、退出规则  |
+| final_test / paper | 完全不参与任何调参，只验收         |
+
+否则你现在的 `expected_nav=6.17` 可能只是策略参数贴合了 2026 年前几个月的样本。
+
+---
+
+## 3. sell_reg / sell_cls 低，不一定是坏事，可能是当前候选池质量真的变差
+
+你的标签定义是：
 
 ```python
-python -m stop_experiment.engine.strategy_runner --mode live --date ...
+sell_reg = mfe_20
+sell_cls = mfe_20 > 7%
 ```
 
-而不是调用旧的 `09_paper_trading_runner.py`。
+也就是说：
+
+* `pred_sell_reg` 低 = 模型认为未来 20 日最大上涨空间低
+* `pred_sell_cls` 低 = 模型认为未来 20 日涨超 7% 的概率低
+
+如果实盘阶段整个市场环境、题材强度、波动率、成交量结构和训练 / 回测阶段不同，那么 sell 模型整体压低是正常的。
+
+你要区分两种情况：
+
+### 情况 A：所有股票都低，但排序仍然有效
+
+这不是大问题。模型分数低只是绝对值漂移，但 top10 仍然可能有相对优势。
+
+检查方法：
+
+```text
+每天 pred_sell_reg 的横截面分位数
+每天 top10 的 pred_sell_reg 是否仍明显高于全池中位数
+每天 top10 后续 5/10/20 日收益是否仍优于全池
+```
+
+### 情况 B：所有股票都低，且 top10 也没有优势
+
+这说明模型失效或候选池失效，需要重训或改标签。
 
 ---
 
-## 3. 降级为 legacy wrapper 的文件
+## 4. 你现在的生产排序只看 pred_sell_reg，可能太单薄
 
-### `backtest/dynamic_exit_backtest_v2.py`
-
-不要再继续扩它。
-
-处理方式：
-
-* 保留一段时间，防止旧脚本炸
-* 但只允许它做两件事：
-
-  1. 读取旧数据
-  2. 调用新的 `run_range(mode="backtest")`
-
-也就是说，**它以后只是兼容壳，不再是主实现。**
-
----
-
-# 五、参数源必须同时收敛
-
-你现在最新版 `stop_config.py` 里有这几句：
-
-* `PRODUCTION_PARAMS = BASELINE_E0_X1_V1_PARAMS`
-* `V1_PARAMS = PRODUCTION_PARAMS`
-* `BASELINE_3Y_PARAMS = PRODUCTION_PARAMS`
-
-这能临时救火，但长期一定继续制造混乱。
-
-## 我的建议
-
-### 第一阶段
-
-先保留兼容别名，但在代码里新增一条规则：
-
-**新代码只能 import：**
-
-* `PRODUCTION_PARAMS`
-* `BASELINE_E0_X1_V1_PARAMS`
-
-**不准再新增任何地方 import `V1_PARAMS`。**
-
-### 第二阶段
-
-等 `run_baseline / 06 / 09 / run_daily` 都迁完后，**删除**：
-
-* `V1_PARAMS`
-* `BASELINE_3Y_PARAMS`
-  这些兼容别名。
-
----
-
-# 六、账本路径也要统一，不要再散
-
-你现在账本有点分散：
-
-* `output/holdings/`
-* `output/live/decisions/`
-* `output/live/executions/`
-
-我建议重构时统一成：
-
-## 统一 ledger base dir
-
-让 `live_ledger.py` 支持传 `base_dir`：
+配置里：
 
 ```python
-load_holdings(date, base_dir=...)
-save_holdings(date, holdings, base_dir=...)
-save_decisions(date, ..., base_dir=...)
-save_executions(date, ..., base_dir=...)
+"score_col": "pred_sell_reg"
 ```
 
-然后不同 mode 用不同目录：
-
-### backtest
-
-* `output/backtest_ledger/holdings/`
-* `output/backtest_ledger/decisions/`
-* `output/backtest_ledger/executions/`
-
-### replay
-
-* `output/replay_ledger/...`
-
-### live
-
-* `output/live_ledger/...`
-
-如果你暂时不想动目录结构，也至少要把 `base_dir` 参数化，不要再写死路径。
-
----
-
-# 七、后处理也要统一，不要回测一套、生产一套
-
-你现在已经有：
-
-* `build_live_equity_curve.py`
-* `build_live_trade_report.py`
-
-这其实已经够了。
-
-## 我的明确建议
-
-以后所有模式都走这两套后处理。
-
-### backtest
-
-不再单独用：
-
-* `backtest/build_equity_curve.py`
-* `backtest/trade_report.py`
-
-而是统一从 ledger 重建。
-
-如果你想保留旧文件，也可以把它们改成 wrapper：
+而 `generate_full_predictions.py` 里如果没有 `score`，也是：
 
 ```python
-from stop_experiment.pipeline.build_live_equity_curve import ...
-from stop_experiment.pipeline.build_live_trade_report import ...
+test_df["score"] = test_df.get("pred_sell_reg", 0)
+```
+
+这意味着生产入口主要是：
+
+> 谁未来最大上涨空间高，就买谁。
+
+但你明明训练了四个模型：
+
+* `sell_reg`: 未来最大上涨空间
+* `sell_cls`: 未来涨超 7% 的概率
+* `buy_reg`: 未来最大回撤
+* `buy_cls`: 未来跌超 7% 的概率
+
+实盘只用 `sell_reg` 做入口，容易选到“有弹性但风险也大”的票，或者在模型低置信阶段没有足够过滤。
+
+### 建议改成双门控，而不是单排序
+
+生产候选建议用：
+
+```text
+入选条件：
+1. pred_sell_reg 进入当日全池前 20%
+2. pred_sell_cls 进入当日全池前 30%
+3. pred_buy_cls 不进入高风险区，例如低于当日 70% 分位
+4. pred_buy_reg 不太差，例如高于当日 30% 分位
+
+排序分数：
+score = rank(pred_sell_reg) * 0.45
+      + rank(pred_sell_cls) * 0.25
+      + rank(pred_buy_reg)  * 0.20
+      - rank(pred_buy_cls)  * 0.10
+```
+
+注意这里建议先用**横截面 rank / percentile**，不要直接用原始数值。因为实盘阶段绝对分数容易漂移。
+
+---
+
+## 5. sell_cls 低可能来自分类模型概率未校准
+
+LightGBM 分类输出的概率不一定是真实概率。尤其你用了：
+
+```python
+scale_pos_weight = (1 - pos_rate) / pos_rate
+```
+
+这会改善分类排序，但可能破坏概率校准。结果就是：
+
+* AUC 可能不错
+* 但预测概率整体偏低或偏高
+* 你拿 `0.70` 这种绝对阈值做退出，可能不稳定
+
+### 建议
+
+不要直接用固定 `pred_buy_cls > 0.70` 或 `pred_sell_cls > 某值`，改用每日横截面分位：
+
+```text
+退出：
+pred_buy_cls >= 当日持仓/候选池 80% 分位
+并且 pred_sell_reg 较买入时或昨日下降
+```
+
+入口：
+
+```text
+pred_sell_cls >= 当日候选池 70% 分位
+而不是 pred_sell_cls > 0.5 / 0.7
 ```
 
 ---
 
-# 八、你现在最值得做的重构顺序
+## 6. 你现在的标签可能让 sell 模型学到的是“波动率”，不是“可交易收益”
 
-## Phase 1：先抽出统一 runner
+`sell_reg = future_high / obs_close - 1`
 
-新建 `engine/strategy_runner.py`，把 09 的主循环迁进去。
-先别追求完美，先能跑 live。
+这个标签是未来 20 日最高价相对当前价的涨幅。它的问题是：
 
-## Phase 2：让 run_daily 改调统一 runner
+> 只要盘中冲高过一次就算成功，但实盘未必能卖在最高点。
 
-这一步最重要，因为它直接影响生产链。
+所以回测如果用这个信号选股，容易买到“有最大振幅”的票，而不一定买到“能稳定赚钱”的票。
 
-## Phase 3：让 run_baseline 改调统一 runner
+### 建议加两个替代标签
 
-这一步完成后，backtest 和 live 就已经同壳了。
+保留原标签，但新增：
 
-## Phase 4：重写 06 replay
+```text
+ret_5_close  = 未来5日收盘收益
+ret_10_close = 未来10日收盘收益
+mdd_before_mfe = 达到最大上涨前经历的最大回撤
+tradable_mfe = 如果先跌破 -5%，则把 MFE 打折或置低
+```
 
-让 replay 不再有第二套执行逻辑。
+尤其是：
 
-## Phase 5：把 dynamic_exit_backtest_v2 降级为兼容壳
+```text
+good_trade = future_10d_close_return > 5%
+             且 max_drawdown_before_profit > -5%
+```
 
-到这一步，双系统才算真的结束。
+这比单纯 `mfe_20 > 7%` 更接近实盘。
 
 ---
 
-# 九、具体验收标准
+## 7. 我建议你现在按这个顺序排查
 
-你要的不只是“看起来统一”，而是必须用下面标准验收。
-
-## 验收 1：Baseline 不变
+### 第一步：确认是不是“预测源不一致”
 
 运行：
 
 ```bash
-python stop_experiment/backtest/run_baseline.py
+python -m stop_experiment.tests_consistency.compare_prediction_sources
 ```
 
-结果必须仍然是：
-
-* NAV ≈ 5.4621
-* Sharpe ≈ 13.89
-* MDD ≈ -0.0688
-* n_trades = 74
-
-## 验收 2：Replay 对齐
-
-运行：
-
-```bash
-python -m stop_experiment.pipeline.06_daily_inference_replay ...
-```
-
-必须满足：
-
-* 决策一致
-* 交易一致
-* 状态一致
-
-## 验收 3：Live 不退化
-
-运行：
-
-```bash
-python stop_experiment/run_daily.py --date <最新日期>
-```
-
-必须继续产出：
-
-* decisions
-* executions
-* holdings
-* live_equity_curve.csv
-* live_trade_report.csv
-* action plan
-* operator packet
-
-## 验收 4：代码层禁止双实现
-
-最后全局搜索时，除了 legacy wrapper 外：
-
-* 不准再有任何文件直接 import `dynamic_exit_backtest_v2.run_backtest`
-* 不准再有第二套独立日循环
+如果 fail，先不要调模型，优先修 `07_generate_daily_predictions.py` 和 `01_build_dataset.py` 的特征一致性。
 
 ---
 
-# 十、我给你的最终建议
+### 第二步：做预测分布漂移检查
 
-## 必须做
+对比三段：
 
-1. **新建 `engine/strategy_runner.py`**
-2. **把 09 的核心主循环迁进去**
-3. **让 run_daily / run_baseline / 06 都改调它**
-4. **把 dynamic_exit_backtest_v2 降级成 wrapper**
-5. **让后处理统一从 ledger 重建**
+```text
+train: obs_date <= 2025-06-30
+val:   2025-07-01 ~ 2025-12-31
+test:  2026-01-01 ~ 2026-05
+live:  当前实盘日期
+```
 
-## 不要做
+看：
 
-1. 不要继续在 `dynamic_exit_backtest_v2.py` 上补丁
-2. 不要继续让 06 自己维护 replay 逻辑
-3. 不要继续保留 `V1_PARAMS` 作为新代码参数源
-4. 不要同时维护两套净值曲线和交易报告生成方式
+```text
+pred_sell_reg mean / median / p90
+pred_sell_cls mean / median / p90
+pred_buy_cls mean / median / p90
+每日 top10 pred_sell_reg 均值
+每日全池 pred_sell_reg 均值
+```
+
+如果 live 全体低，但 top10 相对优势还在，可以用 rank。
+如果 live top10 也没优势，说明模型或候选池失效。
 
 ---
 
-## 一句话总结
+### 第三步：重做入口 score
 
-**基于你这次上传的最新版代码，最正确的重构不是“再补同步”，而是：以 `09_paper_trading_runner + daily_state_machine + live_ledger` 为唯一执行内核，回测、回放、生产全部改成调用同一个 `strategy_runner`。**
+不要再只用：
+
+```text
+score = pred_sell_reg
+```
+
+建议改成：
+
+```text
+score = 0.45 * rank(pred_sell_reg)
+      + 0.25 * rank(pred_sell_cls)
+      + 0.20 * rank(pred_buy_reg)
+      - 0.10 * rank(pred_buy_cls)
+```
+
+并加硬过滤：
+
+```text
+pred_buy_cls_pct <= 0.70
+pred_sell_reg_pct >= 0.70
+```
+
+---
+
+### 第四步：重新做 walk-forward 验证
+
+不要只看当前 `expected_nav=6.17`。建议固定一套流程：
+
+```text
+2023-03 ~ 2024-12 train
+2025-01 ~ 2025-06 val
+2025-07 ~ 2025-12 strategy_val
+2026-01 ~ 2026-05 final_test
+2026-05之后 paper/live
+```
+
+每次只允许在 `strategy_val` 调参数，`final_test` 只验收一次。
+
+---
+
+## 我对你这个问题的判断
+
+现在最可能的原因排序：
+
+| 优先级 | 问题                                         | 可能性 |
+| --- | ------------------------------------------ | --- |
+| 1   | 离线 full_test_predictions 与实盘 07 实时预测特征不一致  | 很高  |
+| 2   | 回测参数在 test 上调过，NAV 虚高                      | 高   |
+| 3   | sell_cls / sell_reg 原始分数发生市场漂移，应该用横截面 rank | 高   |
+| 4   | 分类概率未校准，固定阈值不稳定                            | 中高  |
+| 5   | 标签 `mfe_20` 过于理想化，和实盘可交易收益不一致              | 中高  |
+
+我的建议是：**先不要重训模型，也不要继续调阈值。先把“同一天、同信号、同 obs_day，离线预测和实盘预测是否完全一致”查清楚。**
+如果这一层不一致，后面所有 NAV、阈值、sell_cls/sell_reg 解释都不可靠。

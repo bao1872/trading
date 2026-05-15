@@ -322,11 +322,10 @@ def main(args):
         print(f"  sample_limit: {args.sample_limit}")
     print(f"  总行数: {len(df)}, 列数: {len(df.columns)}")
 
-    # 过滤可交易 + 有效标签
-    df = df[df["can_buy"] == 1].copy()
+    # 有效标签 (can_buy 过滤已移除: T+1 交易场景下涨停板次日可买入)
     df = df.dropna(subset=["mfe_20", "mae_20"])
     df = df.sort_values("obs_date").reset_index(drop=True)
-    print(f"  可交易+有效标签: {len(df)} 行")
+    print(f"  有效标签: {len(df)} 行")
 
     # 特征列
     feature_cols = [c for c in ALL_FEATURE_COLS if c in df.columns]

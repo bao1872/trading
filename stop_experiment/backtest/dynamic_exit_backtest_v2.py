@@ -152,8 +152,8 @@ def _calc_weights(codes, scores, mode, params):
 
 
 # ---- 数据加载 ----
-def _load_data(candidate_obs_days=None):
-    """加载全量预测和K线"""
+def _load_data():
+    """加载全量预测和K线。生产口径 obs_day=1 硬编码。"""
     full_pred_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
     if not os.path.exists(full_pred_path):
         raise FileNotFoundError(f"{full_pred_path} 不存在，请先运行 generate_full_predictions.py")
@@ -161,22 +161,23 @@ def _load_data(candidate_obs_days=None):
     full_pred = pd.read_parquet(full_pred_path)
     full_pred["obs_date"] = pd.to_datetime(full_pred["obs_date"])
 
-    # 构建预测查找键
     prediction_lookup = {}
     for _, row in full_pred.iterrows():
-        key = (int(row["signal_id"]), row["obs_date"])
-        prediction_lookup[key] = {
+        pred_dict = {
             "pred_buy_cls": float(row.get("pred_buy_cls", np.nan)),
             "pred_sell_reg": float(row.get("pred_sell_reg", np.nan)),
             "pred_sell_cls": float(row.get("pred_sell_cls", np.nan)),
             "pred_buy_reg": float(row.get("pred_buy_reg", np.nan)),
             "composite_score": float(row.get("composite_score", np.nan)) if "composite_score" in row else np.nan,
         }
+        sid_key = (int(row["signal_id"]), row["obs_date"])
+        prediction_lookup[sid_key] = pred_dict
+        ts_code = row.get("ts_code")
+        if ts_code:
+            ts_key = (ts_code, row["obs_date"])
+            prediction_lookup[ts_key] = pred_dict
 
-    # 买入候选池
-    if candidate_obs_days is None:
-        candidate_obs_days = [1]
-    test_df = full_pred[full_pred["obs_day"].isin(candidate_obs_days)].copy()
+    test_df = full_pred[full_pred["obs_day"] == 1].copy()
 
     if test_df.empty:
         raise ValueError("无可回测数据")
@@ -267,53 +268,7 @@ def run_backtest(
 
         # ========== 执行阶段（T-1日决策，T日执行） ==========
 
-        # Step 1: 执行pending买单（T-1日决策买入，今日开盘执行）
-        if pending_orders:
-            executed = []
-            for code, bp, ts_code, sc, sid in pending_orders:
-                if code in holdings:
-                    skipped["already_held"] += 1
-                    continue
-                if strict:
-                    if "volume" in price_pivot and code in price_pivot["volume"].columns:
-                        vol_c = price_pivot["volume"][code].get(current_date, np.nan)
-                        if is_suspended(vol_c):
-                            skipped["suspended"] += 1
-                            continue
-                    if code in prev_close_map and current_date in prev_close_map[code].index:
-                        prev_c = prev_close_map[code].get(current_date, np.nan)
-                        if not np.isnan(prev_c) and prev_c > 0:
-                            if "high" in price_pivot:
-                                dh = price_pivot["high"][code]
-                                if current_date in dh.index:
-                                    if is_limit_up(bp, dh.get(current_date, np.nan), prev_c):
-                                        skipped["limit_up"] += 1
-                                        continue
-                executed.append((code, bp, ts_code, sc, sid))
-
-            if executed:
-                all_codes = list(holdings.keys()) + [code for code, _, _, _, _ in executed]
-                all_scores = [holdings[code_h].get("weight_score", holdings[code_h]["score"])
-                              for code_h in holdings]
-                all_scores += [ws_map.get(sid, sc) for _, _, _, sc, sid in executed]
-                scored = sorted(zip(all_codes, all_scores), key=lambda x: x[1], reverse=True)
-                sorted_codes = [c for c, _ in scored]
-                sorted_scores = [s for _, s in scored]
-                weights = _calc_weights(sorted_codes, sorted_scores, weight_mode, weight_params)
-                for code_h in holdings:
-                    holdings[code_h]["weight"] = weights.get(code_h, 0)
-                for code, bp, ts_code, sc, sid in executed:
-                    ws = ws_map.get(sid, sc)
-                    holdings[code] = {
-                        "buy_date": current_date, "buy_price": bp,
-                        "weight": weights.get(code, 0), "days_held": 0,
-                        "ts_code": ts_code, "score": sc, "signal_id": sid,
-                        "weight_score": ws,
-                        "entry_weight": weights.get(code, 0),
-                    }
-            pending_orders = []
-
-        # Step 1.5: 执行pending卖单（T-1日决策卖出，今日开盘执行）
+        # Step 1: 先执行pending卖单（卖出先于买入，确保仓位释放后再买入）
         if pending_sells:
             for sell_item in pending_sells:
                 code = sell_item["code"]
@@ -360,6 +315,58 @@ def run_backtest(
                     del holdings[code]
 
             pending_sells = []
+
+        # Step 1.5: 执行pending买单（T-1日决策买入，今日开盘执行）
+        # max_slots: 卖出已执行，基于实际持仓计算可用买入数
+        _buy_max_slots = max_stocks - len(holdings)
+        if _buy_max_slots < 0:
+            _buy_max_slots = 0
+        if pending_orders:
+            executed = []
+            for code, bp, ts_code, sc, sid in pending_orders:
+                if len(executed) >= _buy_max_slots:
+                    break
+                if code in holdings:
+                    skipped["already_held"] += 1
+                    continue
+                if strict:
+                    if "volume" in price_pivot and code in price_pivot["volume"].columns:
+                        vol_c = price_pivot["volume"][code].get(current_date, np.nan)
+                        if is_suspended(vol_c):
+                            skipped["suspended"] += 1
+                            continue
+                    if code in prev_close_map and current_date in prev_close_map[code].index:
+                        prev_c = prev_close_map[code].get(current_date, np.nan)
+                        if not np.isnan(prev_c) and prev_c > 0:
+                            if "high" in price_pivot:
+                                dh = price_pivot["high"][code]
+                                if current_date in dh.index:
+                                    if is_limit_up(bp, dh.get(current_date, np.nan), prev_c):
+                                        skipped["limit_up"] += 1
+                                        continue
+                executed.append((code, bp, ts_code, sc, sid))
+
+            if executed:
+                all_codes = list(holdings.keys()) + [code for code, _, _, _, _ in executed]
+                all_scores = [holdings[code_h].get("weight_score", holdings[code_h]["score"])
+                              for code_h in holdings]
+                all_scores += [ws_map.get(sid, sc) for _, _, _, sc, sid in executed]
+                scored = sorted(zip(all_codes, all_scores), key=lambda x: x[1], reverse=True)
+                sorted_codes = [c for c, _ in scored]
+                sorted_scores = [s for _, s in scored]
+                weights = _calc_weights(sorted_codes, sorted_scores, weight_mode, weight_params)
+                for code_h in holdings:
+                    holdings[code_h]["weight"] = weights.get(code_h, 0)
+                for code, bp, ts_code, sc, sid in executed:
+                    ws = ws_map.get(sid, sc)
+                    holdings[code] = {
+                        "buy_date": current_date, "buy_price": bp,
+                        "weight": weights.get(code, 0), "days_held": 0,
+                        "ts_code": ts_code, "score": sc, "signal_id": sid,
+                        "weight_score": ws,
+                        "entry_weight": weights.get(code, 0),
+                    }
+            pending_orders = []
 
         # Step 2.5: 补充 MAE/MFE 到所有已完成交易（卖出执行后补充）
         for trade in trade_details:

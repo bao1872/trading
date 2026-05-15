@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np
 import pandas as pd
 
-from stop_experiment.pipeline.stop_config import OUTPUT_DIR, MODELS_DIR, BUY_CLS_THRESHOLD, PRODUCTION_PARAMS
+from stop_experiment.pipeline.stop_config import OUTPUT_DIR, MODELS_DIR, BUY_CLS_THRESHOLD, PRODUCTION_PARAMS, CANDIDATE_OBS_DAYS
 
 
 def compute_composite_score(df: pd.DataFrame) -> pd.DataFrame:
@@ -144,10 +144,9 @@ def main(args):
         df = df[df["can_buy"] == 1].copy()
     print(f"  可交易: {len(df)}")
 
-    # 候选池过滤: 只保留 obs_day=1（生产口径）
-    candidate_obs_days = PRODUCTION_PARAMS.get("candidate_obs_days", [1])
-    df = df[df["obs_day"].isin(candidate_obs_days)].copy()
-    print(f"  obs_day in {candidate_obs_days}: {len(df)}")
+    # 候选池过滤: 只保留 obs_day∈CANDIDATE_OBS_DAYS（生产口径）
+    df = df[df["obs_day"].isin(CANDIDATE_OBS_DAYS)].copy()
+    print(f"  obs_day∈{CANDIDATE_OBS_DAYS}: {len(df)}")
 
     df = df.sort_values(["signal_id", "obs_date", "obs_day"], ascending=[True, True, False])
     df = df.drop_duplicates(subset=["signal_id", "obs_date"], keep="first")

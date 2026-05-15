@@ -44,7 +44,7 @@ from stop_experiment.backtest.decision_core import decide_eod
 
 
 def execute_pending_buys(holdings, pending_buys, date, price_pivot, prev_close_map,
-                         default_weight=0.1, strict=True):
+                         default_weight=0.1, strict=True, max_slots=None):
     """
     执行 T-1 日 pending buys：T 日开盘买入，含停牌/涨停检查。
 
@@ -56,6 +56,8 @@ def execute_pending_buys(holdings, pending_buys, date, price_pivot, prev_close_m
         prev_close_map: {code: Series indexed by date}，前收盘价
         default_weight: 新买入默认权重（等权 = 1/max_stocks）
         strict: 是否严格检查停牌/涨停
+        max_slots: 最大成功买入数（None=不限制），用于替补机制：pending_buys 含 buffer 候选，
+                   成功买入数达到 max_slots 后停止，跳过剩余候选
 
     Returns:
         (holdings, executed_buys, skipped_buys)
@@ -69,6 +71,8 @@ def execute_pending_buys(holdings, pending_buys, date, price_pivot, prev_close_m
     day_open = price_pivot.loc[date, "open"] if date in price_pivot.index else pd.Series(dtype=float)
 
     for code, bp, ts_code, sc, sid in pending_buys:
+        if max_slots is not None and len(executed) >= max_slots:
+            break
         if code in holdings:
             skipped.append((code, bp, ts_code, sc, sid, "already_held"))
             continue
@@ -207,28 +211,13 @@ def step_day(date, holdings, pending_buys, pending_sells,
     exit_threshold = params.get("exit_threshold", params.get("buy_cls_exit_threshold", 0.70))
     default_weight = 1.0 / max_stocks
 
-    # Step 1: 执行 T-1 pending buys
-    holdings, executed_buys, skipped_buys = execute_pending_buys(
-        holdings, pending_buys, date, price_pivot, prev_close_map or {},
-        default_weight=default_weight, strict=strict,
-    )
-
-    # Step 1+: 重新平衡所有持仓权重（复用回测 _calc_weights，与 run_backtest 一致）
-    if executed_buys:
-        from stop_experiment.backtest.dynamic_exit_backtest_v2 import _calc_weights
-        all_codes = list(holdings.keys())
-        all_scores = [holdings[c].get("weight_score", holdings[c].get("score", 0)) for c in all_codes]
-        weights = _calc_weights(all_codes, all_scores, weight_mode, weight_params)
-        for code in holdings:
-            holdings[code]["weight"] = weights.get(code, 0)
-
-    # Step 1.5: 执行 T-1 pending sells
+    # Step 1: 先执行 T-1 pending sells（卖出先于买入，确保仓位释放后再买入）
     holdings, executed_sells, skipped_sells = execute_pending_sells(
         holdings, pending_sells, date, price_pivot, prev_close_map or {},
         strict=strict,
     )
 
-    # Step 1.5+: 卖出后重新平衡权重
+    # Step 1+: 卖出后重新平衡权重
     if executed_sells:
         from stop_experiment.backtest.dynamic_exit_backtest_v2 import _calc_weights
         all_codes = list(holdings.keys())
@@ -237,6 +226,27 @@ def step_day(date, holdings, pending_buys, pending_sells,
             weights = _calc_weights(all_codes, all_scores, weight_mode, weight_params)
             for code in holdings:
                 holdings[code]["weight"] = weights.get(code, 0)
+
+    # max_slots: 卖出已执行，基于实际持仓计算可用买入数
+    max_slots = max_stocks - len(holdings)
+    if max_slots < 0:
+        max_slots = 0
+
+    # Step 1.5: 执行 T-1 pending buys（含 buffer 候选替补机制）
+    holdings, executed_buys, skipped_buys = execute_pending_buys(
+        holdings, pending_buys, date, price_pivot, prev_close_map or {},
+        default_weight=default_weight, strict=strict,
+        max_slots=max_slots,
+    )
+
+    # Step 1.5+: 买入后重新平衡所有持仓权重
+    if executed_buys:
+        from stop_experiment.backtest.dynamic_exit_backtest_v2 import _calc_weights
+        all_codes = list(holdings.keys())
+        all_scores = [holdings[c].get("weight_score", holdings[c].get("score", 0)) for c in all_codes]
+        weights = _calc_weights(all_codes, all_scores, weight_mode, weight_params)
+        for code in holdings:
+            holdings[code]["weight"] = weights.get(code, 0)
 
     # Step 2~4: 统一日终决策（SSOT decide_eod）
     day_close = price_pivot.loc[date, "close"] if date in price_pivot.index else pd.Series(dtype=float)
@@ -285,9 +295,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # 加载回测数据
-    test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data(
-        candidate_obs_days=PRODUCTION_PARAMS["candidate_obs_days"]
-    )
+    test_df, price_pivot, trading_days, prev_close_map, pred_lookup = _load_data()
     print(f"  交易日数: {len(trading_days)}")
     print(f"  信号数: {len(test_df)}")
 

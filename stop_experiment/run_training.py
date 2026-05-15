@@ -126,6 +126,11 @@ Examples:
         default=None,
         help="限制样本数（调试用）",
     )
+    parser.add_argument(
+        "--auto-register",
+        action="store_true",
+        help="训练完成后自动注册模型版本 (promote --register)",
+    )
 
     args = parser.parse_args()
 
@@ -188,7 +193,31 @@ Examples:
         print("    - output/dataset.parquet")
         print("    - output/models_control/")
         print("    - output/full_test_predictions.parquet")
-        print("  下一步: 运行生产入口 python stop_experiment/run_daily.py")
+
+        if args.auto_register:
+            from datetime import datetime as _dt
+            ver = f"mv_{_dt.now().strftime('%Y%m%d')}_retrain_v1"
+            model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "output", "models_control")
+            print(f"\n{'='*70}")
+            print(f"  --auto-register: 注册模型版本 {ver}")
+            subprocess.run(
+                [sys.executable, "-m", "stop_experiment.registries.promote",
+                 "--register", ver, "--model-dir", model_dir],
+                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            )
+
+        print(f"\n  标准命令链 (Operator Workflow):")
+        print(f"    # 1) 训练 (已完成)")
+        print(f"    # 2) 导入 frozen predictions")
+        print(f"    python -m stop_experiment.registries.import_frozen_predictions")
+        print(f"    # 3) 验证回测")
+        print(f"    python -m stop_experiment.engine.strategy_runner --mode backtest \\")
+        print(f"        --profile production --start-date 2026-03-01 --end-date 2026-05-08")
+        print(f"    # 4) 一致性门禁")
+        print(f"    python -m stop_experiment.tests_consistency.run_all_checks --ci")
+        print(f"    # 5) 晋升为 production")
+        print(f"    python -m stop_experiment.registries.promote --model mv_YYYYMMDD_retrain_v1")
     else:
         print("[失败] 部分步骤执行失败，请检查日志")
         sys.exit(1)

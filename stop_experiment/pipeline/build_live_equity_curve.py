@@ -238,7 +238,7 @@ if __name__ == "__main__":
 
     p = PRODUCTION_PARAMS
     print(f"冒烟测试: build_live_equity_curve")
-    _, price, _, _, _ = _load_data(candidate_obs_days=p["candidate_obs_days"])
+    _, price, _, _, _ = _load_data()
     eq_df = build_live_equity_curve(price)
     if eq_df.empty:
         print("  无执行记录，跳过")

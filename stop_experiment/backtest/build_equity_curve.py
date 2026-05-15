@@ -242,7 +242,7 @@ if __name__ == "__main__":
 
     trades_df = pd.read_csv(trades_path)
     nav_df = pd.read_csv(nav_path)
-    _, price, _, _, _ = _load_data(candidate_obs_days=p["candidate_obs_days"])
+    _, price, _, _, _ = _load_data()
     td = sorted(price.index.unique())
 
     result = {"nav_df": nav_df, "trades_df": trades_df}
