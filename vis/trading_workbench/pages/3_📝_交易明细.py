@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Purpose:
-    交易明细页 — 回答"今天已经发生了什么"
+    交易明细页 — QMT 实盘委托 + 成交记录 + 持仓变化
 
 Inputs:
-    - executions/T.parquet
-    - holdings/T.parquet + holdings/T-1.parquet
+    - QMT 实盘数据（委托/成交）
+    - 本地 historical executions（回退）
 
 Outputs:
     - Streamlit 页面渲染
@@ -14,7 +14,7 @@ How to Run:
     通过 trading_workbench/app.py 自动加载
 
 Side Effects:
-    - 无（只读数据）
+    - 无（只读数据，不下单）
 """
 
 import sys
@@ -25,132 +25,85 @@ import streamlit as st
 import pandas as pd
 
 from vis.common.data_loader import (
-    load_executions_df, load_holdings_df, get_stock_name_map,
-    get_prev_date,
+    load_qmt_orders_df, load_qmt_trades_df,
+    load_qmt_positions_df, load_executions_df,
+    load_latest_date, refresh_qmt_connection,
+    get_stock_name_map,
 )
-from vis.common.components import render_date_selector, format_price
+from vis.common.components import format_pct, format_price, format_money
+from vis.common.theme import STATUS_COLORS
 
 
 def render():
-    st.title("📝 交易明细")
+    st.title("📝 交易明细（QMT 实盘）")
 
-    date = render_date_selector("trades_date")
-    if not date:
-        st.error("未找到交易日数据")
-        return
-
-    executions_df = load_executions_df(date)
-    holdings_df = load_holdings_df(date)
-    prev_date = get_prev_date(date)
-    prev_holdings_df = load_holdings_df(prev_date) if prev_date else pd.DataFrame()
+    if st.button("🔄 刷新数据"):
+        refresh_qmt_connection()
+        st.rerun()
 
     name_map = get_stock_name_map()
 
-    tab_a, tab_b, tab_c = st.tabs(["✅ 已执行交易", "⚠️ 未执行/部分执行", "📊 持仓变化"])
+    tab1, tab2, tab3 = st.tabs(["📋 当前委托", "✅ 今日成交", "📊 持仓变化"])
 
-    with tab_a:
-        st.subheader("今日已执行交易")
-        if executions_df.empty:
-            st.info(f"{date} 无执行记录")
+    with tab1:
+        st.subheader("当前委托")
+        orders_df = load_qmt_orders_df()
+
+        if orders_df.empty:
+            st.info("当前无委托")
         else:
-            executed = executions_df[executions_df["status"] == "executed"] if "status" in executions_df.columns else executions_df
-            if executed.empty:
-                st.info("今日无已执行交易")
-            else:
-                rows = []
-                for _, row in executed.iterrows():
-                    ts = row.get("ts_code", "")
-                    name = name_map.get(ts, ts.split(".")[0] if "." in ts else ts)
-                    action = row.get("action", "")
-                    action_label = "买入" if action == "buy" else "卖出"
-                    rows.append({
-                        "代码": ts,
-                        "名称": name,
-                        "动作": action_label,
-                        "执行价": format_price(row.get("executed_price")),
-                        "计划价": format_price(row.get("planned_price")),
-                        "信号ID": row.get("signal_id", "-"),
-                    })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    with tab_b:
-        st.subheader("今日未执行/部分执行")
-        if executions_df.empty:
-            st.info(f"{date} 无执行记录")
-        else:
-            skipped = executions_df[executions_df["status"] == "skipped"] if "status" in executions_df.columns else pd.DataFrame()
-            if skipped.empty:
-                st.info("今日无未执行交易")
-            else:
-                rows = []
-                for _, row in skipped.iterrows():
-                    ts = row.get("ts_code", "")
-                    name = name_map.get(ts, ts.split(".")[0] if "." in ts else ts)
-                    action = row.get("action", "")
-                    action_label = "买入" if action == "buy" else "卖出"
-                    rows.append({
-                        "代码": ts,
-                        "名称": name,
-                        "原计划动作": action_label,
-                        "计划价": format_price(row.get("planned_price")),
-                        "未执行原因": row.get("skip_reason", "-"),
-                    })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    with tab_c:
-        st.subheader("今日持仓变化")
-        if holdings_df.empty and prev_holdings_df.empty:
-            st.info("无持仓数据")
-        else:
-            cur_codes = set()
-            if not holdings_df.empty and "ts_code" in holdings_df.columns:
-                cur_codes = set(holdings_df["ts_code"].tolist())
-            elif not holdings_df.empty and "code" in holdings_df.columns:
-                cur_codes = set(holdings_df["code"].tolist())
-
-            prev_codes = set()
-            if not prev_holdings_df.empty and "ts_code" in prev_holdings_df.columns:
-                prev_codes = set(prev_holdings_df["ts_code"].tolist())
-            elif not prev_holdings_df.empty and "code" in prev_holdings_df.columns:
-                prev_codes = set(prev_holdings_df["code"].tolist())
-
-            all_codes = cur_codes | prev_codes
-            rows = []
-            for ts in sorted(all_codes):
-                name = name_map.get(ts, ts.split(".")[0] if "." in ts else ts)
-                in_cur = ts in cur_codes
-                in_prev = ts in prev_codes
-
-                if in_cur and not in_prev:
-                    direction = "🆕 新开仓"
-                elif in_prev and not in_cur:
-                    direction = "❌ 清仓"
-                else:
-                    direction = "➡️ 不变"
-
-                cur_weight = 0
-                if in_cur and not holdings_df.empty:
-                    h = holdings_df[holdings_df.get("ts_code", holdings_df.get("code", pd.Series())) == ts]
-                    if not h.empty:
-                        cur_weight = h.iloc[0].get("weight", 0)
-
-                prev_weight = 0
-                if in_prev and not prev_holdings_df.empty:
-                    h = prev_holdings_df[prev_holdings_df.get("ts_code", prev_holdings_df.get("code", pd.Series())) == ts]
-                    if not h.empty:
-                        prev_weight = h.iloc[0].get("weight", 0)
-
-                rows.append({
-                    "代码": ts,
-                    "名称": name,
-                    "昨日仓位": f"{prev_weight * 100:.1f}%" if prev_weight else "-",
-                    "今日仓位": f"{cur_weight * 100:.1f}%" if cur_weight else "-",
-                    "变化方向": direction,
+            display_rows = []
+            for _, row in orders_df.iterrows():
+                code = row.get("stock_code", "")
+                order_type = row.get("order_type", 0)
+                side_label = "买入" if order_type > 0 else "卖出"
+                status_map = {50: "已提交", 56: "已成交", 57: "已撤单"}
+                status = status_map.get(row.get("order_status_code"), row.get("status_msg", ""))
+                display_rows.append({
+                    "代码": code,
+                    "名称": name_map.get(code, ""),
+                    "方向": side_label,
+                    "委托价": format_price(row.get("price", 0)),
+                    "委托量": int(row.get("order_volume", 0)),
+                    "已成交": int(row.get("traded_volume", 0)),
+                    "状态": status,
                 })
-            if rows:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            else:
-                st.info("无持仓变化")
+
+            st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+
+    with tab2:
+        st.subheader("今日成交")
+        trades_df = load_qmt_trades_df()
+
+        if trades_df.empty:
+            st.info("今日无成交")
+        else:
+            display_rows = []
+            for _, row in trades_df.iterrows():
+                code = row.get("stock_code", "")
+                display_rows.append({
+                    "代码": code,
+                    "名称": name_map.get(code, ""),
+                    "方向": row.get("side", ""),
+                    "成交价": format_price(row.get("traded_price", 0)),
+                    "成交量": int(row.get("traded_volume", 0)),
+                })
+
+            st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+
+    with tab3:
+        st.subheader("当前持仓概览")
+        pos_df = load_qmt_positions_df()
+        if not pos_df.empty:
+            n_total = len(pos_df)
+            total_mkt = pos_df["market_value"].sum() if "market_value" in pos_df.columns else 0
+            profit_pos = len(pos_df[pos_df["profit_rate"] > 0].index) if "profit_rate" in pos_df.columns else 0
+            profit_pct = profit_pos / n_total * 100 if n_total > 0 else 0
+
+            st.markdown(f"**持仓数:** {n_total} 只 | **总市值:** {format_money(total_mkt)} | **盈利占比:** {profit_pct:.0f}%")
+            st.dataframe(pos_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("无持仓数据")
 
 
 render()

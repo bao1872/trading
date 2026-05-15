@@ -2,12 +2,13 @@
 """
 自选股监控与飞书通知
 
-Purpose: 扫描 stock_watchlist 表中 is_monitored=TRUE 的自选股，检测5m/15m/60m级别的MACD/Hist顶底背离、DSA VWAP触及、PAVP价格穿越，通过飞书推送结果
+Purpose: 从 stock_watchlist 获取自选股列表，检测5m/15m/60m级别的MACD/Hist顶底背离、
+         DSA VWAP触及，通过飞书推送结果（含优先级/核心驱动/4模型评分/涨跌幅等）
 Inputs:
-    - stock_watchlist 表（is_monitored=TRUE 的自选股）
-    - pytdx 行情数据（5分钟/15分钟/60分钟）
+    - stock_watchlist 表（自选股列表，关联 stock_pools 和 stop_loss_predictions）
+    - pytdx 行情数据（5分钟/15分钟/60分钟/日线）
 Outputs:
-    - 飞书消息推送（包含股票信息、背离检测、PAVP穿越和DSA VWAP检测结果）
+    - 飞书消息推送（包含股票信息、背离检测和DSA VWAP检测结果）
 How to Run:
     python app/monitoring.py --freq 5m
     python app/monitoring.py --freq 15m
@@ -15,7 +16,7 @@ How to Run:
 Examples:
     python app/monitoring.py --freq 60m
 Side Effects:
-    - 读取 stock_watchlist 表数据（is_monitored=TRUE）
+    - 读取 stock_watchlist / stock_pools / stop_loss_predictions 表
     - 通过 pytdx 获取行情数据
     - 发送飞书消息通知
 """
@@ -41,8 +42,19 @@ _API = None
 
 
 def get_api():
-    """获取全局 pytdx 连接，单例模式"""
+    """获取全局 pytdx 连接，单例模式，自动检测断线重连"""
     global _API
+    if _API is not None:
+        try:
+            _API.get_security_count(1)
+        except Exception:
+            print("pytdx 连接已断开，尝试重连...")
+            try:
+                _API.disconnect()
+            except Exception:
+                pass
+            _API = None
+
     if _API is None:
         _API = connect_pytdx()
     return _API
@@ -52,7 +64,10 @@ def close_api():
     """关闭 pytdx 连接"""
     global _API
     if _API is not None:
-        _API.disconnect()
+        try:
+            _API.disconnect()
+        except Exception:
+            pass
         _API = None
 
 
@@ -110,8 +125,8 @@ def fetch_all_kline(ts_codes: List[str], freq: str, bars: int = 500, max_time: d
                 kline = kline.dropna(subset=["open", "high", "low", "close", "volume"])
                 if not kline.empty:
                     result[ts_code] = kline
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"获取 {ts_code} {freq} K线失败: {e}")
 
     return result
 
@@ -238,82 +253,88 @@ def detect_dsa_vwap(df: pd.DataFrame) -> str:
 
 
 def get_monitored_stocks(session) -> list:
-    """获取被勾选监控的股票列表（is_monitored=TRUE）"""
+    """获取自选股列表（从 stock_watchlist，关联 stock_pools 和 stop_loss_predictions）
+
+    Returns:
+        [{'ts_code': ..., 'stock_name': ..., 'priority': ..., 'weighted_score': ...,
+          'core_driver': ..., 'second_deriv_type': ..., 'key_strength': ..., 'main_risk': ...,
+          'total_market_cap': ..., 'pred_sell_reg': ..., 'pred_sell_cls': ...,
+          'pred_buy_reg': ..., 'pred_buy_cls': ...}, ...]
+    """
     sql = text("""
-        SELECT ts_code, stock_name, bsm_event, bsm_event_date,
-               pavp_prices, dsa_dir, dsa_vwap
-        FROM stock_watchlist
-        WHERE is_monitored = TRUE
-        ORDER BY sort_order, added_date DESC
+        SELECT
+            w.ts_code,
+            w.stock_name,
+            w.priority,
+            w.weighted_score,
+            w.core_driver,
+            w.second_deriv_type,
+            w.key_strength,
+            w.main_risk,
+            p.total_market_cap / 100000000.0 AS total_market_cap,
+            pred.pred_sell_reg,
+            pred.pred_sell_cls,
+            pred.pred_buy_reg,
+            pred.pred_buy_cls
+        FROM stock_watchlist w
+        LEFT JOIN stock_pools p ON p.ts_code = w.ts_code
+        LEFT JOIN LATERAL (
+            SELECT pred_sell_reg, pred_sell_cls, pred_buy_reg, pred_buy_cls
+            FROM stop_loss_predictions
+            WHERE ts_code = w.ts_code
+              AND profile IN ('production', 'position')
+              AND prediction_date = (
+                  SELECT MAX(prediction_date) FROM stop_loss_predictions
+                  WHERE profile IN ('production', 'position')
+              )
+            ORDER BY obs_date DESC
+            LIMIT 1
+        ) pred ON TRUE
+        ORDER BY w.sort_order, w.weighted_score DESC
     """)
-    rows = session.execute(sql).mappings().all()
+    result = session.execute(sql).mappings().all()
     stocks = []
-    for row in rows:
-        stock = dict(row)
-        stock['ts_code'] = str(stock['ts_code']).zfill(6)
-        # 解析 pavp_prices 字符串
-        pavp_str = stock.get('pavp_prices', '')
-        stock['pavp'] = parse_pavp_prices(pavp_str)
-        stocks.append(stock)
+    for row in result:
+        stocks.append({
+            'ts_code': str(row['ts_code']).split('.')[0].zfill(6),
+            'ts_code_full': str(row['ts_code']),
+            'stock_name': row['stock_name'] or '',
+            'priority': row['priority'] or '',
+            'weighted_score': float(row['weighted_score']) if row['weighted_score'] else 0.0,
+            'core_driver': row['core_driver'] or '',
+            'second_deriv_type': row['second_deriv_type'] or '',
+            'key_strength': row['key_strength'] or '',
+            'main_risk': row['main_risk'] or '',
+            'total_market_cap': round(float(row['total_market_cap']), 1) if row['total_market_cap'] else 0.0,
+            'pred_sell_reg': round(float(row['pred_sell_reg']), 3) if row['pred_sell_reg'] is not None else None,
+            'pred_sell_cls': round(float(row['pred_sell_cls']), 3) if row['pred_sell_cls'] is not None else None,
+            'pred_buy_reg': round(float(row['pred_buy_reg']), 3) if row['pred_buy_reg'] is not None else None,
+            'pred_buy_cls': round(float(row['pred_buy_cls']), 3) if row['pred_buy_cls'] is not None else None,
+        })
     return stocks
 
 
-def parse_pavp_prices(pavp_str: str) -> dict:
-    """解析PAVP价格字符串，如 'VAH:43.37,POC:24.47,VAL:18.91'"""
-    result = {}
-    if not pavp_str:
-        return result
-    for part in pavp_str.split(','):
-        if ':' in part:
-            key, val = part.split(':', 1)
-            try:
-                result[key.strip()] = float(val.strip())
-            except ValueError:
-                pass
-    return result
+def compute_daily_change_pct(ts_codes: List[str]) -> Dict[str, float]:
+    """通过 pytdx 日K线计算当日涨跌幅
 
-
-def detect_price_crossings(df: pd.DataFrame, stock: dict) -> list:
-    """检测价格上穿/下穿 PAVP(VAH/VAL) 和 DSA_VWAP
-
-    检测逻辑：
-    - 上穿：前一根K线收盘价 < 价格线 且 当前K线收盘价 >= 价格线
-    - 下穿：前一根K线收盘价 > 价格线 且 当前K线收盘价 <= 价格线
+    Args:
+        ts_codes: 纯6位股票代码列表（如 ['300394', '300502']）
+    Returns:
+        {ts_code: change_pct} 映射，涨跌幅百分比
     """
-    if len(df) < 2:
-        return []
-
-    triggers = []
-    prev_close = df['close'].iloc[-2]
-    curr_close = df['close'].iloc[-1]
-
-    pavp = stock.get('pavp', {})
-    vah = pavp.get('VAH')
-    val = pavp.get('VAL')
-    dsa_vwap = stock.get('dsa_vwap')
-
-    # VAH
-    if vah is not None and pd.notna(vah):
-        if prev_close < vah <= curr_close:
-            triggers.append(f"上穿VAH({vah:.2f})")
-        elif prev_close > vah >= curr_close:
-            triggers.append(f"下穿VAH({vah:.2f})")
-
-    # VAL
-    if val is not None and pd.notna(val):
-        if prev_close < val <= curr_close:
-            triggers.append(f"上穿VAL({val:.2f})")
-        elif prev_close > val >= curr_close:
-            triggers.append(f"下穿VAL({val:.2f})")
-
-    # DSA_VWAP
-    if dsa_vwap is not None and pd.notna(dsa_vwap):
-        if prev_close < dsa_vwap <= curr_close:
-            triggers.append(f"上穿DSA_VWAP({dsa_vwap:.2f})")
-        elif prev_close > dsa_vwap >= curr_close:
-            triggers.append(f"下穿DSA_VWAP({dsa_vwap:.2f})")
-
-    return triggers
+    kline_data = fetch_all_kline(ts_codes, 'd', bars=5)
+    result = {}
+    for code, df in kline_data.items():
+        if df is None or len(df) < 2:
+            continue
+        try:
+            prev_close = float(df.iloc[-2]['close'])
+            cur_close = float(df.iloc[-1]['close'])
+            if prev_close > 0:
+                result[code] = round((cur_close - prev_close) / prev_close * 100, 2)
+        except (IndexError, ValueError, ZeroDivisionError):
+            pass
+    return result
 
 
 import argparse
@@ -324,7 +345,7 @@ VALID_FREQS = ["5m", "15m", "60m"]
 
 def parse_args():
     """解析命令行参数"""
-    parser = argparse.ArgumentParser(description="精选股票池背离检测")
+    parser = argparse.ArgumentParser(description="自选股背离检测（stock_watchlist）")
     parser.add_argument(
         "--freq",
         type=str,
@@ -352,10 +373,12 @@ def get_trigger_emoji(trigger: str) -> str:
     return "📌"
 
 
-def generate_watchlist_monitor_report(freq: str, triggered_stocks: List[Dict]) -> str:
-    """生成自选股监控报告（包含日线价格穿越、本周期VWAP触及、顶底背离信号）
+def generate_monitor_report(freq: str, all_stocks: List[Dict], triggered_stocks: List[Dict]) -> str:
+    """生成自选股监控报告
+
     Args:
         freq: 周期(5m/15m/60m)
+        all_stocks: 全部自选股列表（含 change_pct）
         triggered_stocks: 触发信号的股票列表
     Returns:
         Markdown 格式的报告
@@ -363,87 +386,96 @@ def generate_watchlist_monitor_report(freq: str, triggered_stocks: List[Dict]) -
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     freq_emoji = FREQ_EMOJI.get(freq, "📊")
 
+    triggered_codes = set()
+    vwap_touch_count = 0
+    div_count = 0
+    for item in triggered_stocks:
+        code = item['stock']['ts_code']
+        triggered_codes.add(code)
+        for t in item['triggers']:
+            if 'VWAP触及' in t:
+                vwap_touch_count += 1
+            if '背离' in t:
+                div_count += 1
+
+    priority_counts = {}
+    for s in all_stocks:
+        p = s.get('priority', '')
+        if p:
+            priority_counts[p] = priority_counts.get(p, 0) + 1
+
+    priority_summary = ' | '.join(f"{p}: {c}" for p, c in sorted(priority_counts.items(), key=lambda x: {'S': 0, 'S-': 1, 'A+': 2, 'A': 3, 'A-': 4, 'B+': 5, 'B': 6}.get(x[0], 99)))
+
     lines = [
         f"{freq_emoji} **自选股监控报告 [{freq}]** ({now_str})",
         "",
-        "**📈 概览统计**",
+        f"**📊 概览**",
+        f"- 自选股: {len(all_stocks)} 只 | {priority_summary}",
+        f"- 触发信号: {len(triggered_stocks)} 只 | VWAP触及: {vwap_touch_count} | 背离: {div_count}",
+        "",
     ]
 
-    # 统计各类信号
-    total_count = len(triggered_stocks)
-    # 日线价格穿越（来自数据库存储的日线PAVP/DSA_VWAP）
-    vah_count = sum(1 for item in triggered_stocks for t in item['triggers'] if 'VAH' in t)
-    val_count = sum(1 for item in triggered_stocks for t in item['triggers'] if 'VAL' in t)
-    dsa_vwap_cross_count = sum(1 for item in triggered_stocks for t in item['triggers'] if 'DSA_VWAP' in t and ('上穿' in t or '下穿' in t))
-    # 本周期VWAP触及（来自实时计算的DSA指标）
-    vwap_touch_count = sum(1 for item in triggered_stocks for t in item['triggers'] if 'VWAP触及' in t)
-    # 背离信号
-    div_count = sum(1 for item in triggered_stocks for t in item['triggers'] if '背离' in t)
-
-    lines.extend([
-        f"- **触发总数:** {total_count} 只",
-        f"- **日线VAH穿越:** {vah_count} 次",
-        f"- **日线VAL穿越:** {val_count} 次",
-        f"- **日线DSA_VWAP穿越:** {dsa_vwap_cross_count} 次",
-        f"- **本周期VWAP触及:** {vwap_touch_count} 次",
-        f"- **背离信号:** {div_count} 个",
-        "",
-        "**🔥 触发详情**",
-        "",
-    ])
-
-    for idx, item in enumerate(triggered_stocks, 1):
-        stock = item['stock']
-        triggers = item['triggers']
-
-        stock_name = stock.get('stock_name', '-')
-        ts_code = stock.get('ts_code', '-')
-
-        lines.append(f"**{idx}. {stock_name} ({ts_code})**")
-
-        # 分类显示信号
-        # 日线价格穿越（VAH/VAL/DSA_VWAP）
-        daily_cross_signals = [t for t in triggers if ('VAH' in t or 'VAL' in t or 'DSA_VWAP' in t) and ('上穿' in t or '下穿' in t)]
-        # 本周期VWAP触及
-        vwap_touch_signals = [t for t in triggers if 'VWAP触及' in t]
-        # 背离信号
-        div_signals = [t for t in triggers if '背离' in t]
-
-        # 日线价格穿越
-        if daily_cross_signals:
-            cross_lines = []
-            for t in daily_cross_signals:
-                if '上穿' in t:
-                    cross_lines.append(f"🟢 {t}")
-                elif '下穿' in t:
-                    cross_lines.append(f"🔴 {t}")
-            lines.append(f"- **日线价格穿越:** {' | '.join(cross_lines)}")
-
-        # 本周期VWAP触及
-        if vwap_touch_signals:
-            touch_lines = []
-            for t in vwap_touch_signals:
-                if 'dir=1' in t:
-                    touch_lines.append(f"🔵 {t} (多头)")
-                elif 'dir=-1' in t:
-                    touch_lines.append(f"🟠 {t} (空头)")
-                else:
-                    touch_lines.append(f"📊 {t}")
-            lines.append(f"- **本周期VWAP触及:** {' | '.join(touch_lines)}")
-
-        # 背离信号
-        if div_signals:
-            div_lines = []
-            for t in div_signals:
-                if '底背离' in t:
-                    div_lines.append(f"🟢 {t}")
-                elif '顶背离' in t:
-                    div_lines.append(f"🔴 {t}")
-                else:
-                    div_lines.append(f"📊 {t}")
-            lines.append(f"- **背离信号:** {' | '.join(div_lines)}")
-
+    if triggered_stocks:
+        lines.append("**⚠️ 触发信号**")
         lines.append("")
+        for item in triggered_stocks:
+            stock = item['stock']
+            triggers = item['triggers']
+            name = stock.get('stock_name', '-')
+            code = stock.get('ts_code', '-')
+            priority = stock.get('priority', '')
+            score = stock.get('weighted_score', 0)
+            driver = stock.get('core_driver', '')
+            cap = stock.get('total_market_cap', 0)
+            change = stock.get('change_pct', 0)
+            deriv = stock.get('second_deriv_type', '')
+            strength = stock.get('key_strength', '')
+            risk = stock.get('main_risk', '')
+
+            change_str = f"+{change}" if change > 0 else str(change)
+            lines.append(f"**{name} ({code})**  `{priority}`  `{score}分`")
+            lines.append(f"驱动: {driver} | 市值: {cap:.0f}亿 | 涨跌: {change_str}%")
+
+            sr = stock.get('pred_sell_reg')
+            sc = stock.get('pred_sell_cls')
+            br = stock.get('pred_buy_reg')
+            bc = stock.get('pred_buy_cls')
+            model_parts = []
+            if sr is not None:
+                model_parts.append(f"Sell回归 {sr:.3f}")
+            if sc is not None:
+                model_parts.append(f"Sell分类 {sc:.3f}")
+            if br is not None:
+                model_parts.append(f"Buy回归 {br:.3f}")
+            if bc is not None:
+                model_parts.append(f"Buy分类 {bc:.3f}")
+            if model_parts:
+                lines.append(f"4模型: {' | '.join(model_parts)}")
+
+            if deriv:
+                lines.append(f"二阶导: {deriv}")
+            if strength:
+                lines.append(f"强点: {strength}")
+            if risk:
+                lines.append(f"风险: {risk}")
+
+            trigger_parts = []
+            for t in triggers:
+                if '底背离' in t:
+                    trigger_parts.append(f"🟢 {t}")
+                elif '顶背离' in t:
+                    trigger_parts.append(f"🔴 {t}")
+                elif 'VWAP触及' in t:
+                    if 'dir=1' in t:
+                        trigger_parts.append(f"🔵 {t}")
+                    elif 'dir=-1' in t:
+                        trigger_parts.append(f"🟠 {t}")
+                    else:
+                        trigger_parts.append(f"📌 {t}")
+                else:
+                    trigger_parts.append(f"📌 {t}")
+            lines.append(f"信号: {' | '.join(trigger_parts)}")
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -503,8 +535,9 @@ def send_feishu_message(content: str):
         print(f"飞书通知异常: {e}")
 
 
-def run_watchlist_monitor(freq: str):
-    """执行自选股监控任务（只监控is_monitored=TRUE的股票）
+def run_monitor(freq: str):
+    """执行自选股监控任务（从 stock_watchlist 获取全部自选股）
+
     Args:
         freq: 检测周期（5m/15m/60m）
     """
@@ -514,18 +547,22 @@ def run_watchlist_monitor(freq: str):
     print(f"[{datetime.now()}] 开始自选股监控 (周期: {freq})")
 
     with get_session() as session:
-        stocks = get_monitored_stocks(session)  # 只获取被勾选的股票
+        stocks = get_monitored_stocks(session)
 
     if not stocks:
-        print("无被勾选监控的股票")
+        print("无自选股")
         return
 
-    print(f"被勾选监控的股票数量: {len(stocks)}")
+    print(f"自选股数量: {len(stocks)}")
 
     ts_codes = [s["ts_code"] for s in stocks]
+
+    print("获取日K线计算涨跌幅...")
+    change_map = compute_daily_change_pct(ts_codes)
+    for s in stocks:
+        s['change_pct'] = change_map.get(s['ts_code'], 0.0)
+
     now = datetime.now().replace(second=0, microsecond=0)
-    # 根据周期设置缓冲时间，确保获取完整的最新K线数据
-    # 5m周期缓冲5分钟，15m周期缓冲15分钟，60m周期缓冲60分钟
     freq_minutes = {"5m": 5, "15m": 15, "60m": 60}
     buffer_minutes = freq_minutes.get(freq, 5)
     max_time = now + pd.Timedelta(minutes=buffer_minutes)
@@ -546,18 +583,11 @@ def run_watchlist_monitor(freq: str):
 
         triggers = []
 
-        # 1. 价格穿越检测（新增）
-        crossings = detect_price_crossings(df, stock)
-        if crossings:
-            triggers.extend(crossings)
-
-        # 2. 背离检测（原有保留）
         divs = detect_divergences(df)
         if divs:
             for d in divs:
                 triggers.append(f"{freq} {d}")
 
-        # 3. DSA VWAP触及检测（原有保留）
         dsa_trigger = detect_dsa_vwap(df)
         if dsa_trigger:
             triggers.append(dsa_trigger)
@@ -565,14 +595,14 @@ def run_watchlist_monitor(freq: str):
         if triggers:
             triggered_stocks.append({'stock': stock, 'triggers': triggers})
 
-    # 发送报告
+    print(f"检测到 {len(triggered_stocks)} 只股票有触发信号")
+
     if triggered_stocks:
-        print(f"检测到 {len(triggered_stocks)} 只股票有触发信号")
-        report = generate_watchlist_monitor_report(freq, triggered_stocks)
+        report = generate_monitor_report(freq, stocks, triggered_stocks)
         print("发送监控报告...")
         send_feishu_message(report)
     else:
-        print("无触发信号")
+        print("无触发信号，不推送")
 
     print(f"[{datetime.now()}] 检测完成")
     close_api()
@@ -580,7 +610,7 @@ def run_watchlist_monitor(freq: str):
 
 def main():
     args = parse_args()
-    run_watchlist_monitor(args.freq)
+    run_monitor(args.freq)
 
 
 if __name__ == "__main__":

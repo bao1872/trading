@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-背离特征扫描脚本 - 扫描股票池中所有股票的多周期背离特征并写入数据库
+背离特征扫描脚本 - 扫描 Stop Loss Predictions Top N 股票的多周期背离特征并写入数据库
 引用 features/divergence_many_plotly.py 的核心背离算法
-数据源: k_data_loader.py
+数据源: k_data_loader.py, stop_loss_predictions 表
 
-python -m src.divergence_scanner --filter "中金黄金" --freqs "5m,15m,60m,d"
+用法:
+    python -m app.divergence_scanner --top-n 20 --freqs "15m,60m,d"
+    python -m app.divergence_scanner --top-n 5 --date 2026-05-08 --freqs "d"
+
+参数:
+    --freqs   周期列表，逗号分隔（默认 15m,60m,d）
+    --top-n   取 pred_sell_reg Top N 股票（默认 20）
+    --date    目标交易日 YYYY-MM-DD（默认上一交易日）
 """
 import math
 from dataclasses import dataclass
@@ -23,7 +30,6 @@ from features.divergence_many_plotly import (
     pos_reg_or_neg_hid, neg_reg_or_pos_hid, calculate_divs,
     _line_dash
 )
-from config import STOCK_POOL_PATH
 from datasource.database import get_session
 from app.models import DIV_FEATURES_TABLE, DIV_FEATURES_UPSERT_SQL
 from app.k_data_loader import load_k_data
@@ -211,6 +217,36 @@ def create_table_if_not_exists():
     logger.info("表 stock_div_features 已创建/确认存在")
 
 
+def get_previous_trading_day(target_date=None):
+    """获取前一交易日"""
+    from datasource.trade_calendar import is_trading_day
+    d = pd.Timestamp(target_date) if target_date else pd.Timestamp.now()
+    d = d - pd.Timedelta(days=1)
+    while not is_trading_day(d):
+        d = d - pd.Timedelta(days=1)
+    return d.strftime("%Y-%m-%d")
+
+
+def load_top_predictions(top_n=20, target_date=None):
+    """从 stop_loss_predictions 加载 Top N 股票（按 pred_sell_reg 降序）"""
+    if target_date is None:
+        target_date = get_previous_trading_day()
+
+    sql = """
+        SELECT ts_code, stock_name, pred_sell_reg
+        FROM stop_loss_predictions
+        WHERE prediction_date = :target_date
+          AND profile = 'production'
+        ORDER BY pred_sell_reg DESC
+        LIMIT :top_n
+    """
+    with get_session() as session:
+        df = pd.read_sql(text(sql), session.connection(), params={
+            "target_date": target_date, "top_n": top_n,
+        })
+    return df
+
+
 def scan_single_stock(ts_code: str, name: str, 
                        frequencies: List[str], cfg: DivConfig) -> List[Dict]:
     """扫描单只股票的多周期背离特征"""
@@ -326,21 +362,74 @@ def scan_stock_pool(stock_pool_path: str, frequencies: List[str],
         return 0
 
 
+def scan_top_predictions(frequencies: List[str], top_n: int = 20,
+                         target_date: Optional[str] = None) -> int:
+    """扫描 Stop Loss Predictions Top N 股票的背离特征"""
+    if target_date is None:
+        target_date = get_previous_trading_day()
+
+    df_top = load_top_predictions(top_n=top_n, target_date=target_date)
+    if df_top.empty:
+        logger.warning(f"无预测数据: {target_date}")
+        return 0
+
+    logger.info(f"Top {top_n} 股票 (pred_sell_reg, {target_date}):")
+    for _, row in df_top.iterrows():
+        logger.info(f"  {row['ts_code']} {row['stock_name']} sell_reg={row['pred_sell_reg']:.4f}")
+
+    with get_session() as session:
+        session.execute(text("TRUNCATE TABLE stock_div_features RESTART IDENTITY CASCADE"))
+        logger.info("表 stock_div_features 已清空")
+
+    create_table_if_not_exists()
+
+    cfg = DivConfig(
+        prd=5,
+        source="Close",
+        searchdiv="Regular",
+        showlimit=1,
+        maxpp=10,
+        maxbars=100,
+        dontconfirm=False,
+        showlines=False,
+        showpivot=False,
+        calcmacd=True,
+        calcmacda=True,
+        calcrsi=False,
+        calcstoc=False,
+        calccci=False,
+        calcmom=False,
+        calcobv=True,
+        calcvwmacd=False,
+        calccmf=False,
+        calcmfi=False,
+        calcext=False,
+    )
+
+    all_features = []
+    for _, row in tqdm(df_top.iterrows(), total=len(df_top), desc="扫描Top股票"):
+        features = scan_single_stock(row['ts_code'], row['stock_name'], frequencies, cfg)
+        all_features.extend(features)
+
+    if all_features:
+        saved = save_features_to_db(all_features)
+        logger.info(f"共保存 {saved} 条背离特征记录到数据库")
+        return saved
+    else:
+        logger.warning("无有效特征数据")
+        return 0
+
+
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(description="扫描股票池背离特征")
+    ap = argparse.ArgumentParser(description="扫描 Stop Loss Predictions Top N 股票背离特征")
     ap.add_argument("--freqs", type=str, default="15m,60m,d", help="周期列表，逗号分隔")
-    ap.add_argument("--limit", type=int, default=None, help="限制扫描股票数量")
-    ap.add_argument("--filter", type=str, default=None, help="按名称过滤股票")
+    ap.add_argument("--top-n", type=int, default=20, help="取 pred_sell_reg Top N 股票")
+    ap.add_argument("--date", type=str, default=None, help="目标交易日 YYYY-MM-DD（默认上一交易日）")
     args = ap.parse_args()
-    
+
     frequencies = [f.strip() for f in args.freqs.split(',')]
     logger.info(f"扫描周期: {frequencies}")
-    
-    saved = scan_stock_pool(
-        STOCK_POOL_PATH, 
-        frequencies, 
-        limit=args.limit, 
-        filter_name=args.filter
-    )
+
+    saved = scan_top_predictions(frequencies, top_n=args.top_n, target_date=args.date)
     print(f"[DONE] 扫描完成，共保存 {saved} 条记录")

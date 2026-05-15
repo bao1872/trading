@@ -836,12 +836,21 @@ CREATE TABLE IF NOT EXISTS stock_watchlist (
     id BIGSERIAL PRIMARY KEY,
     ts_code VARCHAR(20) NOT NULL UNIQUE,
     stock_name VARCHAR(50),
-    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    added_date DATE DEFAULT CURRENT_DATE,
     sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     bsm_event VARCHAR(100) DEFAULT '',
     bsm_event_date DATE,
     pavp_prices VARCHAR(100) DEFAULT '',
-    notes TEXT
+    dsa_dir INTEGER,
+    dsa_vwap DOUBLE PRECISION,
+    is_monitored BOOLEAN DEFAULT FALSE,
+    priority VARCHAR(10) DEFAULT '',
+    weighted_score FLOAT,
+    core_driver VARCHAR(100) DEFAULT '',
+    second_deriv_type TEXT DEFAULT '',
+    key_strength TEXT DEFAULT '',
+    main_risk TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_watchlist_ts_code ON stock_watchlist(ts_code);
 """

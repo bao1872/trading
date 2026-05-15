@@ -212,6 +212,237 @@ def get_prev_date(date: str) -> str:
     return ""
 
 
+# ==================== QMT 实盘数据加载 ====================
+
+from qmt_trader.client import QmtClient
+from qmt_trader.session import SessionManager
+from qmt_trader.query import QueryAPI
+from qmt_trader.order import OrderAPI
+from qmt_trader.executor import TradeExecutor
+from qmt_trader.config import QMT_MODE, QMT_PROXY_URL
+
+_qmt_client: QmtClient | None = None
+_qmt_session_id: str | None = None
+
+
+def get_qmt_client() -> QmtClient:
+    """懒加载 QMT 客户端（全局单例）
+
+    根据 QMT_MODE 返回真实客户端或 Mock 客户端。
+    供 Streamlit app 和页面使用。
+
+    Returns:
+        QmtClient 或 MockQmtClient
+    """
+    global _qmt_client
+    if _qmt_client is not None:
+        return _qmt_client
+    if QMT_MODE == "mock":
+        from qmt_trader.mock import MockQmtClient
+        _qmt_client = MockQmtClient()
+    else:
+        _qmt_client = QmtClient()
+    return _qmt_client
+
+
+def get_qmt_session_id() -> str:
+    """懒加载 QMT 交易会话 ID（全局单例）
+
+    Returns:
+        str session_id，空字符串表示连接失败
+    """
+    global _qmt_session_id
+    if _qmt_session_id is not None:
+        return _qmt_session_id
+    try:
+        client = get_qmt_client()
+        if not client.health():
+            _qmt_session_id = ""
+            return ""
+        mgr = SessionManager(client)
+        sess = mgr.open()
+        _qmt_session_id = sess.session_id
+        return _qmt_session_id
+    except Exception:
+        _qmt_session_id = ""
+        return ""
+
+
+def refresh_qmt_connection() -> dict:
+    """强制刷新 QMT 连接，重新创建客户端和会话
+
+    Returns:
+        dict: {"connected": bool, "session_id": str, "error": str}
+    """
+    global _qmt_client, _qmt_session_id
+    _qmt_client = None
+    _qmt_session_id = None
+    try:
+        client = get_qmt_client()
+        if not client.health():
+            return {"connected": False, "session_id": "", "error": "服务不可达"}
+        mgr = SessionManager(client)
+        sess = mgr.open()
+        _qmt_session_id = sess.session_id
+        return {
+            "connected": True,
+            "session_id": sess.session_id,
+            "error": "",
+        }
+    except Exception as e:
+        return {"connected": False, "session_id": "", "error": str(e)}
+
+
+def load_qmt_asset() -> dict:
+    """从 QMT 加载资产信息
+
+    Returns:
+        dict: {"total_asset": float, "cash": float, "market_value": float, ...}
+              连接失败返回空 dict
+    """
+    sid = get_qmt_session_id()
+    if not sid:
+        return {}
+    try:
+        api = QueryAPI(get_qmt_client())
+        asset = api.get_asset(sid)
+        return {
+            "account_id": asset.account_id,
+            "total_asset": asset.total_asset,
+            "cash": asset.cash,
+            "frozen_cash": asset.frozen_cash,
+            "market_value": asset.market_value,
+            "fetch_balance": asset.fetch_balance,
+        }
+    except Exception:
+        return {}
+
+
+def load_qmt_positions_df() -> pd.DataFrame:
+    """从 QMT 加载持仓，转换为 DataFrame
+
+    Returns:
+        DataFrame 含列: ts_code, instrument_name, volume, can_use_volume,
+                      avg_price, last_price, market_value, profit_rate
+    """
+    sid = get_qmt_session_id()
+    if not sid:
+        return pd.DataFrame()
+    try:
+        api = QueryAPI(get_qmt_client())
+        positions = api.get_positions(sid)
+        if not positions:
+            return pd.DataFrame()
+        rows = []
+        for p in positions:
+            rows.append({
+                "ts_code": p.stock_code,
+                "instrument_name": p.instrument_name,
+                "volume": p.volume,
+                "can_use_volume": p.can_use_volume,
+                "avg_price": p.avg_price,
+                "last_price": p.last_price,
+                "market_value": p.market_value,
+                "profit_rate": p.profit_rate,
+                "direction": p.direction,
+            })
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame()
+
+
+def load_qmt_orders_df() -> pd.DataFrame:
+    """从 QMT 加载委托，转换为 DataFrame
+
+    Returns:
+        DataFrame 含列: stock_code, order_id, order_sysid, order_type,
+                      order_volume, price, traded_volume, status_msg, ...
+    """
+    sid = get_qmt_session_id()
+    if not sid:
+        return pd.DataFrame()
+    try:
+        api = QueryAPI(get_qmt_client())
+        orders = api.get_orders(sid)
+        if not orders:
+            return pd.DataFrame()
+        rows = []
+        for o in orders:
+            rows.append({
+                "stock_code": o.stock_code,
+                "order_id": o.order_id,
+                "order_sysid": o.order_sysid,
+                "order_type": o.order_type,
+                "order_volume": o.order_volume,
+                "price": o.price,
+                "traded_volume": o.traded_volume,
+                "traded_price": o.traded_price,
+                "order_status_code": o.order_status_code,
+                "status_msg": o.status_msg,
+            })
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame()
+
+
+def load_qmt_trades_df() -> pd.DataFrame:
+    """从 QMT 加载成交，转换为 DataFrame
+
+    Returns:
+        DataFrame 含列: stock_code, traded_volume, traded_price, side, ...
+    """
+    sid = get_qmt_session_id()
+    if not sid:
+        return pd.DataFrame()
+    try:
+        api = QueryAPI(get_qmt_client())
+        trades = api.get_trades(sid)
+        if not trades:
+            return pd.DataFrame()
+        rows = []
+        for t in trades:
+            rows.append({
+                "stock_code": t.stock_code,
+                "traded_volume": t.traded_volume,
+                "traded_price": t.traded_price,
+                "side": t.side,
+            })
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame()
+
+
+def get_qmt_executor() -> TradeExecutor:
+    """获取 TradeExecutor 实例（供页面调用）"""
+    return TradeExecutor(get_qmt_client())
+
+
+def load_real_holdings_with_risk_tags() -> pd.DataFrame:
+    """从 QMT 加载真实持仓，并融合 AI 风险标签
+
+    融合逻辑:
+    1. 从 QMT 加载真实持仓
+    2. 从最新 decisions 获取 AI 建议
+    3. 计算风险标签
+
+    Returns:
+        DataFrame 含 ts_code, instrument_name, volume, ..., risk_tags
+    """
+    positions_df = load_qmt_positions_df()
+    if positions_df.empty:
+        return positions_df
+
+    try:
+        latest = load_latest_date()
+        if latest:
+            decisions_df = load_decisions_df(latest)
+            positions_df = compute_risk_tags(positions_df, decisions_df)
+    except Exception:
+        positions_df["risk_tags"] = ""
+
+    return positions_df
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("  data_loader 自测")
@@ -247,5 +478,20 @@ if __name__ == "__main__":
 
     tr = load_trade_report()
     print(f"  交易报告: {len(tr)} 行")
+
+    print("\n--- QMT 实盘数据 ---")
+    conn = refresh_qmt_connection()
+    print(f"  QMT 连接: {'🟢 已连接' if conn['connected'] else '🔴 不可达'}")
+    if conn["connected"]:
+        asset = load_qmt_asset()
+        if asset:
+            print(f"  总资产: ¥{asset['total_asset']:,.2f}")
+            print(f"  现金: ¥{asset['cash']:,.2f}")
+        positions = load_qmt_positions_df()
+        print(f"  持仓: {len(positions)} 只")
+        orders = load_qmt_orders_df()
+        print(f"  委托: {len(orders)} 条")
+        trades = load_qmt_trades_df()
+        print(f"  成交: {len(trades)} 条")
 
     print(f"\n  ✅ data_loader 自测完成")

@@ -184,6 +184,15 @@ def format_price(val) -> str:
     return f"{val:.2f}"
 
 
+def format_money(val) -> str:
+    """格式化金额（带千分位）"""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return "-"
+    if isinstance(val, (int, float)):
+        return f"¥{val:,.2f}"
+    return str(val)
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("  components 自测（非 Streamlit 环境，仅验证工具函数）")

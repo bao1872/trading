@@ -318,6 +318,26 @@ def render():
         ])
 
         st.dataframe(plan_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.subheader("🚀 实盘执行")
+        st.markdown("保存的计划可以通过实盘交易页提交到 QMT 执行。")
+
+        col_exec1, col_exec2 = st.columns(2)
+        with col_exec1:
+            if st.button("📊 加载实盘持仓验证", use_container_width=True):
+                from vis.common.data_loader import load_qmt_positions_df
+                positions = load_qmt_positions_df()
+                if not positions.empty:
+                    st.success(f"已加载 {len(positions)} 只 QMT 实盘持仓")
+                    st.dataframe(positions, use_container_width=True, hide_index=True)
+                else:
+                    st.warning("无法加载实盘持仓，请检查 QMT 连接")
+
+        with col_exec2:
+            if st.button("🔌 前往实盘交易控制台 →", use_container_width=True, type="primary"):
+                st.switch_page("pages/7_🔌_实盘交易.py")
+
     elif save_clicked and not plan_rows:
         st.warning("无计划条目可保存")
 
