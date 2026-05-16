@@ -37,6 +37,7 @@ import pandas as pd
 
 from stop_experiment.pipeline.stop_config import (
     OUTPUT_DIR, MODELS_DIR, OBS_VAL_END,
+    filter_production_candidates,
 )
 
 
@@ -80,6 +81,11 @@ def generate_full_predictions():
 
     test_df[available_cols].to_parquet(output_path, index=False)
     print(f"输出: {output_path} ({len(test_df)} 行, {len(available_cols)} 列)")
+
+    prod_path = os.path.join(OUTPUT_DIR, "production_test_predictions.parquet")
+    prod_df = filter_production_candidates(test_df)
+    prod_df[available_cols].to_parquet(prod_path, index=False)
+    print(f"输出: {prod_path} ({len(prod_df)} 行, production 口径)")
 
     date_range = f"{test_df['obs_date'].min().strftime('%Y-%m-%d')} ~ {test_df['obs_date'].max().strftime('%Y-%m-%d')}"
     print(f"  日期范围: {date_range}")

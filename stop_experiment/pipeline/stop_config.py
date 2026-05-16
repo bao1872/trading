@@ -31,7 +31,7 @@ CANDIDATE_OBS_DAYS = [1, 2, 3]  # 生产候选池 obs_day 范围（原 [1]，202
 
 # ==================== K线 warm-up / forward ====================
 FACTOR_WARMUP_DAYS = 600        # 因子计算K线回看天数（约2.4年，覆盖DSA/BBMacd完整warm-up）
-FACTOR_FORWARD_DAYS = OBS_DAYS + 50  # 标签计算前瞻天数
+LABEL_FORWARD_DAYS = OBS_DAYS + 25  # 标签计算前瞻天数（obs_date后20交易日+缓冲）
 
 # ==================== 交易成本 ====================
 BUY_COST = 0.0005          # 买入成本（佣金万五）
@@ -137,9 +137,17 @@ def filter_production_candidates(df):
     必须调用此函数，禁止内联重写过滤逻辑。
     """
     import pandas as pd
-    df = df[df["obs_day"].isin(CANDIDATE_OBS_DAYS)].copy()
-    df = df.sort_values("obs_day").drop_duplicates(
-        subset=["ts_code", "obs_date"],
-        keep="first",
-    )
-    return df
+    if df is None or len(df) == 0:
+        return df
+    out = df.copy()
+    if "obs_day" in out.columns:
+        out = out[out["obs_day"].isin(CANDIDATE_OBS_DAYS)].copy()
+    sort_cols = []
+    for c in ["ts_code", "obs_date", "obs_day", "signal_id"]:
+        if c in out.columns:
+            sort_cols.append(c)
+    if sort_cols:
+        out = out.sort_values(sort_cols)
+    if {"ts_code", "obs_date"}.issubset(out.columns):
+        out = out.drop_duplicates(subset=["ts_code", "obs_date"], keep="first")
+    return out.reset_index(drop=True)

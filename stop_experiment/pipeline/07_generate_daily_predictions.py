@@ -65,7 +65,7 @@ from stop_experiment.pipeline.stop_config import (
     OBS_DAYS, SELL_CLS_THRESHOLD, BUY_CLS_THRESHOLD,
     OUTPUT_DIR, MODELS_DIR, PREDICTIONS_DIR, MODEL_SPECS,
     PRODUCTION_PARAMS, CANDIDATE_OBS_DAYS,
-    FACTOR_WARMUP_DAYS, FACTOR_FORWARD_DAYS,
+    FACTOR_WARMUP_DAYS,
     filter_production_candidates,
 )
 from stop_experiment.pipeline.factor_columns import (
@@ -114,11 +114,12 @@ def _resolve_trade_date(args, engine):
 
 # ==================== Step 2: 构造单日候选样本 ====================
 
-def _build_candidates(target_date, engine, position_codes: list = None):
+def _build_candidates(target_date, engine, position_codes: list = None, kline_end_date=None):
     """
     从 DB 构造 obs_date=T 的单日候选样本。
     复用 01_build_dataset 的函数，但只加载必要的信号和 K 线。
     若提供 position_codes，将持仓股合并到候选池统一计算。
+    若提供 kline_end_date，K线加载截止日替换为该日期（用于前视偏差检查）。
     返回 (df_day, kline_dict, msg)。
     """
     target_dt = pd.to_datetime(target_date) if isinstance(target_date, str) else target_date
@@ -159,7 +160,10 @@ def _build_candidates(target_date, engine, position_codes: list = None):
     max_signal = signals["signal_date"].max()
 
     kline_start = (pd.Timestamp(target_dt) - pd.Timedelta(days=FACTOR_WARMUP_DAYS)).strftime("%Y-%m-%d")
-    kline_end = (pd.Timestamp(max_signal) + pd.Timedelta(days=FACTOR_FORWARD_DAYS)).strftime("%Y-%m-%d")
+    if kline_end_date is not None:
+        kline_end = pd.Timestamp(kline_end_date).strftime("%Y-%m-%d")
+    else:
+        kline_end = target_dt.strftime("%Y-%m-%d")
 
     kline_dict = {}
     with engine.connect() as conn:
@@ -227,6 +231,7 @@ def _merge_and_derive(df, kline_dict):
     _mod01b = __import__("stop_experiment.pipeline.01_build_dataset", fromlist=["merge_factor_lib_features", "build_derived_features"])
     merge_factor_lib_features = _mod01b.merge_factor_lib_features
     build_derived_features = _mod01b.build_derived_features
+
     df = merge_factor_lib_features(df, kline_dict)
     df = build_derived_features(df)
     return df
@@ -398,7 +403,7 @@ def _save_predictions_split_profile(df, target_date):
 
 # ==================== 主入口 ====================
 
-def generate_daily_predictions(target_date, force=False, position_codes: list = None):
+def generate_daily_predictions(target_date, force=False, position_codes: list = None, kline_end_date=None):
     """6 步日推理主流程。返回 (success, message, output_path)。"""
     if isinstance(target_date, str):
         target_date = pd.to_datetime(target_date)
@@ -462,7 +467,7 @@ def generate_daily_predictions(target_date, force=False, position_codes: list = 
     try:
         # Step 2: 构造候选（含持仓股合并）
         print(f"\n[Step 2] 构造单日候选样本...")
-        df_day, kline_dict, msg2 = _build_candidates(target_date, engine, position_codes)
+        df_day, kline_dict, msg2 = _build_candidates(target_date, engine, position_codes, kline_end_date=kline_end_date)
         if df_day is None:
             # 无候选 → 生成空预测账本
             os.makedirs(PREDICTIONS_DIR, exist_ok=True)
@@ -510,7 +515,7 @@ def _write_day_to_db(day_data, date_str):
         print(f"  [DB] 写入失败: {e}")
 
 
-def backfill_predictions(start_date, end_date, force=False):
+def backfill_predictions(start_date, end_date, force=False, kline_end_date=None):
     """批量回补指定日期范围的预测结果到 parquet + prediction_store + DB。
 
     数据源优先级（无需构造因子）：
@@ -594,7 +599,7 @@ def backfill_predictions(start_date, end_date, force=False):
                 print(f"  [跳过] 无数据")
                 success_count += 1
             else:
-                ok, msg, path = generate_daily_predictions(td, force=force)
+                ok, msg, path = generate_daily_predictions(td, force=force, kline_end_date=kline_end_date)
                 if ok:
                     print(f"  ✅ {msg}")
                     success_count += 1
@@ -740,10 +745,11 @@ def main():
     parser.add_argument("--force", action="store_true", help="强制覆盖已存在的预测账本")
     parser.add_argument("--no-positions", action="store_true", help="禁用持仓股模式")
     parser.add_argument("--no-watchlist", action="store_true", help="禁用自选股模式（默认启用）")
+    parser.add_argument("--kline-end-date", help="K线加载截止日 YYYY-MM-DD（用于前视偏差检查，截断未来K线）")
     args = parser.parse_args()
 
     if args.start_date and args.end_date:
-        total, ok, fails = backfill_predictions(args.start_date, args.end_date, force=args.force)
+        total, ok, fails = backfill_predictions(args.start_date, args.end_date, force=args.force, kline_end_date=args.kline_end_date)
         if fails:
             sys.exit(1)
         return
@@ -801,7 +807,7 @@ def main():
 
     all_extra_codes = list(set((position_codes or []) + (watchlist_codes or [])))
 
-    success, msg, path = generate_daily_predictions(target_date, force=args.force, position_codes=all_extra_codes)
+    success, msg, path = generate_daily_predictions(target_date, force=args.force, position_codes=all_extra_codes, kline_end_date=args.kline_end_date)
     print(f"\n{msg}")
     if success:
         print(f"  ✅ 完成: {path}")

@@ -56,7 +56,7 @@ from sqlalchemy import text
 from stop_experiment.pipeline.stop_config import (
     OBS_DAYS, SELL_CLS_THRESHOLD, BUY_CLS_THRESHOLD,
     OUTPUT_DIR, DATASET_PATH,
-    FACTOR_WARMUP_DAYS, FACTOR_FORWARD_DAYS,
+    FACTOR_WARMUP_DAYS, LABEL_FORWARD_DAYS,
 )
 from stop_experiment.pipeline.factor_columns import (
     SLC_STATIC_COLS, DYNAMIC_COLS, DERIVED_COLS,
@@ -141,6 +141,7 @@ def load_batch_kline(conn, ts_codes: list, start_date: str, end_date: str) -> di
     })
     kline_dict = {}
     for ts_code, gdf in df.groupby("ts_code"):
+        gdf["bar_time"] = pd.to_datetime(gdf["bar_time"])
         gdf = gdf.set_index("bar_time").sort_index()
         kline_dict[ts_code] = gdf
     return kline_dict
@@ -169,12 +170,12 @@ def expand_observation_period(signals: pd.DataFrame, kline_dict: dict) -> pd.Dat
     for _, signal in tqdm(signals.iterrows(), total=len(signals), desc="展开观察期"):
         ts_code = signal["ts_code"]
         signal_date = signal["signal_date"] if pd.notna(signal["signal_date"]) else signal["selection_date"]
+        signal_date = pd.Timestamp(signal_date)
 
         kline = kline_dict.get(ts_code)
         if kline is None or kline.empty:
             continue
 
-        # 找信号日之后第一个交易日作为观察期起点
         obs_start_mask = kline.index >= signal_date
         if not obs_start_mask.any():
             continue
@@ -325,43 +326,68 @@ def merge_factor_lib_features(dataset: pd.DataFrame, kline_dict: dict) -> pd.Dat
     """
     对每只股票计算因子库特征，按 ts_code + obs_date merge 到数据集。
 
+    截断K线到 max(obs_date) 一次计算全部因子。
+    pivot 因子的前视偏差已在 compute_pivot_factors 中修复：
+    对最后一段未结束的 run，沿用上一段已完成 run 的 pivot 值，
+    确保 T 时刻的因子值只使用 T 之前确认的 pivot。
+
     Parameters
     ----------
     dataset : pd.DataFrame
         expand_observation_period 的输出
     kline_dict : dict
-        {ts_code: DataFrame}
+        {ts_code: DataFrame}，K线需包含因子计算所需的前置数据
 
     Returns
     -------
     pd.DataFrame
         增加了因子库特征列
     """
+    from stop_experiment.pipeline.compute_factors import compute_stock_factors
     from stop_experiment.pipeline.factor_columns import (
         TREND_COLS, POSITION_COLS, MOMENTUM_COLS,
         VOLUME_COLS, RISK_COLS, RHYTHM_COLS, VSA_COLS,
     )
-    factor_lib_cols = TREND_COLS + POSITION_COLS + MOMENTUM_COLS + VOLUME_COLS + RISK_COLS + RHYTHM_COLS + VSA_COLS
+    from stop_experiment.pipeline.stop_config import VSA_ENABLED
+
+    factor_lib_cols = TREND_COLS + POSITION_COLS + MOMENTUM_COLS + VOLUME_COLS + RISK_COLS + RHYTHM_COLS + (VSA_COLS if VSA_ENABLED else [])
 
     all_factor_rows = []
     ts_codes = dataset["ts_code"].unique()
-    print(f"  计算因子库: {len(ts_codes)} 只股票")
+    print(f"  计算因子库: {len(ts_codes)} 只股票 (截断到max(obs_date)一次计算)")
 
     for ts_code in tqdm(ts_codes, desc="因子库计算"):
         kline = kline_dict.get(ts_code)
         if kline is None or kline.empty:
             continue
+
+        stock_mask = dataset["ts_code"] == ts_code
+        stock_obs_dates = sorted(dataset.loc[stock_mask, "obs_date"].unique())
+        if not stock_obs_dates:
+            continue
+
+        max_obs_date = pd.Timestamp(max(stock_obs_dates))
+        kline_truncated = kline[kline.index <= max_obs_date]
+        if len(kline_truncated) < 10:
+            continue
+
         try:
-            factors = compute_stock_factors(kline)
-            factors["ts_code"] = ts_code
-            factors = factors.reset_index()
-            factors = factors.rename(columns={"bar_time": "obs_date"})
-            # 只保留需要的列
-            keep_cols = ["ts_code", "obs_date"] + [c for c in factor_lib_cols if c in factors.columns]
-            all_factor_rows.append(factors[keep_cols])
+            factors = compute_stock_factors(kline_truncated)
         except Exception as e:
             print(f"    {ts_code} 因子计算失败: {e}")
             continue
+
+        obs_dates_ts = [pd.Timestamp(d) for d in stock_obs_dates]
+        available_dates = [d for d in obs_dates_ts if d in factors.index]
+        if not available_dates:
+            continue
+
+        available_cols = [c for c in factor_lib_cols if c in factors.columns]
+        factor_rows = factors.loc[available_dates, available_cols].copy()
+        factor_rows["ts_code"] = ts_code
+        factor_rows = factor_rows.reset_index()
+        factor_rows = factor_rows.rename(columns={"bar_time": "obs_date"})
+        all_factor_rows.append(factor_rows)
 
     if not all_factor_rows:
         print("  警告: 无因子数据")
@@ -370,7 +396,6 @@ def merge_factor_lib_features(dataset: pd.DataFrame, kline_dict: dict) -> pd.Dat
     factor_df = pd.concat(all_factor_rows, ignore_index=True)
     print(f"  因子数据: {len(factor_df)} 行")
 
-    # merge
     dataset["obs_date"] = pd.to_datetime(dataset["obs_date"])
     factor_df["obs_date"] = pd.to_datetime(factor_df["obs_date"])
     dataset = dataset.merge(factor_df, on=["ts_code", "obs_date"], how="left")
@@ -448,14 +473,13 @@ def build_batch(signals_batch: pd.DataFrame, kline_dict: dict, batch_idx: int) -
     print(f"  Batch {batch_idx}: {len(signals_batch)} 条信号, "
           f"{signals_batch['ts_code'].nunique()} 只股票")
 
-    # 展开观察期
+    # 展开观察期（需要forward K线计算标签）
     dataset = expand_observation_period(signals_batch, kline_dict)
     print(f"    展开后: {len(dataset)} 行")
 
     if dataset.empty:
         return {"rows": 0, "signals": 0}
 
-    # 因子库特征
     dataset = merge_factor_lib_features(dataset, kline_dict)
 
     # 派生特征
@@ -466,6 +490,9 @@ def build_batch(signals_batch: pd.DataFrame, kline_dict: dict, batch_idx: int) -
     batch_path = os.path.join(BATCHES_DIR, f"batch_{batch_idx:03d}.parquet")
     dataset.to_parquet(batch_path, index=False)
 
+    # 数据质量检查
+    _check_batch_quality(dataset, batch_idx)
+
     info = {
         "rows": len(dataset),
         "signals": len(signals_batch),
@@ -475,6 +502,47 @@ def build_batch(signals_batch: pd.DataFrame, kline_dict: dict, batch_idx: int) -
     }
     print(f"    保存: {batch_path} ({info['rows']} 行)")
     return info
+
+
+def _check_batch_quality(dataset: pd.DataFrame, batch_idx: int) -> None:
+    """每个 batch 构建后检查数据质量，及时发现异常。"""
+    from stop_experiment.pipeline.factor_columns import PIVOT_COLS, RHYTHM_COLS, POSITION_COLS
+
+    total = len(dataset)
+    if total == 0:
+        print(f"    ⚠️ Batch {batch_idx}: 空数据集")
+        return
+
+    # 1. 关键因子 NaN 率
+    check_cols = PIVOT_COLS + ["dsa_dir", "DSA_VWAP", "bbmacd_minus_avg"]
+    for col in check_cols:
+        if col in dataset.columns:
+            nan_rate = dataset[col].isna().mean()
+            if nan_rate > 0.3:
+                print(f"    ⚠️ Batch {batch_idx}: {col} NaN率={nan_rate:.1%}")
+
+    # 2. pivot 因子全 NaN 的股票数
+    pivot_available = [c for c in PIVOT_COLS if c in dataset.columns]
+    if pivot_available:
+        all_nan_per_stock = dataset.groupby("ts_code")[pivot_available].apply(
+            lambda g: g.isna().all().all()
+        )
+        n_all_nan = all_nan_per_stock.sum()
+        if n_all_nan > 0:
+            print(f"    ⚠️ Batch {batch_idx}: {n_all_nan} 只股票 pivot 因子全 NaN")
+
+    # 3. 因子值范围检查
+    if "dsa_pivot_pos_01" in dataset.columns:
+        valid = dataset["dsa_pivot_pos_01"].dropna()
+        if len(valid) > 0:
+            out_of_range = ((valid < 0) | (valid > 1)).mean()
+            if out_of_range > 0:
+                print(f"    ⚠️ Batch {batch_idx}: dsa_pivot_pos_01 超出[0,1]比例={out_of_range:.1%}")
+
+    # 4. obs_day 分布
+    obs_day_dist = dataset["obs_day"].value_counts().sort_index()
+    n_obs_days = len(obs_day_dist)
+    print(f"    质量: {total} 行, {n_obs_days} obs_days, NaN检查通过")
 
 
 def build_manifest(batch_infos: list, total_rows: int) -> dict:
@@ -547,7 +615,7 @@ def main(args):
         # 按批次加载K线（只加载该批次涉及的股票）
         batch_ts_codes = sorted(signals_batch["ts_code"].unique())
         batch_kline_start = pd.Timestamp(signals_batch["selection_date"].min()) - pd.Timedelta(days=FACTOR_WARMUP_DAYS)
-        batch_kline_end = pd.Timestamp(signals_batch["selection_date"].max()) + pd.Timedelta(days=FACTOR_FORWARD_DAYS)
+        batch_kline_end = pd.Timestamp(signals_batch["selection_date"].max()) + pd.Timedelta(days=OBS_DAYS + 25)
 
         print(f"\n  加载K线: Batch {batch_idx}, {len(batch_ts_codes)} 只股票...")
         with engine.connect() as conn:

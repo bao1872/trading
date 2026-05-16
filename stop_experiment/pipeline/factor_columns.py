@@ -97,10 +97,8 @@ RISK_COLS = [
 # ==================== 节奏/协同类因子 ====================
 RHYTHM_COLS = [
     "current_stage_bars",   # int, 当前阶段K线数
-    "current_stage_amp_pct", # float, 当前阶段振幅百分比
     "current_stage_ret_pct", # float, 当前阶段收益百分比
     "prev_stage_bars",      # int, 前一阶段K线数
-    "prev_stage_amp_pct",   # float, 前一阶段振幅百分比
     "price_vol_coord",      # int, 价量协同方向
 ]
 
@@ -181,6 +179,17 @@ ALL_FEATURE_COLS = (
 )
 # ~69列含VSA (57基础 + 12 VSA)，默认57列（VSA_ENABLED=False）
 
+# ==================== 需要逐obs_date截断K线计算的因子 ====================
+# 这些因子依赖 DSA hindsight 段确认的 pivot，T时刻之后确认的 pivot 不允许
+# 被用来计算 T 时刻的因子值（前视偏差），因此必须逐 obs_date 截断 K 线重算
+PIVOT_COLS = [
+    "prev_pivot_code",
+    "dsa_pivot_pos_01",
+    "ret_to_last_high_pct",
+    "ret_to_last_low_pct",
+    "liquidity_range_pos_01",
+]
+
 # ==================== 剔除的不可比因子（仅作文档记录） ====================
 EXCLUDED_ABSOLUTE_COLS = {
     # SLC绝对值因子
@@ -218,4 +227,6 @@ EXCLUDED_ABSOLUTE_COLS = {
     "buy_stop_triggered": "gain=0",
     "bbmacd_state": "低贡献+高基数类别编码",
     "last_event_type": "低贡献+高基数类别编码",
+    "current_stage_amp_pct": "前视偏差：依赖整段run极值，需逐obs_date截断K线",
+    "prev_stage_amp_pct": "前视偏差：继承自current_stage_amp_pct",
 }

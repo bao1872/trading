@@ -65,6 +65,10 @@ def compute_stock_factors(df_kline: pd.DataFrame) -> pd.DataFrame:
     # 1. compute_dsa → 趋势+位置+节奏因子
     dsa_result, _, _ = compute_dsa(df_kline, cfg)
 
+    # 1b. 修复 pivot 前视偏差：对最后一段未结束的 run，
+    #     不使用其确认的 pivot，沿用上一段已完成 run 的值
+    _fix_last_run_pivot_lookahead(dsa_result, df_kline)
+
     # 2. compute_bbmacd → 动量因子
     bb_result = compute_bbmacd(df_kline)
 
@@ -164,7 +168,160 @@ def compute_stock_factors(df_kline: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def compute_pivot_factors(df_kline: pd.DataFrame) -> pd.DataFrame:
+    """
+    计算依赖 DSA hindsight 段确认 pivot 的因子，消除前视偏差。
+
+    前视偏差来源：compute_dsa 的 hindsight 段对最后一段未结束的 run
+    用 nanargmax/nanargmin 确认 pivot，但该 pivot 位置可能在未来 bar。
+    T 时刻之后被确认的 pivot 不允许用来计算 T 时刻的因子值。
+
+    修复方法：对最后一段未结束的 run，不使用其确认的 pivot，
+    沿用上一段已完成 run 的 last_confirmed_high/low 和 prev_pivot_type，
+    然后重新计算 dsa_pivot_pos_01、ret_to_last_high_pct 等。
+
+    计算一次即可，无需逐 obs_date 截断 K 线重算。
+
+    Parameters
+    ----------
+    df_kline : pd.DataFrame
+        需含列: open, high, low, close, volume。index 为 datetime。
+
+    Returns
+    -------
+    pd.DataFrame
+        index 与输入一致，列为 PIVOT_COLS 中的列。
+    """
+    from features.dsa_bbmacd_24factors_viewer import compute_dsa, DSAConfig, _run_from_dir
+    from stop_experiment.pipeline.factor_columns import PIVOT_COLS
+
+    cfg = DSAConfig()
+    dsa_result, _, _ = compute_dsa(df_kline, cfg)
+
+    merged = df_kline[["close"]].copy()
+    for col in dsa_result.columns:
+        merged[col] = dsa_result[col]
+
+    n = len(merged)
+    dir_out = dsa_result["dsa_dir"].to_numpy(float)
+    runs = _run_from_dir(dir_out)
+
+    # 找到最后一段 run（延伸到数据末尾的 run 即为未结束的 run）
+    last_run_start = None
+    for st_run, ed_run, run_dir in runs:
+        if ed_run == n - 1:
+            last_run_start = st_run
+            break
+
+    # 对最后一段未结束的 run，用上一段已完成 run 的 pivot 值覆盖
+    if last_run_start is not None and last_run_start > 0:
+        prev_bar = last_run_start - 1
+        for col in ["last_confirmed_high", "last_confirmed_low", "prev_pivot_type"]:
+            if col in merged.columns:
+                prev_val = merged.iloc[prev_bar][col]
+                merged.iloc[last_run_start:, col] = prev_val
+
+    # NaN 兜底：对所有 last_confirmed_high/low 为 NaN 的 bar，
+    # 用该 bar 之前的历史极值替代（次新股K线不足，hindsight 段未确认 pivot）
+    high = df_kline["high"].to_numpy(float)
+    low = df_kline["low"].to_numpy(float)
+    for col, extreme_arr in [("last_confirmed_high", high), ("last_confirmed_low", low)]:
+        if col not in merged.columns:
+            continue
+        nan_mask = merged[col].isna().to_numpy()
+        if not nan_mask.any():
+            continue
+        if col == "last_confirmed_high":
+            cum_extreme = np.maximum.accumulate(extreme_arr)
+        else:
+            cum_extreme = np.minimum.accumulate(extreme_arr)
+        merged.loc[nan_mask, col] = cum_extreme[nan_mask]
+
+    # 重新计算 dsa_pivot_pos_01（基于修复后的 last_confirmed_high/low）
+    if "dsa_pivot_pos_01" in merged.columns:
+        rh = merged["last_confirmed_high"].to_numpy(float)
+        rl = merged["last_confirmed_low"].to_numpy(float)
+        close_arr = merged["close"].to_numpy(float)
+        lo = np.minimum(rl, rh)
+        hi = np.maximum(rl, rh)
+        valid = np.isfinite(lo) & np.isfinite(hi) & (hi > lo)
+        pos = np.full(n, np.nan)
+        pos[valid] = np.clip((close_arr[valid] - lo[valid]) / (hi[valid] - lo[valid]), 0.0, 1.0)
+        merged["dsa_pivot_pos_01"] = pos
+
+    pivot_code_map = {"HH": 2.0, "HL": 1.0, "LH": -1.0, "LL": -2.0}
+    merged["prev_pivot_code"] = merged["prev_pivot_type"].map(pivot_code_map).astype(float)
+    merged["ret_to_last_high_pct"] = merged["close"] / merged["last_confirmed_high"] - 1.0
+    merged["ret_to_last_low_pct"] = merged["close"] / merged["last_confirmed_low"] - 1.0
+    merged["liquidity_range_pos_01"] = merged["dsa_pivot_pos_01"]
+
+    keep_cols = [c for c in PIVOT_COLS if c in merged.columns]
+    return merged[keep_cols].copy()
+
+
 # ==================== 辅助计算函数 ====================
+
+def _fix_last_run_pivot_lookahead(dsa_result: pd.DataFrame, df_kline: pd.DataFrame) -> None:
+    """
+    就地修复 dsa_result 中 pivot 前视偏差和 NaN 问题。
+
+    1. 前视偏差修复：对最后一段未结束的 run，沿用上一段已完成 run 的
+       last_confirmed_high/low 和 prev_pivot_type。
+    2. NaN 兜底：对所有 last_confirmed_high/low 仍为 NaN 的 bar
+       （次新股K线不足，hindsight 段未确认 pivot），用历史极值替代。
+    3. 重新计算 dsa_pivot_pos_01。
+    """
+    from features.dsa_bbmacd_24factors_viewer import _run_from_dir
+
+    n = len(dsa_result)
+    if n == 0:
+        return
+
+    dir_out = dsa_result["dsa_dir"].to_numpy(float)
+    runs = _run_from_dir(dir_out)
+
+    last_run_start = None
+    for st_run, ed_run, run_dir in runs:
+        if ed_run == n - 1:
+            last_run_start = st_run
+            break
+
+    close = df_kline["close"].to_numpy(float)
+    high = df_kline["high"].to_numpy(float)
+    low = df_kline["low"].to_numpy(float)
+
+    # 阶段1: 修复最后一段未结束的 run（前视偏差）
+    if last_run_start is not None and last_run_start > 0:
+        prev_bar = last_run_start - 1
+        for col in ["last_confirmed_high", "last_confirmed_low", "prev_pivot_type"]:
+            if col in dsa_result.columns:
+                prev_val = dsa_result.iloc[prev_bar][col]
+                dsa_result.iloc[last_run_start:, dsa_result.columns.get_loc(col)] = prev_val
+
+    # 阶段2: NaN 兜底 — 对所有 last_confirmed_high/low 为 NaN 的 bar，
+    # 用该 bar 之前的历史极值替代
+    for col, extreme_arr in [("last_confirmed_high", high), ("last_confirmed_low", low)]:
+        if col not in dsa_result.columns:
+            continue
+        nan_mask = dsa_result[col].isna().to_numpy()
+        if not nan_mask.any():
+            continue
+        if col == "last_confirmed_high":
+            cum_extreme = np.maximum.accumulate(extreme_arr)
+        else:
+            cum_extreme = np.minimum.accumulate(extreme_arr)
+        dsa_result.loc[nan_mask, col] = cum_extreme[nan_mask]
+
+    # 阶段3: 重新计算 dsa_pivot_pos_01（基于修复后的 last_confirmed_high/low）
+    if "dsa_pivot_pos_01" in dsa_result.columns:
+        rh = dsa_result["last_confirmed_high"].to_numpy(float)
+        rl = dsa_result["last_confirmed_low"].to_numpy(float)
+        lo = np.minimum(rl, rh)
+        hi = np.maximum(rl, rh)
+        valid = np.isfinite(lo) & np.isfinite(hi) & (hi > lo)
+        pos = np.full(n, np.nan)
+        pos[valid] = np.clip((close[valid] - lo[valid]) / (hi[valid] - lo[valid]), 0.0, 1.0)
+        dsa_result["dsa_pivot_pos_01"] = pos
 
 def volume_zscore(vol: pd.Series, win: int) -> tuple[pd.Series, pd.Series, pd.Series]:
     """成交量Z-score（引用权威实现）"""

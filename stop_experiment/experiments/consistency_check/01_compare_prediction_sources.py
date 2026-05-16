@@ -4,23 +4,29 @@
 离线预测 vs 实时推理 一致性验证
 
 Purpose:
-    对比离线 full_test_predictions 与 07 实时推理的预测一致性，
+    对比离线 production_test_predictions 与 07 实时推理的预测一致性，
+    检查候选池覆盖率、obs_day 一致性、预测差异、排序一致性，
     定位 K 线起始点、因子 warm-up、信号查询范围等差异根因。
 
 Inputs:
-    - stop_experiment/output/full_test_predictions.parquet (离线预测)
+    - stop_experiment/output/production_test_predictions.parquet (离线预测，优先)
+    - stop_experiment/output/full_test_predictions.parquet (离线预测，回退)
     - DB: stop_loss_selection, stock_k_data (实时推理数据源)
     - stop_experiment/output/models_control/*_final.txt (模型文件)
 
 Outputs:
-    - experiments/consistency_check/results/prediction_diff_{date}.csv (逐日预测差异)
-    - experiments/consistency_check/results/feature_diff_{date}_{ts_code}.csv (特征差异)
-    - experiments/consistency_check/results/consistency_summary.csv (汇总报告)
+    - experiments/consistency_check/results/consistency_summary.csv (汇总)
+    - experiments/consistency_check/results/prediction_diff_{date}.csv (预测差异详情)
+    - experiments/consistency_check/results/offline_only_{date}.csv (仅离线有)
+    - experiments/consistency_check/results/realtime_only_{date}.csv (仅实时有)
+    - experiments/consistency_check/results/obs_day_mismatch_{date}.csv (obs_day 不一致)
+    - experiments/consistency_check/results/diagnosis_summary.csv (根因诊断)
+    - experiments/consistency_check/results/verdict.json (判定结果)
 
 How to Run:
     python -m stop_experiment.experiments.consistency_check.01_compare_prediction_sources
     python -m stop_experiment.experiments.consistency_check.01_compare_prediction_sources --dates 2026-01-05 2026-02-02
-    python -m stop_experiment.experiments.consistency_check.01_compare_prediction_sources --sample-stock 000001.SZ
+    python -m stop_experiment.experiments.consistency_check.01_compare_prediction_sources --dates 2026-01-05 --sample-stock 000001.SZ
 
 Side Effects:
     - 只读 DB + parquet + 模型文件，不写入任何表
@@ -31,6 +37,7 @@ from __future__ import annotations
 
 import sys
 import os
+import json
 import argparse
 import logging
 import importlib
@@ -39,9 +46,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 
 import numpy as np
 import pandas as pd
+from scipy import stats as scipy_stats
 
 from stop_experiment.pipeline.stop_config import (
-    OUTPUT_DIR, OBS_VAL_END, CANDIDATE_OBS_DAYS,
+    OUTPUT_DIR,
+    OBS_VAL_END,
+    OBS_DAYS,
+    CANDIDATE_OBS_DAYS,
+    FACTOR_WARMUP_DAYS,
+    filter_production_candidates,
 )
 from stop_experiment.pipeline.factor_columns import ALL_FEATURE_COLS
 
@@ -56,30 +69,37 @@ EXPERIMENT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(EXPERIMENT_DIR, "results")
 
 PRED_COLS = ["pred_sell_reg", "pred_sell_cls", "pred_buy_reg", "pred_buy_cls"]
-DIFF_THRESHOLD = 1e-4
 DEFAULT_TEST_DATES = [
     "2026-01-05", "2026-02-02", "2026-03-02", "2026-04-01", "2026-05-06",
 ]
 
 
 def _import_mod07():
-    mod = importlib.import_module("stop_experiment.pipeline.07_generate_daily_predictions")
-    return mod
+    return importlib.import_module("stop_experiment.pipeline.07_generate_daily_predictions")
 
 
 def load_offline_predictions(dates: list[str]) -> pd.DataFrame:
-    ftp_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
-    if not os.path.exists(ftp_path):
-        raise FileNotFoundError(f"离线预测文件不存在: {ftp_path}")
-    ftp = pd.read_parquet(ftp_path)
-    ftp["obs_date"] = pd.to_datetime(ftp["obs_date"])
+    prod_path = os.path.join(OUTPUT_DIR, "production_test_predictions.parquet")
+    full_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
+
+    if os.path.exists(prod_path):
+        logger.info("读取 production_test_predictions.parquet")
+        df = pd.read_parquet(prod_path)
+    elif os.path.exists(full_path):
+        logger.info("production_test_predictions.parquet 不存在，回退 full_test_predictions.parquet")
+        df = pd.read_parquet(full_path)
+    else:
+        raise FileNotFoundError(
+            f"离线预测文件不存在: {prod_path} 或 {full_path}"
+        )
+
+    df["obs_date"] = pd.to_datetime(df["obs_date"])
     target_dates = pd.to_datetime(dates)
-    df = ftp[ftp["obs_date"].isin(target_dates)].copy()
-    if "obs_day" in df.columns:
-        df = df[df["obs_day"].isin(CANDIDATE_OBS_DAYS)].copy()
-        if "ts_code" in df.columns and "obs_date" in df.columns:
-            df = df.sort_values("obs_day").drop_duplicates(subset=["ts_code", "obs_date"], keep="first")
-    logger.info("离线预测: %d 行 (%s)", len(df), ", ".join(dates))
+    df = df[df["obs_date"].isin(target_dates)].copy()
+
+    df = filter_production_candidates(df)
+
+    logger.info("离线预测(生产口径): %d 行 (%s)", len(df), ", ".join(dates))
     return df
 
 
@@ -96,14 +116,71 @@ def run_realtime_inference(target_date: str, mod07) -> pd.DataFrame:
             return pd.DataFrame()
         df_day = mod07._merge_and_derive(df_day, kline_dict)
         df_day = mod07._predict_and_score(df_day)
-        logger.info("实时推理 %s: %d 行", target_date, len(df_day))
+        df_day = filter_production_candidates(df_day)
+        logger.info("实时推理 %s(生产口径): %d 行", target_date, len(df_day))
         return df_day
     finally:
         engine.dispose()
 
 
+def _compute_pred_diff_stats(merged: pd.DataFrame) -> dict:
+    stats = {}
+    for col in PRED_COLS:
+        off_col = f"{col}_off"
+        rt_col = f"{col}_rt"
+        if off_col not in merged.columns or rt_col not in merged.columns:
+            for suffix in ["mean_abs_diff", "p95_abs_diff", "p99_abs_diff",
+                           "max_abs_diff", "diff_gt_1e_6_rate", "diff_gt_1e_5_rate"]:
+                stats[f"{col}_{suffix}"] = np.nan
+            continue
+        diff = (merged[off_col] - merged[rt_col]).abs()
+        n = len(diff)
+        stats[f"{col}_mean_abs_diff"] = diff.mean()
+        stats[f"{col}_p95_abs_diff"] = diff.quantile(0.95)
+        stats[f"{col}_p99_abs_diff"] = diff.quantile(0.99)
+        stats[f"{col}_max_abs_diff"] = diff.max()
+        stats[f"{col}_diff_gt_1e_6_rate"] = (diff > 1e-6).sum() / n if n > 0 else 0.0
+        stats[f"{col}_diff_gt_1e_5_rate"] = (diff > 1e-5).sum() / n if n > 0 else 0.0
+    return stats
+
+
+def _compute_rank_consistency(merged: pd.DataFrame) -> dict:
+    result = {}
+    if "pred_sell_reg_off" not in merged.columns or "pred_sell_reg_rt" not in merged.columns:
+        result["top10_jaccard"] = np.nan
+        result["top20_jaccard"] = np.nan
+        result["spearman_corr"] = np.nan
+        return result
+
+    off_sorted = merged.sort_values("pred_sell_reg_off", ascending=False)
+    rt_sorted = merged.sort_values("pred_sell_reg_rt", ascending=False)
+
+    off_top10 = set(off_sorted["ts_code"].head(10).tolist())
+    rt_top10 = set(rt_sorted["ts_code"].head(10).tolist())
+    off_top20 = set(off_sorted["ts_code"].head(20).tolist())
+    rt_top20 = set(rt_sorted["ts_code"].head(20).tolist())
+
+    def _jaccard(a: set, b: set) -> float:
+        union = len(a | b)
+        return len(a & b) / union if union > 0 else 0.0
+
+    result["top10_jaccard"] = _jaccard(off_top10, rt_top10)
+    result["top20_jaccard"] = _jaccard(off_top20, rt_top20)
+
+    if len(merged) >= 3:
+        corr, _ = scipy_stats.spearmanr(
+            merged["pred_sell_reg_off"].values,
+            merged["pred_sell_reg_rt"].values,
+        )
+        result["spearman_corr"] = corr
+    else:
+        result["spearman_corr"] = np.nan
+
+    return result
+
+
 def compare_predictions(offline: pd.DataFrame, realtime: pd.DataFrame, date_str: str) -> dict:
-    merge_keys = ["signal_id", "obs_date"]
+    merge_keys = ["ts_code", "obs_date"]
     for key in merge_keys:
         if key not in offline.columns or key not in realtime.columns:
             logger.warning("合并键 %s 缺失，跳过预测对比", key)
@@ -114,149 +191,106 @@ def compare_predictions(offline: pd.DataFrame, realtime: pd.DataFrame, date_str:
     if "obs_date" in rt.columns:
         rt["obs_date"] = pd.to_datetime(rt["obs_date"])
 
+    rt_merge_cols = merge_keys + PRED_COLS
+    if "obs_day" in rt.columns:
+        rt_merge_cols = rt_merge_cols + ["obs_day"]
+
     merged = off.merge(
-        rt[merge_keys + PRED_COLS],
-        on=merge_keys, how="inner", suffixes=("_off", "_rt"),
+        rt[rt_merge_cols],
+        on=merge_keys, how="outer", indicator=True,
+        suffixes=("_off", "_rt"),
     )
-    if merged.empty:
-        logger.warning("日期 %s: 离线与实时无交集", date_str)
-        return {}
 
-    diff_stats = {"date": date_str, "n_matched": len(merged)}
-    for col in PRED_COLS:
-        off_col = f"{col}_off"
-        rt_col = f"{col}_rt"
-        if off_col not in merged.columns or rt_col not in merged.columns:
-            diff_stats[f"{col}_diff_pct"] = np.nan
-            continue
-        diff = (merged[off_col] - merged[rt_col]).abs()
-        n_diff = (diff > DIFF_THRESHOLD).sum()
-        diff_stats[f"{col}_max_diff"] = diff.max()
-        diff_stats[f"{col}_mean_diff"] = diff.mean()
-        diff_stats[f"{col}_diff_pct"] = n_diff / len(merged) if len(merged) > 0 else 0.0
+    offline_only = merged[merged["_merge"] == "left_only"].copy()
+    realtime_only = merged[merged["_merge"] == "right_only"].copy()
+    both = merged[merged["_merge"] == "both"].copy()
 
-    diff_rows = []
-    for col in PRED_COLS:
-        off_col = f"{col}_off"
-        rt_col = f"{col}_rt"
-        if off_col not in merged.columns or rt_col not in merged.columns:
-            continue
-        diff = (merged[off_col] - merged[rt_col]).abs()
-        mask = diff > DIFF_THRESHOLD
-        if mask.any():
-            sub = merged.loc[mask, merge_keys + [off_col, rt_col]].copy()
-            sub["pred_col"] = col
-            sub.columns = [c.replace("_off", "_offline").replace("_rt", "_realtime") if c not in merge_keys else c for c in sub.columns]
-            diff_rows.append(sub)
+    offline_rows = len(off)
+    realtime_rows = len(rt)
+    matched_rows = len(both)
+    offline_only_rows = len(offline_only)
+    realtime_only_rows = len(realtime_only)
+    offline_match_rate = matched_rows / offline_rows if offline_rows > 0 else 0.0
+    realtime_match_rate = matched_rows / realtime_rows if realtime_rows > 0 else 0.0
 
-    if diff_rows:
-        diff_df = pd.concat(diff_rows, ignore_index=True)
-        diff_path = os.path.join(RESULTS_DIR, f"prediction_diff_{date_str}.csv")
-        diff_df.to_csv(diff_path, index=False)
-        logger.info("预测差异详情: %s (%d 行)", diff_path, len(diff_df))
+    obs_day_diff_rate = 0.0
+    obs_day_mismatch = pd.DataFrame()
+    if "obs_day_off" in both.columns and "obs_day_rt" in both.columns:
+        mask = both["obs_day_off"] != both["obs_day_rt"]
+        obs_day_mismatch = both[mask].copy()
+        obs_day_diff_rate = len(obs_day_mismatch) / matched_rows if matched_rows > 0 else 0.0
+    elif "obs_day" in both.columns:
+        obs_day_mismatch = pd.DataFrame()
+        obs_day_diff_rate = 0.0
 
-    return diff_stats
-
-
-def compare_top10_overlap(offline: pd.DataFrame, realtime: pd.DataFrame, date_str: str) -> dict:
-    off = offline[offline["obs_date"] == pd.to_datetime(date_str)].copy()
-    rt = realtime.copy()
-    if "obs_date" in rt.columns:
-        rt["obs_date"] = pd.to_datetime(rt["obs_date"])
-        rt = rt[rt["obs_date"] == pd.to_datetime(date_str)]
-
-    if off.empty or rt.empty:
-        return {"date": date_str, "top10_overlap": np.nan}
-
-    off_top = set(off.nlargest(10, "pred_sell_reg")["ts_code"].tolist()) if "pred_sell_reg" in off.columns else set()
-    rt_top = set(rt.nlargest(10, "pred_sell_reg")["ts_code"].tolist()) if "pred_sell_reg" in rt.columns else set()
-
-    if not off_top and not rt_top:
-        return {"date": date_str, "top10_overlap": np.nan}
-
-    overlap = len(off_top & rt_top)
-    union = len(off_top | rt_top)
-    jaccard = overlap / union if union > 0 else 0.0
-
-    return {
+    summary = {
         "date": date_str,
-        "top10_overlap_count": overlap,
-        "top10_overlap_jaccard": jaccard,
-        "offline_top10": sorted(off_top),
-        "realtime_top10": sorted(rt_top),
+        "offline_rows": offline_rows,
+        "realtime_rows": realtime_rows,
+        "matched_rows": matched_rows,
+        "offline_only_rows": offline_only_rows,
+        "realtime_only_rows": realtime_only_rows,
+        "offline_match_rate": offline_match_rate,
+        "realtime_match_rate": realtime_match_rate,
+        "obs_day_diff_rate": obs_day_diff_rate,
     }
 
+    if obs_day_diff_rate > 0:
+        summary["obs_day_check"] = "FAIL"
+    else:
+        summary["obs_day_check"] = "PASS"
 
-def compare_features(offline_full: pd.DataFrame, realtime: pd.DataFrame,
-                     date_str: str, ts_code: str, mod07) -> pd.DataFrame:
-    from datasource.database import get_engine
+    if not both.empty:
+        pred_stats = _compute_pred_diff_stats(both)
+        summary.update(pred_stats)
 
-    rt = realtime.copy()
-    if "obs_date" in rt.columns:
-        rt["obs_date"] = pd.to_datetime(rt["obs_date"])
-    rt_stock = rt[(rt["ts_code"] == ts_code)].copy()
+        rank_stats = _compute_rank_consistency(both)
+        summary.update(rank_stats)
 
-    if rt_stock.empty:
-        logger.warning("实时推理中无 %s 的数据", ts_code)
-        return pd.DataFrame()
+        diff_rows = []
+        for col in PRED_COLS:
+            off_col = f"{col}_off"
+            rt_col = f"{col}_rt"
+            if off_col not in both.columns or rt_col not in both.columns:
+                continue
+            diff = (both[off_col] - both[rt_col]).abs()
+            mask = diff > 1e-6
+            if mask.any():
+                sub = both.loc[mask, merge_keys + [off_col, rt_col]].copy()
+                sub["pred_col"] = col
+                sub = sub.rename(columns={
+                    off_col: f"{col}_offline",
+                    rt_col: f"{col}_realtime",
+                })
+                diff_rows.append(sub)
 
-    feature_cols = [c for c in ALL_FEATURE_COLS if c in rt_stock.columns]
-    if not feature_cols:
-        logger.warning("实时推理数据中无特征列")
-        return pd.DataFrame()
+        if diff_rows:
+            diff_df = pd.concat(diff_rows, ignore_index=True)
+            diff_path = os.path.join(RESULTS_DIR, f"prediction_diff_{date_str}.csv")
+            diff_df.to_csv(diff_path, index=False)
+            logger.info("预测差异详情: %s (%d 行)", diff_path, len(diff_df))
 
-    ftp_path = os.path.join(OUTPUT_DIR, "full_test_predictions.parquet")
-    if not os.path.exists(ftp_path):
-        logger.warning("full_test_predictions.parquet 不存在，无法对比特征")
-        return pd.DataFrame()
+    if not offline_only.empty:
+        path = os.path.join(RESULTS_DIR, f"offline_only_{date_str}.csv")
+        offline_only.to_csv(path, index=False)
+        logger.info("仅离线有: %s (%d 行)", path, len(offline_only))
 
-    scores_path = os.path.join(OUTPUT_DIR, "models_control", "candidate_with_scores.parquet")
-    if not os.path.exists(scores_path):
-        logger.warning("candidate_with_scores.parquet 不存在，无法对比特征")
-        return pd.DataFrame()
+    if not realtime_only.empty:
+        path = os.path.join(RESULTS_DIR, f"realtime_only_{date_str}.csv")
+        realtime_only.to_csv(path, index=False)
+        logger.info("仅实时有: %s (%d 行)", path, len(realtime_only))
 
-    offline_all = pd.read_parquet(scores_path)
-    offline_all["obs_date"] = pd.to_datetime(offline_all["obs_date"])
-    off_stock = offline_all[
-        (offline_all["ts_code"] == ts_code) &
-        (offline_all["obs_date"] == pd.to_datetime(date_str))
-    ].copy()
+    if not obs_day_mismatch.empty:
+        path = os.path.join(RESULTS_DIR, f"obs_day_mismatch_{date_str}.csv")
+        obs_day_mismatch.to_csv(path, index=False)
+        logger.info("obs_day 不一致: %s (%d 行)", path, len(obs_day_mismatch))
 
-    if off_stock.empty:
-        logger.warning("离线数据中无 %s @ %s", ts_code, date_str)
-        return pd.DataFrame()
-
-    off_row = off_stock.iloc[0:1]
-    rt_row = rt_stock.iloc[0:1]
-
-    rows = []
-    for col in feature_cols:
-        off_val = off_row[col].values[0] if col in off_row.columns else np.nan
-        rt_val = rt_row[col].values[0] if col in rt_row.columns else np.nan
-        diff = abs(off_val - rt_val) if pd.notna(off_val) and pd.notna(rt_val) else np.nan
-        rows.append({
-            "feature": col,
-            "offline_value": off_val,
-            "realtime_value": rt_val,
-            "abs_diff": diff,
-            "exceeds_threshold": diff > DIFF_THRESHOLD if pd.notna(diff) else False,
-        })
-
-    feat_df = pd.DataFrame(rows)
-    feat_path = os.path.join(RESULTS_DIR, f"feature_diff_{date_str}_{ts_code.replace('.', '_')}.csv")
-    feat_df.to_csv(feat_path, index=False)
-    logger.info("特征差异: %s (%d 列)", feat_path, len(feat_df))
-
-    n_diff = feat_df["exceeds_threshold"].sum()
-    logger.info("特征差异汇总: %d/%d 列超过阈值 %.1e", n_diff, len(feat_df), DIFF_THRESHOLD)
-
-    return feat_df
+    return summary
 
 
 def diagnose_root_cause(offline: pd.DataFrame, realtime: pd.DataFrame,
                         date_str: str, mod07) -> dict:
     from datasource.database import get_engine
-    from stop_experiment.pipeline.stop_config import OBS_DAYS
 
     diagnosis = {"date": date_str}
     target_dt = pd.to_datetime(date_str)
@@ -281,9 +315,9 @@ def diagnose_root_cause(offline: pd.DataFrame, realtime: pd.DataFrame,
         diagnosis["rt_signal_count"] = int(rt_signal_count)
         diagnosis["rt_signal_range"] = f"{signal_start_rt} ~ {signal_end_rt}"
 
-        rt_kline_start = (target_dt - pd.Timedelta(days=1300)).strftime("%Y-%m-%d")
+        rt_kline_start = (target_dt - pd.Timedelta(days=FACTOR_WARMUP_DAYS)).strftime("%Y-%m-%d")
         diagnosis["rt_kline_start"] = rt_kline_start
-        diagnosis["rt_kline_range_days"] = 1300
+        diagnosis["rt_kline_range_days"] = FACTOR_WARMUP_DAYS
 
         scores_path = os.path.join(OUTPUT_DIR, "models_control", "candidate_with_scores.parquet")
         if os.path.exists(scores_path):
@@ -292,14 +326,16 @@ def diagnose_root_cause(offline: pd.DataFrame, realtime: pd.DataFrame,
             off_day = offline_all[offline_all["obs_date"] == target_dt]
             if not off_day.empty and "selection_date" in off_day.columns:
                 off_min_sel = pd.to_datetime(off_day["selection_date"]).min()
-                off_kline_start = (off_min_sel - pd.Timedelta(days=150)).strftime("%Y-%m-%d")
+                off_kline_start = (off_min_sel - pd.Timedelta(days=FACTOR_WARMUP_DAYS)).strftime("%Y-%m-%d")
                 diagnosis["train_kline_start"] = off_kline_start
-                diagnosis["train_kline_offset_days"] = 150
+                diagnosis["train_kline_offset_days"] = FACTOR_WARMUP_DAYS
                 diagnosis["kline_start_diff_days"] = (
                     pd.to_datetime(rt_kline_start) - pd.to_datetime(off_kline_start)
                 ).days
 
-        off_signal_ids = set(offline[offline["obs_date"] == target_dt]["signal_id"].tolist()) if "signal_id" in offline.columns else set()
+        off_signal_ids = set(
+            offline[offline["obs_date"] == target_dt]["signal_id"].tolist()
+        ) if "signal_id" in offline.columns else set()
         rt_signal_ids = set(realtime["signal_id"].tolist()) if "signal_id" in realtime.columns else set()
         diagnosis["offline_signal_count"] = len(off_signal_ids)
         diagnosis["realtime_signal_count"] = len(rt_signal_ids)
@@ -313,6 +349,35 @@ def diagnose_root_cause(offline: pd.DataFrame, realtime: pd.DataFrame,
     return diagnosis
 
 
+def _compute_verdict(all_summary: list[dict]) -> str:
+    if not all_summary:
+        return "FAIL_NO_DATA"
+
+    for s in all_summary:
+        offline_match_rate = s.get("offline_match_rate", 0)
+        realtime_match_rate = s.get("realtime_match_rate", 0)
+        obs_day_diff_rate = s.get("obs_day_diff_rate", 1)
+
+        if offline_match_rate < 0.99 or realtime_match_rate < 0.99:
+            return "FAIL_CANDIDATE_MISMATCH"
+
+        if obs_day_diff_rate > 0:
+            return "FAIL_OBS_DAY_MISMATCH"
+
+    for s in all_summary:
+        for col in PRED_COLS:
+            p99 = s.get(f"{col}_p99_abs_diff", float("inf"))
+            if pd.notna(p99) and p99 >= 1e-6:
+                return "FAIL_PREDICTION_DIFF"
+
+    for s in all_summary:
+        top10_jaccard = s.get("top10_jaccard", 0)
+        if pd.notna(top10_jaccard) and top10_jaccard < 0.9:
+            return "FAIL_PREDICTION_DIFF"
+
+    return "PASS"
+
+
 def run_consistency_check(dates: list[str], sample_stock: str | None = None) -> dict:
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
@@ -321,8 +386,7 @@ def run_consistency_check(dates: list[str], sample_stock: str | None = None) -> 
     logger.info("加载离线预测...")
     offline = load_offline_predictions(dates)
 
-    all_pred_stats = []
-    all_top10_stats = []
+    all_summary = []
     all_diagnosis = []
 
     for date_str in dates:
@@ -335,41 +399,47 @@ def run_consistency_check(dates: list[str], sample_stock: str | None = None) -> 
             logger.warning("日期 %s: 实时推理无结果，跳过", date_str)
             continue
 
-        pred_stats = compare_predictions(offline, rt, date_str)
-        if pred_stats:
-            all_pred_stats.append(pred_stats)
+        summary = compare_predictions(offline, rt, date_str)
+        if summary:
+            all_summary.append(summary)
             logger.info(
-                "预测差异: matched=%d, sell_reg_diff_pct=%.2f%%, sell_cls_diff_pct=%.2f%%",
-                pred_stats.get("n_matched", 0),
-                pred_stats.get("pred_sell_reg_diff_pct", 0) * 100,
-                pred_stats.get("pred_sell_cls_diff_pct", 0) * 100,
+                "候选池: offline=%d, realtime=%d, matched=%d, "
+                "offline_match_rate=%.4f, realtime_match_rate=%.4f",
+                summary.get("offline_rows", 0),
+                summary.get("realtime_rows", 0),
+                summary.get("matched_rows", 0),
+                summary.get("offline_match_rate", 0),
+                summary.get("realtime_match_rate", 0),
             )
-
-        top10_stats = compare_top10_overlap(offline, rt, date_str)
-        all_top10_stats.append(top10_stats)
-        logger.info(
-            "Top10 重叠: count=%d, jaccard=%.3f",
-            top10_stats.get("top10_overlap_count", 0),
-            top10_stats.get("top10_overlap_jaccard", 0),
-        )
+            logger.info(
+                "obs_day_diff_rate=%.4f, obs_day_check=%s",
+                summary.get("obs_day_diff_rate", 0),
+                summary.get("obs_day_check", "?"),
+            )
+            logger.info(
+                "pred_sell_reg: mean_abs=%.2e, p99_abs=%.2e, max_abs=%.2e",
+                summary.get("pred_sell_reg_mean_abs_diff", 0),
+                summary.get("pred_sell_reg_p99_abs_diff", 0),
+                summary.get("pred_sell_reg_max_abs_diff", 0),
+            )
+            logger.info(
+                "排序一致性: top10_jaccard=%.3f, top20_jaccard=%.3f, spearman=%.4f",
+                summary.get("top10_jaccard", 0),
+                summary.get("top20_jaccard", 0),
+                summary.get("spearman_corr", 0),
+            )
 
         diagnosis = diagnose_root_cause(offline, rt, date_str, mod07)
         all_diagnosis.append(diagnosis)
         logger.info(
-            "根因诊断: 信号重叠=%d, K线起始差异=%d天",
+            "根因诊断: 信号重叠=%d, K线起始差异=%s天",
             diagnosis.get("signal_overlap", 0),
             diagnosis.get("kline_start_diff_days", "N/A"),
         )
 
-        stock_for_feat = sample_stock
-        if stock_for_feat is None and not rt.empty:
-            stock_for_feat = rt.iloc[0]["ts_code"]
-        if stock_for_feat:
-            compare_features(offline, rt, date_str, stock_for_feat, mod07)
-
-    summary_path = os.path.join(RESULTS_DIR, "consistency_summary.csv")
-    if all_pred_stats:
-        summary_df = pd.DataFrame(all_pred_stats)
+    if all_summary:
+        summary_path = os.path.join(RESULTS_DIR, "consistency_summary.csv")
+        summary_df = pd.DataFrame(all_summary)
         summary_df.to_csv(summary_path, index=False)
         logger.info("汇总报告: %s", summary_path)
 
@@ -379,10 +449,22 @@ def run_consistency_check(dates: list[str], sample_stock: str | None = None) -> 
         diag_df.to_csv(diag_path, index=False)
         logger.info("根因诊断: %s", diag_path)
 
+    verdict = _compute_verdict(all_summary)
+    verdict_data = {
+        "verdict": verdict,
+        "test_dates": dates,
+        "n_dates_tested": len(all_summary),
+        "details": all_summary,
+    }
+    verdict_path = os.path.join(RESULTS_DIR, "verdict.json")
+    with open(verdict_path, "w", encoding="utf-8") as f:
+        json.dump(verdict_data, f, ensure_ascii=False, indent=2, default=str)
+    logger.info("判定结果: %s → %s", verdict_path, verdict)
+
     return {
-        "pred_stats": all_pred_stats,
-        "top10_stats": all_top10_stats,
+        "summary": all_summary,
         "diagnosis": all_diagnosis,
+        "verdict": verdict,
     }
 
 
@@ -402,27 +484,26 @@ def main():
     results = run_consistency_check(args.dates, args.sample_stock)
 
     logger.info("=" * 60)
-    logger.info("一致性验证完成")
+    logger.info("一致性验证完成 — verdict: %s", results["verdict"])
     logger.info("=" * 60)
 
-    if results["pred_stats"]:
-        for stat in results["pred_stats"]:
-            logger.info(
-                "  %s: matched=%d, sell_reg_max_diff=%.6f, sell_reg_diff_pct=%.2f%%",
-                stat["date"], stat.get("n_matched", 0),
-                stat.get("pred_sell_reg_max_diff", 0),
-                stat.get("pred_sell_reg_diff_pct", 0) * 100,
-            )
+    for stat in results["summary"]:
+        logger.info(
+            "  %s: matched=%d, offline_match_rate=%.4f, realtime_match_rate=%.4f, "
+            "obs_day_diff_rate=%.4f, sell_reg_p99=%.2e, top10_jaccard=%.3f",
+            stat["date"],
+            stat.get("matched_rows", 0),
+            stat.get("offline_match_rate", 0),
+            stat.get("realtime_match_rate", 0),
+            stat.get("obs_day_diff_rate", 0),
+            stat.get("pred_sell_reg_p99_abs_diff", 0),
+            stat.get("top10_jaccard", 0),
+        )
 
-    if results["diagnosis"]:
-        any_signal_mismatch = any(d.get("signal_only_offline", 0) > 0 or d.get("signal_only_realtime", 0) > 0 for d in results["diagnosis"])
-        any_kline_diff = any(d.get("kline_start_diff_days", 0) != 0 for d in results["diagnosis"] if "kline_start_diff_days" in d)
-        if any_signal_mismatch:
-            logger.info("  ⚠ 信号范围不一致，需检查 SIGNAL_LOOKBACK_DAYS 差异")
-        if any_kline_diff:
-            logger.info("  ⚠ K线起始点不一致，可能是因子 warm-up 差异的根因")
-        if not any_signal_mismatch and not any_kline_diff:
-            logger.info("  ✓ 信号范围和 K 线起始点一致")
+    if results["verdict"] == "PASS":
+        logger.info("✓ 一致性验证通过")
+    else:
+        logger.info("✗ 一致性验证失败: %s", results["verdict"])
 
 
 if __name__ == "__main__":
