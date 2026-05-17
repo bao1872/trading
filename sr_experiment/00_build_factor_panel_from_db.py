@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Purpose: 从数据库批量构建 SR 因子面板，输出 parquet
+Purpose: 从数据库批量构建 SR 因子面板，输出分片 parquet（内存友好，不合并）
 Inputs:  数据库股票池 + stock_k_data 行情表
-Outputs: results/sr_factor_panel_{freq}_pv{pivot_len}.parquet
-         results/sr_events_only_{freq}_pv{pivot_len}.parquet
+Outputs: results/shards/{freq}_pv{pivot_len}/panel_XXXX.parquet (分片面板)
+         results/shards/{freq}_pv{pivot_len}/events_XXXX.parquet (分片事件)
+         results/shards/{freq}_pv{pivot_len}/manifest.json (分片清单)
 How to Run:
     python sr_experiment/00_build_factor_panel_from_db.py --freq w --pivot-len 10 --limit-stocks 10
+    python sr_experiment/00_build_factor_panel_from_db.py --freq w --pivot-len 10 --batch-size 200
     python sr_experiment/00_build_factor_panel_from_db.py --freq d --pivot-len 10
 Examples:
     python sr_experiment/00_build_factor_panel_from_db.py --freq w --limit-stocks 3
-    python sr_experiment/00_build_factor_panel_from_db.py --freq w --pivot-len 10
-Side Effects: 写 parquet 文件到 sr_experiment/results/ 目录
+    python sr_experiment/00_build_factor_panel_from_db.py --freq w --pivot-len 10 --batch-size 500
+Side Effects: 写 parquet 文件到 sr_experiment/results/shards/ 目录
 """
 from __future__ import annotations
 
 import argparse
+import gc
+import json
 import sys
 import time
 from pathlib import Path
@@ -29,16 +33,45 @@ from sr_experiment.db_adapter import get_stock_pool, load_kline
 from sr_experiment.sr_config import EVENT_COLS, OUT_DIR
 
 
-def build_panel(freq: str, pivot_len: int, limit_stocks: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    if "index" in df.columns:
+        df = df.rename(columns={"index": "bar_time"})
+    if "bar_time" in df.columns:
+        df["bar_time"] = pd.to_datetime(df["bar_time"])
+    return df
+
+
+def _shard_dir(freq: str, pivot_len: int) -> Path:
+    return Path(OUT_DIR) / "shards" / f"{freq}_pv{pivot_len}"
+
+
+def build_panel(
+    freq: str,
+    pivot_len: int,
+    limit_stocks: int | None = None,
+    batch_size: int = 200,
+) -> tuple[int, int]:
     pool = get_stock_pool()
     codes = pool["ts_code"].tolist()
     if limit_stocks:
         codes = codes[:limit_stocks]
 
     cfg = LabConfig(pivot_len=pivot_len)
-    all_frames = []
-    event_frames = []
+    sdir = _shard_dir(freq, pivot_len)
+    sdir.mkdir(parents=True, exist_ok=True)
+
+    for p in sdir.glob("panel_*.parquet"):
+        p.unlink()
+    for p in sdir.glob("events_*.parquet"):
+        p.unlink()
+
+    total_done = 0
+    total_events = 0
     skipped = []
+    batch_frames = []
+    batch_event_frames = []
+    batch_idx = 0
+    manifest = {"panel_shards": [], "event_shards": [], "total_rows": 0, "total_event_rows": 0}
 
     for ts_code in tqdm(codes, desc=f"Building panel [{freq}] pv{pivot_len}"):
         try:
@@ -58,7 +91,7 @@ def build_panel(freq: str, pivot_len: int, limit_stocks: int | None = None) -> t
             continue
 
         out["ts_code"] = ts_code
-        all_frames.append(out.reset_index())
+        batch_frames.append(out.reset_index())
 
         mask_any = pd.Series(False, index=out.index)
         for col in EVENT_COLS:
@@ -66,62 +99,93 @@ def build_panel(freq: str, pivot_len: int, limit_stocks: int | None = None) -> t
                 mask_any = mask_any | out[col].fillna(False).astype(bool)
         if mask_any.any():
             evt_df = out.loc[mask_any].copy()
-            event_frames.append(evt_df.reset_index())
+            batch_event_frames.append(evt_df.reset_index())
+            total_events += len(evt_df)
 
-    if not all_frames:
-        return pd.DataFrame(), pd.DataFrame()
+        total_done += 1
 
-    panel = pd.concat(all_frames, ignore_index=True)
-    if "index" in panel.columns:
-        panel = panel.rename(columns={"index": "bar_time"})
-    if "bar_time" in panel.columns:
-        panel["bar_time"] = pd.to_datetime(panel["bar_time"])
+        if len(batch_frames) >= batch_size:
+            _flush_batch(batch_frames, batch_event_frames, sdir, batch_idx, manifest)
+            batch_idx += 1
+            batch_frames = []
+            batch_event_frames = []
+            gc.collect()
 
-    events_only = pd.DataFrame()
+    if batch_frames:
+        _flush_batch(batch_frames, batch_event_frames, sdir, batch_idx, manifest)
+
+    manifest_path = sdir / "manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    print(f"完成: {total_done}/{len(codes)} 只股票, 跳过: {len(skipped)}, 事件行: {total_events}")
+    print(f"分片目录: {sdir}")
+    print(f"面板分片: {len(manifest['panel_shards'])} 个, 总行数: {manifest['total_rows']}")
+    print(f"事件分片: {len(manifest['event_shards'])} 个, 总行数: {manifest['total_event_rows']}")
+    if skipped and len(skipped) <= 20:
+        print(f"跳过前20: {skipped[:20]}")
+
+    return total_done, total_events
+
+
+def _flush_batch(
+    frames: list[pd.DataFrame],
+    event_frames: list[pd.DataFrame],
+    sdir: Path,
+    batch_idx: int,
+    manifest: dict,
+) -> None:
+    if not frames:
+        return
+
+    panel_name = f"panel_{batch_idx:04d}.parquet"
+    batch = _normalize_df(pd.concat(frames, ignore_index=True))
+    batch.to_parquet(sdir / panel_name, index=False)
+    manifest["panel_shards"].append(panel_name)
+    manifest["total_rows"] += len(batch)
+
     if event_frames:
-        events_only = pd.concat(event_frames, ignore_index=True)
-        if "index" in events_only.columns:
-            events_only = events_only.rename(columns={"index": "bar_time"})
-        if "bar_time" in events_only.columns:
-            events_only["bar_time"] = pd.to_datetime(events_only["bar_time"])
+        events_name = f"events_{batch_idx:04d}.parquet"
+        evt_batch = _normalize_df(pd.concat(event_frames, ignore_index=True))
+        evt_batch.to_parquet(sdir / events_name, index=False)
+        manifest["event_shards"].append(events_name)
+        manifest["total_event_rows"] += len(evt_batch)
 
-    print(f"完成: {len(all_frames)}/{len(codes)} 只股票, 跳过: {len(skipped)}")
-    if skipped and len(skipped) <= 10:
-        print(f"跳过: {skipped}")
 
-    return panel, events_only
+def iter_shards(
+    freq: str,
+    pivot_len: int,
+    columns: list[str] | None = None,
+    shard_type: str = "panel",
+) -> pd.DataFrame:
+    """逐片读取 parquet 分片，yield 每片 DataFrame，避免全量加载。"""
+    sdir = _shard_dir(freq, pivot_len)
+    manifest_path = sdir / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"manifest 不存在: {manifest_path}")
+
+    with open(manifest_path, encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    key = f"{shard_type}_shards"
+    for shard_name in manifest.get(key, []):
+        path = sdir / shard_name
+        if path.exists():
+            df = pd.read_parquet(path, columns=columns)
+            yield df
 
 
 def main():
-    parser = argparse.ArgumentParser(description="从数据库批量构建 SR 因子面板")
+    parser = argparse.ArgumentParser(description="从数据库批量构建 SR 因子面板（分片保存，不合并）")
     parser.add_argument("--freq", type=str, default="w", help="周期 (d/w/60m)")
     parser.add_argument("--pivot-len", type=int, default=10, help="pivot 左右确认长度")
     parser.add_argument("--limit-stocks", type=int, default=None, help="限制股票数量（调试用）")
+    parser.add_argument("--batch-size", type=int, default=200, help="每批保存的股票数（默认200）")
     args = parser.parse_args()
 
-    out_dir = Path(OUT_DIR)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     t0 = time.time()
-    panel, events_only = build_panel(args.freq, args.pivot_len, args.limit_stocks)
+    total_done, total_events = build_panel(args.freq, args.pivot_len, args.limit_stocks, args.batch_size)
     elapsed = time.time() - t0
-
-    if panel.empty:
-        print("面板为空，无输出")
-        return
-
-    freq_tag = args.freq
-    pv_tag = args.pivot_len
-    panel_path = out_dir / f"sr_factor_panel_{freq_tag}_pv{pv_tag}.parquet"
-    events_path = out_dir / f"sr_events_only_{freq_tag}_pv{pv_tag}.parquet"
-
-    panel.to_parquet(panel_path, index=False)
-    print(f"面板已保存: {panel_path} ({len(panel)} rows, {len(panel.columns)} cols)")
-
-    if not events_only.empty:
-        events_only.to_parquet(events_path, index=False)
-        print(f"事件行已保存: {events_path} ({len(events_only)} rows)")
-
     print(f"耗时: {elapsed:.1f}s")
 
 
