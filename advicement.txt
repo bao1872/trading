@@ -1,0 +1,510 @@
+# 阶段事件统计计算底座项目说明
+
+## 0. 项目定位
+
+本项目是 `features` 统计目录下的**纯计算底座**，用于把现有因子库 `factor_lib` 和事件库 `event_lib` 扩展为“阶段事件统计引擎”。
+
+核心目标不是直接判断“这是吸筹/洗盘/震仓”，而是：
+
+1. 用现有 OHLCV 衍生指标构造可复现因子；
+2. 用因子触发事件；
+3. 对事件进行连续统计、循环计数和阶段成熟度评分；
+4. 输出可供后续回测脚本使用的计算结果；
+5. **本层不写数据库、不负责落库、不负责交易决策。**
+
+最终研究假设：
+
+> 成熟低位成本区中，经历多轮吸筹-洗盘循环后，如果出现末端强洗/假破并随后修复，则未来收益/回撤分布可能优于普通急杀、普通横盘或普通突破样本。
+
+---
+
+## 1. 现有结构评估
+
+当前归档中已有两套基础库：
+
+```text
+factor_lib/
+  registry.py                 # 因子注册表；只登记元数据与计算入口
+  categories/                 # 因子分类实现
+    trend.py                  # DSA趋势、枢轴编码、趋势动量一致性
+    position.py               # DSA位置、距VWAP、距高低点、流动性位置
+    momentum.py               # BBMACD与带宽/上下轨穿越
+    volume.py                 # 成交量Z-score、量比、阶段量能CV
+    structure.py              # 止损簇、支撑阻力、流动性池、趋势线
+    quantity_price.py         # VSA努力-结果、强弱量价得分
+    rhythm.py                 # DSA阶段K线数、阶段振幅、收益
+    risk.py                   # ATR%、波动率、最大回撤、beta
+    coordination.py           # 价格-量能/动量-量能/低位突破协同
+    raw_features.py           # 原始DSA、BBMACD、vol_zscore等列
+    fundamental.py            # 财务类因子占位/扩展
+
+event_lib/
+  registry.py                 # 事件注册表；事件只依赖因子列，不重新算因子
+  states.py                   # 现有简单状态判定
+  detectors/
+    trend_events.py           # DSA翻转、上/下穿DSA VWAP、V反
+    momentum_events.py        # BBMACD上/下轨、金叉/死叉
+    volume_events.py          # 放量上涨、放量下跌、缩量、量价背离
+    structural_events.py      # 止损簇突破、支撑/阻力突破
+    breakout_events.py        # 价值区高/低位穿越，当前实现依赖dsa_pivot_pos_01
+    composite_events.py       # 趋势+量、低点+缩量、动量+量、协同突破
+    fundamental_events.py     # 业绩/现金流/ROE事件
+```
+
+### 1.1 已有能力
+
+已有底层覆盖度较高：
+
+| 事件研究维度 | 现有支撑 | 是否够第一版 |
+|---|---|---|
+| 趋势转平/趋势恢复 | DSA、BBMACD、trend_align、rhythm | 基本够 |
+| 价格位置 | DSA VWAP、pivot_pos、距高低点、liquidity_range_pos | 基本够 |
+| 波动/风险 | ATR%、volatility、MDD、BBMACD带宽 | 基本够 |
+| 成交活跃/缩量 | vol_zscore、vol_ratio、VSA ER | 基本够 |
+| 结构高低点 | DSA confirmed high/low、pivot type、stop cluster | 基本够 |
+| 简单事件检测 | 趋势翻转、量能、突破、低点缩量、动量加速 | 已有，但不够阶段化 |
+
+### 1.2 当前主要缺口
+
+当前缺的不是单个指标，而是**阶段事件工程层**：
+
+1. 缺趋势斜率类因子，尤其是 DSA VWAP 斜率、趋势转平强度；
+2. 缺边界统一抽象：不同来源的 `下沿/中枢/上沿` 尚未统一；
+3. 缺“成本区形成度/成熟度”因子；
+4. 缺“吸筹-洗盘循环”的事件计数器；
+5. 缺“末端强洗/震仓候选”事件链；
+6. 缺“震仓修复度”事件链；
+7. 缺阶段推进状态机，现有 `states.py` 仍偏简单趋势/筑底/震荡分类；
+8. 缺多周期融合接口，后续应支持月线定位、周线结构、日线事件、分时确认。
+
+---
+
+## 2. 设计原则
+
+### 2.1 不使用绝对时间阈值定义阶段
+
+不要写死：
+
+```text
+横盘 60 天 = 吸筹
+洗盘 3 周 = 洗盘
+跌 8% = 震仓
+```
+
+应改为：
+
+```text
+趋势类指标转平
+位置类指标反复测试/收回
+波动类指标压缩/扩张
+结构类指标循环次数累积
+成交类指标配合/背离
+```
+
+### 2.2 阶段不是硬标签，而是连续证据累积
+
+阶段判断应输出：
+
+```text
+cost_zone_forming_score
+cost_zone_maturity_score
+wash_cycle_count
+final_shake_score
+repair_score
+failure_score
+```
+
+而不是直接输出：
+
+```text
+这是吸筹
+这是震仓
+```
+
+### 2.3 后一阶段必须受前一阶段约束
+
+核心逻辑：
+
+```text
+没有成熟成本区，就没有高置信震仓；
+没有多轮洗盘循环，急杀只能算普通急杀；
+没有修复，震仓只能算疑似震仓中，不能算震仓末期。
+```
+
+### 2.4 只做计算，不输出数据库
+
+本模块只返回 DataFrame 或 Series：
+
+```python
+factors_df = compute_panel_v2(df)
+events_df = detect_panel(factors_df)
+stage_df = compute_stage_features(events_df)
+```
+
+不做：
+
+```text
+数据库写入
+文件持久化
+交易信号下单
+实盘推送
+```
+
+---
+
+## 3. 建议新增目录/文件
+
+建议新增以下模块，不破坏现有 `factor_lib` / `event_lib` 结构：
+
+```text
+factor_lib/categories/stage_context.py
+factor_lib/categories/stage_position.py
+factor_lib/categories/stage_maturity.py
+
+event_lib/detectors/stage_cost_zone_events.py
+event_lib/detectors/stage_wash_events.py
+event_lib/detectors/stage_shake_events.py
+event_lib/detectors/stage_repair_events.py
+event_lib/detectors/stage_failure_events.py
+
+event_lib/stage_engine.py
+```
+
+其中：
+
+| 文件 | 作用 |
+|---|---|
+| `stage_context.py` | 趋势转平、成本区形成相关因子 |
+| `stage_position.py` | 统一下沿/中枢/上沿、价格位置、边界距离 |
+| `stage_maturity.py` | 成本区成熟度、循环次数、压缩程度 |
+| `stage_cost_zone_events.py` | 成本区形成/成熟事件 |
+| `stage_wash_events.py` | 洗盘循环事件 |
+| `stage_shake_events.py` | 末端强洗/震仓候选事件 |
+| `stage_repair_events.py` | 震仓后修复事件 |
+| `stage_failure_events.py` | 破位/出货/失败过滤事件 |
+| `stage_engine.py` | 事件统计、状态推进、阶段评分汇总 |
+
+---
+
+## 4. 建议新增因子
+
+### 4.1 趋势类因子
+
+| 因子名 | 类别 | 依赖 | 说明 |
+|---|---|---|---|
+| `dsa_vwap_slope_atr_3` | 趋势类 | `DSA_VWAP`, `dsa_atr` | DSA VWAP 3-bar斜率，ATR归一 |
+| `dsa_vwap_slope_atr_5` | 趋势类 | `DSA_VWAP`, `dsa_atr` | DSA VWAP 5-bar斜率，ATR归一 |
+| `dsa_vwap_slope_abs_rank` | 趋势类 | `dsa_vwap_slope_atr_5` | 斜率绝对值滚动分位，越低越横盘 |
+| `dsa_dir_flip_count_n` | 趋势类 | `dsa_dir` | 滚动窗口内方向切换次数，反映趋势不连续 |
+| `trend_flat_score` | 趋势类 | slope、dir flip、BB宽度 | 趋势转平综合评分 |
+
+说明：横盘不由时间定义，而由 DSA/趋势斜率下降、方向切换、价格围绕中枢反复交换定义。
+
+### 4.2 位置统一因子
+
+第一版可先用 DSA 与 PAVP/ATR Rope 若已有列；如果当前归档里没有 PAVP/ATR Rope 标准列，就先设计字段，后续补接。
+
+| 因子名 | 类别 | 依赖 | 说明 |
+|---|---|---|---|
+| `stage_lower_boundary` | 位置类 | VAL / ATR Rope lower / DSA low | 阶段下沿统一抽象 |
+| `stage_mid_boundary` | 位置类 | POC / DSA VWAP / ATR Rope | 阶段中枢统一抽象 |
+| `stage_upper_boundary` | 位置类 | VAH / ATR Rope upper / DSA high | 阶段上沿统一抽象 |
+| `price_pos_in_stage_01` | 位置类 | lower/mid/upper | 当前价在阶段区间内位置 |
+| `dist_to_stage_lower_atr` | 位置类 | lower、ATR | 距下沿ATR归一距离 |
+| `dist_to_stage_mid_atr` | 位置类 | mid、ATR | 距中枢ATR归一距离 |
+| `dist_to_stage_upper_atr` | 位置类 | upper、ATR | 距上沿ATR归一距离 |
+
+说明：后续事件不要直接绑定某一个指标名，而是统一使用 `lower/mid/upper` 边界。
+
+### 4.3 成本区形成/成熟因子
+
+| 因子名 | 类别 | 依赖 | 说明 |
+|---|---|---|---|
+| `price_cross_mid_count_n` | 结构类 | close、stage_mid | 价格围绕中枢穿越次数 |
+| `upper_touch_count_n` | 结构类 | high、stage_upper | 上沿测试次数 |
+| `lower_touch_count_n` | 结构类 | low、stage_lower | 下沿测试次数 |
+| `lower_reclaim_count_n` | 结构类 | low/close、stage_lower | 下沿假破/收回次数 |
+| `upper_reject_count_n` | 结构类 | high/close、stage_upper | 上沿试盘失败次数 |
+| `range_reentry_count_n` | 结构类 | close、lower/upper | 离开区间后回区间次数 |
+| `cost_zone_forming_score` | 综合类 | 趋势、位置、波动 | 成本区形成度 |
+| `cost_zone_maturity_score` | 综合类 | 触边、收回、循环、压缩 | 成本区成熟度 |
+
+### 4.4 洗盘循环因子
+
+| 因子名 | 类别 | 依赖 | 说明 |
+|---|---|---|---|
+| `wash_cycle_count_n` | 结构类 | 上沿测试、回踩、收回 | 有效吸筹-洗盘循环次数 |
+| `last_wash_low` | 结构类 | stage_lower / swing low | 最近一轮洗盘低点 |
+| `last_wash_high` | 结构类 | stage_upper / swing high | 最近一轮洗盘起点/高点 |
+| `wash_depth_atr` | 结构类 | high/low、ATR | 最近洗盘深度ATR归一 |
+| `wash_repair_strength` | 结构类 | close、stage_mid | 洗盘后回中枢强度 |
+| `wash_cycle_quality_score` | 综合类 | 深度、收回、量能 | 最近洗盘循环质量 |
+
+### 4.5 末端强洗/震仓候选因子
+
+| 因子名 | 类别 | 依赖 | 说明 |
+|---|---|---|---|
+| `break_lower_intrabar` | 位置类 | low、stage_lower | 盘中/当bar跌破下沿 |
+| `reclaim_lower_close` | 位置类 | close、stage_lower | 收盘收回下沿 |
+| `break_mid_reclaim` | 位置类 | low/close、stage_mid | 跌破中枢后收回 |
+| `break_last_wash_low` | 结构类 | low、last_wash_low | 跌破最近洗盘低点 |
+| `lower_shadow_ratio` | K线类 | OHLC | 下影线占比 |
+| `shake_range_atr` | 波动类 | high/low、ATR | 强洗bar振幅ATR归一 |
+| `shake_vol_z` | 成交类 | vol_zscore | 强洗bar量能强度 |
+| `final_shake_score` | 综合类 | 成熟度、破位、收回、量能 | 末端强洗候选评分 |
+
+### 4.6 修复因子
+
+| 因子名 | 类别 | 依赖 | 说明 |
+|---|---|---|---|
+| `reclaim_stage_lower` | 修复类 | close、stage_lower | 收回阶段下沿 |
+| `reclaim_stage_mid` | 修复类 | close、stage_mid | 收回阶段中枢 |
+| `reclaim_stage_upper` | 修复类 | close、stage_upper | 收回阶段上沿 |
+| `reclaim_dsa_vwap` | 修复类 | close、DSA_VWAP | 收回 DSA VWAP |
+| `dsa_slope_repair` | 修复类 | dsa_vwap_slope | DSA斜率由负转平/转正 |
+| `bbmacd_repair` | 修复类 | bbmacd_state/slope | BBMACD由弱转中性/强 |
+| `repair_score` | 综合类 | 位置、趋势、动量 | 强洗后修复评分 |
+
+### 4.7 失败/风险因子
+
+| 因子名 | 类别 | 依赖 | 说明 |
+|---|---|---|---|
+| `break_lower_no_reclaim` | 风险类 | close、stage_lower | 跌破下沿且未收回 |
+| `trend_down_confirm` | 风险类 | dsa_dir、slope、bbmacd | 趋势确认向下 |
+| `weak_rebound_below_mid` | 风险类 | close、stage_mid、volume | 反弹不过中枢且缩量 |
+| `distribution_risk_score` | 风险类 | 高位、放量滞涨、破位 | 出货/派发风险评分 |
+| `failure_score` | 风险类 | 破位、弱修复、趋势下行 | 阶段失败评分 |
+
+---
+
+## 5. 建议新增事件
+
+事件命名建议统一用前缀：
+
+```text
+evt_cz_*      成本区事件
+evt_wash_*    洗盘循环事件
+evt_shake_*   末端强洗/震仓事件
+evt_repair_*  修复事件
+evt_fail_*    失败/风险事件
+```
+
+### 5.1 成本区形成事件
+
+| 事件名 | 类别 | required_factors | 说明 |
+|---|---|---|---|
+| `evt_cz_trend_flat` | 成本区事件 | `trend_flat_score` | 趋势进入低斜率/低方向状态 |
+| `evt_cz_price_around_mid` | 成本区事件 | `price_cross_mid_count_n` | 价格围绕中枢反复交换 |
+| `evt_cz_volatility_compress` | 成本区事件 | `bbmacd_bandwidth_zscore` 或 BB宽度因子 | 波动压缩 |
+| `evt_cz_lower_hold` | 成本区事件 | `lower_reclaim_count_n` | 下沿多次收回 |
+| `evt_cz_forming` | 成本区事件 | `cost_zone_forming_score` | 成本区形成综合事件 |
+
+### 5.2 成本区成熟事件
+
+| 事件名 | 类别 | required_factors | 说明 |
+|---|---|---|---|
+| `evt_cz_upper_test_fail` | 成本区事件 | `upper_reject_count_n` | 上沿试盘失败 |
+| `evt_cz_lower_reclaim` | 成本区事件 | `lower_reclaim_count_n` | 下沿假破/收回 |
+| `evt_cz_range_reentry` | 成本区事件 | `range_reentry_count_n` | 离开区间后回区间 |
+| `evt_cz_mature` | 成本区事件 | `cost_zone_maturity_score` | 成本区成熟综合事件 |
+
+### 5.3 洗盘循环事件
+
+| 事件名 | 类别 | required_factors | 说明 |
+|---|---|---|---|
+| `evt_wash_pullback_to_lower` | 洗盘事件 | `price_pos_in_stage_01` | 从中上部回踩到下沿/低位 |
+| `evt_wash_break_short_hold_long` | 洗盘事件 | `break_lower_intrabar`, `reclaim_lower_close` | 小破位但大结构收回 |
+| `evt_wash_reclaim_mid` | 洗盘事件 | `reclaim_stage_mid` | 洗盘后回中枢 |
+| `evt_wash_cycle_complete` | 洗盘事件 | `wash_cycle_quality_score` | 一轮有效洗盘完成 |
+| `evt_wash_multi_cycle` | 洗盘事件 | `wash_cycle_count_n` | 多轮洗盘迭代 |
+
+### 5.4 末端强洗/震仓事件
+
+| 事件名 | 类别 | required_factors | 说明 |
+|---|---|---|---|
+| `evt_shake_break_lower` | 震仓事件 | `break_lower_intrabar` | 跌破阶段下沿 |
+| `evt_shake_break_last_wash_low` | 震仓事件 | `break_last_wash_low` | 跌破上一轮洗盘低点 |
+| `evt_shake_lower_reclaim` | 震仓事件 | `break_lower_intrabar`, `reclaim_lower_close` | 跌破下沿后收回 |
+| `evt_shake_long_lower_shadow` | 震仓事件 | `lower_shadow_ratio` | 长下影修复 |
+| `evt_shake_stop_cluster_reclaim` | 震仓事件 | `sell_stop_cluster` / stop相关列 | 打到下方潜在止损簇后收回 |
+| `evt_shake_candidate` | 震仓事件 | `cost_zone_maturity_score`, `final_shake_score` | 成熟成本区后的末端强洗候选 |
+
+注意：`evt_shake_candidate` 必须带 maturity gating，不能只看急杀/假破。
+
+### 5.5 修复事件
+
+| 事件名 | 类别 | required_factors | 说明 |
+|---|---|---|---|
+| `evt_repair_reclaim_lower` | 修复事件 | `reclaim_stage_lower` | 收回下沿 |
+| `evt_repair_reclaim_mid` | 修复事件 | `reclaim_stage_mid` | 收回中枢 |
+| `evt_repair_reclaim_upper` | 修复事件 | `reclaim_stage_upper` | 收回上沿 |
+| `evt_repair_dsa_vwap` | 修复事件 | `reclaim_dsa_vwap` | 收回 DSA VWAP |
+| `evt_repair_trend_slope` | 修复事件 | `dsa_slope_repair` | DSA斜率修复 |
+| `evt_repair_bbmacd` | 修复事件 | `bbmacd_repair` | BBMACD动量修复 |
+| `evt_repair_confirmed` | 修复事件 | `repair_score` | 震仓后修复确认 |
+
+### 5.6 失败/风险事件
+
+| 事件名 | 类别 | required_factors | 说明 |
+|---|---|---|---|
+| `evt_fail_break_lower_no_reclaim` | 失败事件 | `break_lower_no_reclaim` | 跌破下沿不收回 |
+| `evt_fail_trend_down_confirm` | 失败事件 | `trend_down_confirm` | 趋势向下确认 |
+| `evt_fail_weak_rebound` | 失败事件 | `weak_rebound_below_mid` | 反弹缩量不过中枢 |
+| `evt_fail_distribution_risk` | 失败事件 | `distribution_risk_score` | 出货/派发风险高 |
+| `evt_stage_failure` | 失败事件 | `failure_score` | 阶段假设失败 |
+
+---
+
+## 6. 阶段引擎输出设计
+
+建议 `event_lib/stage_engine.py` 提供：
+
+```python
+def compute_stage_scores(events_df, factors_df=None, config=None) -> pd.DataFrame:
+    ...
+```
+
+输出列：
+
+| 字段 | 含义 |
+|---|---|
+| `cost_zone_forming_score` | 成本区形成度 |
+| `cost_zone_maturity_score` | 成本区成熟度 |
+| `wash_cycle_count` | 有效洗盘循环数 |
+| `wash_cycle_quality_score` | 最近洗盘质量 |
+| `final_shake_score` | 末端强洗候选强度 |
+| `repair_score` | 震仓后修复度 |
+| `failure_score` | 结构失败/出货风险 |
+| `stage_chain_score` | 阶段链条综合分 |
+| `stage_guess` | 仅供研究展示的阶段推断 |
+
+### 6.1 推荐阶段推断逻辑
+
+```text
+if failure_score 高:
+    stage_guess = "结构失败/风险"
+elif repair_score 高 and final_shake_score 高 and cost_zone_maturity_score 高:
+    stage_guess = "疑似震仓末期/修复确认"
+elif final_shake_score 高 and cost_zone_maturity_score 高:
+    stage_guess = "疑似末端强洗/震仓中"
+elif wash_cycle_count 增加 and cost_zone_forming_score 高:
+    stage_guess = "成本区成熟/洗盘迭代"
+elif cost_zone_forming_score 高:
+    stage_guess = "成本区形成"
+else:
+    stage_guess = "无有效阶段结构"
+```
+
+### 6.2 注意
+
+`stage_guess` 只是研究展示字段，不应直接作为买卖信号。
+
+---
+
+## 7. 第一版最小可行任务清单
+
+### 第一阶段：补因子
+
+优先补：
+
+1. `dsa_vwap_slope_atr_3/5`
+2. `dsa_vwap_slope_abs_rank`
+3. `price_cross_mid_count_n`
+4. `upper_touch_count_n`
+5. `lower_touch_count_n`
+6. `lower_reclaim_count_n`
+7. `upper_reject_count_n`
+8. `wash_cycle_count_n`
+9. `break_lower_intrabar`
+10. `reclaim_lower_close`
+11. `break_last_wash_low`
+12. `lower_shadow_ratio`
+13. `shake_range_atr`
+14. `repair_score`
+15. `failure_score`
+
+### 第二阶段：补事件
+
+优先补：
+
+1. `evt_cz_trend_flat`
+2. `evt_cz_price_around_mid`
+3. `evt_cz_mature`
+4. `evt_wash_cycle_complete`
+5. `evt_wash_multi_cycle`
+6. `evt_shake_break_lower`
+7. `evt_shake_lower_reclaim`
+8. `evt_shake_candidate`
+9. `evt_repair_reclaim_mid`
+10. `evt_repair_confirmed`
+11. `evt_fail_break_lower_no_reclaim`
+12. `evt_stage_failure`
+
+### 第三阶段：补阶段引擎
+
+新增 `event_lib/stage_engine.py`：
+
+1. 读取事件列；
+2. 滚动统计事件密度；
+3. 统计洗盘循环次数；
+4. 计算成本区成熟度；
+5. 计算末端强洗与修复度；
+6. 输出阶段链条综合分。
+
+---
+
+## 8. 回测验证接口预留
+
+本项目不负责回测，但输出应方便后续回测验证：
+
+```text
+trade_date
+ts_code
+cost_zone_forming_score
+cost_zone_maturity_score
+wash_cycle_count
+final_shake_score
+repair_score
+failure_score
+stage_chain_score
+stage_guess
+```
+
+后续回测重点比较：
+
+1. 普通急杀；
+2. 成本区未成熟 + 急杀；
+3. 成本区成熟 + 急杀；
+4. 成本区成熟 + 末端强洗 + 修复；
+5. 成本区成熟但失败风险高。
+
+预期验证方向：
+
+```text
+成熟成本区 + 末端强洗 + 修复
+>
+成熟成本区 + 末端强洗
+>
+普通急杀
+```
+
+---
+
+## 9. 不建议第一版做的事
+
+第一版不要做：
+
+1. 不要直接训练机器学习模型；
+2. 不要把阶段硬标成吸筹/洗盘/震仓；
+3. 不要引入 L2、tick、主力资金净流入；
+4. 不要把固定时间阈值当核心定义；
+5. 不要重度依赖 SMC 黑箱指标；
+6. 不要把 ZigZag 未确认拐点当实时已知；
+7. 不要在事件库里重新计算因子；
+8. 不要在纯计算底座里写数据库输出。
+
+---
+
+## 10. 一句话总结
+
+当前 `factor_lib` 和 `event_lib` 已经具备趋势、位置、动量、量能、结构、风险的基础能力；下一步不是继续堆指标，而是补一层“阶段事件统计引擎”：用 DSA/位置边界/量价/波动/结构事件，连续统计低位成本区形成、吸筹-洗盘循环、末端强洗和修复确认，最终为回测验证“震仓末期是否有统计优势”提供纯计算结果。

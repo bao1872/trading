@@ -129,6 +129,9 @@ def compute_panel_v2(
     from factor_lib.categories.fundamental import compute_fundamental_factors
     from factor_lib.categories.raw_features import compute_raw_features
     from factor_lib.categories.quantity_price import compute_quantity_price_factors
+    from factor_lib.categories.stage_context import compute_stage_context_factors
+    from factor_lib.categories.stage_position import compute_stage_position_factors
+    from factor_lib.categories.stage_maturity import compute_stage_maturity_factors
     from features.dsa_bbmacd_24factors_viewer import compute_dsa, compute_bbmacd, DSAConfig
 
     result = df.copy()
@@ -147,6 +150,9 @@ def compute_panel_v2(
         "财务类": ("fundamental", compute_fundamental_factors),
         "原始特征": ("raw_features", compute_raw_features),
         "量价类": ("quantity_price", compute_quantity_price_factors),
+        "阶段上下文": ("stage_context", compute_stage_context_factors),
+        "阶段位置": ("stage_position", compute_stage_position_factors),
+        "阶段成熟度": ("stage_maturity", compute_stage_maturity_factors),
     }
 
     dsanf, bbnf, volnf = False, False, False
@@ -179,9 +185,9 @@ def compute_panel_v2(
         if cat_name not in needed_cats:
             continue
         kwargs = {}
-        if cat_key in ("trend", "position", "rhythm", "coordination", "raw_features"):
+        if cat_key in ("trend", "position", "rhythm", "coordination", "raw_features", "stage_context", "stage_position", "stage_maturity"):
             kwargs["dsa_result"] = dsa_result
-        if cat_key in ("trend", "momentum", "coordination", "raw_features"):
+        if cat_key in ("trend", "momentum", "coordination", "raw_features", "stage_context", "stage_maturity"):
             kwargs["bb_result"] = bb_result
         try:
             cat_result = cat_func(df, **kwargs)
@@ -198,10 +204,10 @@ def compute_panel_v2(
 
 
 def need_dsa(needed_cats: set) -> bool:
-    dsa_cats = {"趋势类", "位置类", "节奏类", "协同类", "原始特征"}
+    dsa_cats = {"趋势类", "位置类", "节奏类", "协同类", "原始特征", "阶段上下文", "阶段位置", "阶段成熟度"}
     return bool(needed_cats & dsa_cats)
 
 
 def need_bb(needed_cats: set) -> bool:
-    bb_cats = {"趋势类", "动量类", "协同类", "原始特征"}
+    bb_cats = {"趋势类", "动量类", "协同类", "原始特征", "阶段上下文", "阶段成熟度"}
     return bool(needed_cats & bb_cats)
