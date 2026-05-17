@@ -63,6 +63,9 @@ from factor_lib.categories.risk import compute_risk_factors
 from factor_lib.categories.fundamental import compute_fundamental_factors
 from factor_lib.categories.raw_features import compute_raw_features
 from factor_lib.categories.quantity_price import compute_quantity_price_factors
+from factor_lib.categories.stage_context import compute_stage_context_factors
+from factor_lib.categories.stage_position import compute_stage_position_factors
+from factor_lib.categories.stage_maturity import compute_stage_maturity_factors
 
 compute_all_factors_v2 = compute_panel_v2
 
@@ -86,4 +89,7 @@ __all__ = [
     "compute_fundamental_factors",
     "compute_raw_features",
     "compute_quantity_price_factors",
+    "compute_stage_context_factors",
+    "compute_stage_position_factors",
+    "compute_stage_maturity_factors",
 ]

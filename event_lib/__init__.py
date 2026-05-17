@@ -27,6 +27,11 @@ from event_lib.detectors import (
     structural_events,
     fundamental_events,
     composite_events,
+    stage_cost_zone_events,
+    stage_wash_events,
+    stage_shake_events,
+    stage_repair_events,
+    stage_failure_events,
 )
 
 __all__ = [
