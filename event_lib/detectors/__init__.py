@@ -31,4 +31,6 @@ from event_lib.detectors import (
     stage_shake_events,
     stage_repair_events,
     stage_failure_events,
+    sr_support_events,
+    sr_resistance_events,
 )

@@ -132,6 +132,15 @@ def compute_panel_v2(
     from factor_lib.categories.stage_context import compute_stage_context_factors
     from factor_lib.categories.stage_position import compute_stage_position_factors
     from factor_lib.categories.stage_maturity import compute_stage_maturity_factors
+    from factor_lib.categories.sr_position import compute_sr_position_factors
+    from factor_lib.categories.sr_structure import compute_sr_structure_factors
+    from factor_lib.categories.sr_bar_morphology import compute_sr_bar_morphology_factors
+    from factor_lib.categories.sr_volume import compute_sr_volume_factors
+    from factor_lib.categories.sr_trend import compute_sr_trend_factors
+    from factor_lib.categories.sr_volatility import compute_sr_volatility_factors
+    from factor_lib.categories.sr_pierce_strength import compute_sr_pierce_strength_factors
+    from factor_lib.categories.sr_breakout_strength import compute_sr_breakout_strength_factors
+    from factor_lib.categories.sr_future_label import compute_sr_future_label_factors
     from features.dsa_bbmacd_24factors_viewer import compute_dsa, compute_bbmacd, DSAConfig
 
     result = df.copy()
@@ -153,6 +162,15 @@ def compute_panel_v2(
         "阶段上下文": ("stage_context", compute_stage_context_factors),
         "阶段位置": ("stage_position", compute_stage_position_factors),
         "阶段成熟度": ("stage_maturity", compute_stage_maturity_factors),
+        "SR位置类": ("sr_position", compute_sr_position_factors),
+        "SR结构类": ("sr_structure", compute_sr_structure_factors),
+        "SR K线形态类": ("sr_bar_morphology", compute_sr_bar_morphology_factors),
+        "SR量能类": ("sr_volume", compute_sr_volume_factors),
+        "SR趋势类": ("sr_trend", compute_sr_trend_factors),
+        "SR波动类": ("sr_volatility", compute_sr_volatility_factors),
+        "SR刺破强度类": ("sr_pierce_strength", compute_sr_pierce_strength_factors),
+        "SR突破强度类": ("sr_breakout_strength", compute_sr_breakout_strength_factors),
+        "SR未来标签类": ("sr_future_label", compute_sr_future_label_factors),
     }
 
     dsanf, bbnf, volnf = False, False, False

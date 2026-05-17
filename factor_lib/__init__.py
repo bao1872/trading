@@ -66,6 +66,15 @@ from factor_lib.categories.quantity_price import compute_quantity_price_factors
 from factor_lib.categories.stage_context import compute_stage_context_factors
 from factor_lib.categories.stage_position import compute_stage_position_factors
 from factor_lib.categories.stage_maturity import compute_stage_maturity_factors
+from factor_lib.categories.sr_structure import compute_sr_structure_factors
+from factor_lib.categories.sr_position import compute_sr_position_factors
+from factor_lib.categories.sr_bar_morphology import compute_sr_bar_morphology_factors
+from factor_lib.categories.sr_volume import compute_sr_volume_factors
+from factor_lib.categories.sr_trend import compute_sr_trend_factors
+from factor_lib.categories.sr_volatility import compute_sr_volatility_factors
+from factor_lib.categories.sr_pierce_strength import compute_sr_pierce_strength_factors
+from factor_lib.categories.sr_breakout_strength import compute_sr_breakout_strength_factors
+from factor_lib.categories.sr_future_label import compute_sr_future_label_factors
 
 compute_all_factors_v2 = compute_panel_v2
 
@@ -92,4 +101,13 @@ __all__ = [
     "compute_stage_context_factors",
     "compute_stage_position_factors",
     "compute_stage_maturity_factors",
+    "compute_sr_structure_factors",
+    "compute_sr_position_factors",
+    "compute_sr_bar_morphology_factors",
+    "compute_sr_volume_factors",
+    "compute_sr_trend_factors",
+    "compute_sr_volatility_factors",
+    "compute_sr_pierce_strength_factors",
+    "compute_sr_breakout_strength_factors",
+    "compute_sr_future_label_factors",
 ]
