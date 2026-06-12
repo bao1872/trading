@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-event_lib/stage_engine.py - 阶段事件统计引擎
+research/stage_sequence_analysis.py - 阶段序列分析（研究层）
 
 Purpose: 读取事件列，滚动统计事件密度，计算阶段评分。
-         输出可供回测脚本使用的纯计算结果，不写数据库。
+         这是研究层代码，不在 factor_lib/event_lib 底座主流程中调用。
+         底座只输出因子值和 0/1 事件，阶段判断在此研究层通过事件序列组合来做。
 
 Public API:
     compute_stage_scores(events_df, factors_df=None, config=None) -> DataFrame
@@ -11,24 +12,24 @@ Public API:
 Output Columns:
     - cost_zone_forming_score: 成本区形成度
     - cost_zone_maturity_score: 成本区成熟度
-    - wash_cycle_count: 有效洗盘循环数
-    - wash_cycle_quality_score: 最近洗盘质量
+    - wash_cycle_count: 区间循环数
+    - wash_cycle_quality_score: 区间循环质量
     - final_shake_score: 末端强洗候选强度
-    - repair_score: 震仓后修复度
-    - failure_score: 结构失败/出货风险
+    - repair_score: 修复度
+    - failure_score: 破位风险
     - stage_chain_score: 阶段链条综合分
     - stage_guess: 仅供研究展示的阶段推断
 
 Inputs:
     events_df: detect_panel() 输出的事件 DataFrame
-    factors_df: 可选的因子 DataFrame（用于 maturity gating）
+    factors_df: 可选的因子 DataFrame
     config: 可选配置字典
 
 Outputs: DataFrame with 9 columns
 How to Run:
-    python -m event_lib.stage_engine
+    python -m research.stage_sequence_analysis
 Examples:
-    python -m event_lib.stage_engine
+    python -m research.stage_sequence_analysis
 Side Effects: None
 """
 import pandas as pd
@@ -37,39 +38,38 @@ import numpy as np
 _DEFAULT_CONFIG = {
     "density_window": 20,
     "cz_forming_weights": {
-        "evt_cz_trend_flat": 0.3,
-        "evt_cz_price_around_mid": 0.3,
-        "evt_cz_volatility_compress": 0.2,
-        "evt_cz_lower_hold": 0.2,
+        "evt_trend_flat": 0.3,
+        "evt_price_cross_mid_freq_high": 0.3,
+        "evt_volatility_compress": 0.2,
+        "evt_lower_reclaim_freq_high": 0.2,
     },
     "cz_maturity_weights": {
-        "evt_cz_upper_test_fail": 0.0,
-        "evt_cz_lower_reclaim": 0.3,
-        "evt_cz_range_reentry": 0.0,
-        "evt_cz_mature": 0.3,
-        "evt_cz_price_around_mid": 0.2,
-        "evt_cz_lower_hold": 0.2,
+        "evt_upper_reject_count_n": 0.0,
+        "evt_lower_reclaim_freq_high": 0.3,
+        "evt_price_cross_mid_freq_high": 0.2,
+        "evt_lower_reclaim_freq_high": 0.2,
+        "evt_range_pullback_reclaim_cycle": 0.3,
     },
     "shake_weights": {
-        "evt_shake_break_lower": 0.25,
-        "evt_shake_break_last_wash_low": 0.2,
-        "evt_shake_lower_reclaim": 0.25,
-        "evt_shake_long_lower_shadow": 0.15,
-        "evt_shake_stop_cluster_reclaim": 0.15,
+        "evt_lower_break": 0.25,
+        "evt_break_last_reclaim_low": 0.2,
+        "evt_lower_break_reclaim": 0.25,
+        "evt_long_lower_shadow": 0.15,
+        "evt_stop_cluster_reclaim": 0.15,
     },
     "repair_weights": {
-        "evt_repair_reclaim_lower": 0.2,
-        "evt_repair_reclaim_mid": 0.25,
-        "evt_repair_reclaim_upper": 0.1,
-        "evt_repair_dsa_vwap": 0.15,
-        "evt_repair_trend_slope": 0.15,
-        "evt_repair_bbmacd": 0.15,
+        "evt_reclaim_lower": 0.2,
+        "evt_reclaim_mid": 0.25,
+        "evt_reclaim_upper": 0.1,
+        "evt_reclaim_dsa_vwap": 0.15,
+        "evt_trend_slope_turn_positive": 0.15,
+        "evt_bbmacd_turn_positive": 0.15,
     },
     "failure_weights": {
-        "evt_fail_break_lower_no_reclaim": 0.3,
-        "evt_fail_trend_down_confirm": 0.25,
-        "evt_fail_weak_rebound": 0.2,
-        "evt_fail_distribution_risk": 0.25,
+        "evt_lower_break_no_reclaim": 0.3,
+        "evt_trend_down_confirm": 0.25,
+        "evt_weak_rebound": 0.2,
+        "evt_distribution_risk": 0.25,
     },
     "failure_threshold": 0.5,
     "shake_mature_threshold": 0.5,
@@ -103,11 +103,11 @@ def compute_stage_scores(
     config: dict = None,
 ) -> pd.DataFrame:
     """
-    阶段引擎：读取事件列，滚动统计事件密度，计算阶段评分。
+    阶段序列分析：读取事件列，滚动统计事件密度，计算阶段评分。
 
     Args:
         events_df: detect_panel() 输出的事件 DataFrame
-        factors_df: 可选的因子 DataFrame（用于 maturity gating）
+        factors_df: 可选的因子 DataFrame
         config: 可选配置字典，覆盖默认阈值
 
     Returns:
@@ -125,23 +125,22 @@ def compute_stage_scores(
     cost_zone_maturity_score = _weighted_event_density(
         events_df, cfg["cz_maturity_weights"], window
     )
-    maturity_gate = cost_zone_maturity_score.clip(lower=0)
     result["cost_zone_maturity_score"] = cost_zone_maturity_score
 
-    if "evt_wash_cycle_complete" in events_df.columns:
-        wash_cycle_events = events_df["evt_wash_cycle_complete"].fillna(0).astype(int)
+    if "evt_range_pullback_reclaim_cycle" in events_df.columns:
+        wash_cycle_events = events_df["evt_range_pullback_reclaim_cycle"].fillna(0).astype(int)
         wash_cycle_count = wash_cycle_events.cumsum()
         result["wash_cycle_count"] = wash_cycle_count
     else:
         result["wash_cycle_count"] = 0
 
     wash_quality = pd.Series(0.0, index=events_df.index)
-    if "evt_wash_break_short_hold_long" in events_df.columns:
-        wash_quality += events_df["evt_wash_break_short_hold_long"].fillna(0).astype(float).rolling(window, min_periods=1).mean() * 0.4
-    if "evt_wash_reclaim_mid" in events_df.columns:
-        wash_quality += events_df["evt_wash_reclaim_mid"].fillna(0).astype(float).rolling(window, min_periods=1).mean() * 0.3
-    if "evt_wash_pullback_to_lower" in events_df.columns:
-        wash_quality += events_df["evt_wash_pullback_to_lower"].fillna(0).astype(float).rolling(window, min_periods=1).mean() * 0.3
+    if "evt_lower_break_short_hold_long" in events_df.columns:
+        wash_quality += events_df["evt_lower_break_short_hold_long"].fillna(0).astype(float).rolling(window, min_periods=1).mean() * 0.4
+    if "evt_price_cross_above_mid" in events_df.columns:
+        wash_quality += events_df["evt_price_cross_above_mid"].fillna(0).astype(float).rolling(window, min_periods=1).mean() * 0.3
+    if "evt_pullback_to_lower" in events_df.columns:
+        wash_quality += events_df["evt_pullback_to_lower"].fillna(0).astype(float).rolling(window, min_periods=1).mean() * 0.3
     result["wash_cycle_quality_score"] = wash_quality.clip(0, 1)
 
     raw_shake = _weighted_event_density(
@@ -233,11 +232,8 @@ if __name__ == "__main__":
     events_df = detect_panel(factors_df)
     stage_df = compute_stage_scores(events_df, factors_df)
 
-    print("=== 阶段引擎输出 ===")
+    print("=== 阶段序列分析输出 ===")
     print(stage_df.describe())
     print()
     print("stage_guess 分布:")
     print(stage_df["stage_guess"].value_counts())
-    print()
-    print("最后5行:")
-    print(stage_df.tail())

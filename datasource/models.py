@@ -30,6 +30,22 @@ CREATE INDEX IF NOT EXISTS idx_k_data_bar_time ON stock_k_data(bar_time);
 TABLE_DEFINITIONS["stock_k_data"] = K_DATA_TABLE
 
 
+ADJ_FACTOR_TABLE = """
+CREATE TABLE IF NOT EXISTS stock_adj_factor (
+    id BIGSERIAL PRIMARY KEY,
+    ts_code VARCHAR(20) NOT NULL,
+    trade_date DATE NOT NULL,
+    adj_factor FLOAT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(ts_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_adj_factor_ts_code ON stock_adj_factor(ts_code);
+CREATE INDEX IF NOT EXISTS idx_adj_factor_trade_date ON stock_adj_factor(trade_date);
+CREATE INDEX IF NOT EXISTS idx_adj_factor_ts_date ON stock_adj_factor(ts_code, trade_date);
+"""
+TABLE_DEFINITIONS["stock_adj_factor"] = ADJ_FACTOR_TABLE
+
+
 DIV_FEATURES_TABLE = """
 CREATE TABLE IF NOT EXISTS stock_div_features (
     id BIGSERIAL PRIMARY KEY,
@@ -855,6 +871,65 @@ CREATE TABLE IF NOT EXISTS stock_watchlist (
 CREATE INDEX IF NOT EXISTS idx_watchlist_ts_code ON stock_watchlist(ts_code);
 """
 TABLE_DEFINITIONS["stock_watchlist"] = STOCK_WATCHLIST_TABLE
+
+
+ATR_ROPE_FEATURES_TABLE = """
+CREATE TABLE IF NOT EXISTS atr_rope_features (
+    id BIGSERIAL PRIMARY KEY,
+    feature_date DATE NOT NULL,
+    ts_code VARCHAR(20) NOT NULL,
+    stock_name VARCHAR(50),
+    source VARCHAR(10) NOT NULL,
+
+    -- GBDT特征
+    regime VARCHAR(10),
+    regime_strength FLOAT,
+    rope_dev_pct FLOAT,
+    rope_dev_atr FLOAT,
+    range_width_pct FLOAT,
+    lower_value FLOAT,
+    upper_value FLOAT,
+    change_pct FLOAT,
+    vol_zscore FLOAT,
+    dsa_dir_bars INT,
+    rope_dir1_pct FLOAT,
+    rope_dir_neg1_pct FLOAT,
+    range_pos_01 FLOAT,
+    dsa_vwap_dev_pct FLOAT,
+    avg_amount_20d FLOAT,
+    bbmacd_event VARCHAR(20),
+    low_rope_signal VARCHAR(20),
+    low_vwap_signal VARCHAR(20),
+    low_rope_dev_mean_pct FLOAT,
+    low_rope_dev_std_pct FLOAT,
+    low_rope_dev_today_pct FLOAT,
+    low_vwap_dev_mean_pct FLOAT,
+    low_vwap_dev_std_pct FLOAT,
+    low_vwap_dev_today_pct FLOAT,
+
+    -- 预测结果
+    pred_return FLOAT,
+    pred_prob FLOAT,
+    combined_score FLOAT,
+    reg_rank INT,
+    cls_rank INT,
+    combined_rank INT,
+    in_reg_top5 BOOLEAN DEFAULT FALSE,
+    in_cls_top5 BOOLEAN DEFAULT FALSE,
+    in_overlap_top5 BOOLEAN DEFAULT FALSE,
+    in_reg_top10 BOOLEAN DEFAULT FALSE,
+    in_cls_top10 BOOLEAN DEFAULT FALSE,
+    in_overlap_top10 BOOLEAN DEFAULT FALSE,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(feature_date, ts_code)
+);
+CREATE INDEX IF NOT EXISTS idx_atr_features_date ON atr_rope_features(feature_date);
+CREATE INDEX IF NOT EXISTS idx_atr_features_source ON atr_rope_features(source);
+CREATE INDEX IF NOT EXISTS idx_atr_features_combined ON atr_rope_features(feature_date, source, combined_score DESC NULLS LAST);
+"""
+TABLE_DEFINITIONS["atr_rope_features"] = ATR_ROPE_FEATURES_TABLE
 
 
 SENTIMENT_POSTS_TABLE = """

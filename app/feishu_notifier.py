@@ -24,6 +24,7 @@ Usage:
 import os
 import sys
 import base64
+import time
 import requests
 from typing import Optional
 
@@ -48,25 +49,30 @@ class FeishuNotifier:
         self.app_secret = app_secret or FEISHU_APP_SECRET
         self.default_receiver = default_receiver or FEISHU_USER_ID
         self._access_token = None
+        self._token_expire_time = 0  # token 过期时间戳
     
     def get_access_token(self) -> str:
-        """获取访问令牌"""
-        if self._access_token:
+        """获取访问令牌（自动刷新过期token）"""
+        # token 未过期则直接返回（提前300秒刷新，避免边界情况）
+        if self._access_token and time.time() < self._token_expire_time - 300:
             return self._access_token
-        
+
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
         payload = {
             "app_id": self.app_id,
             "app_secret": self.app_secret
         }
-        
+
         response = requests.post(url, json=payload)
         result = response.json()
-        
+
         if result.get("code") != 0:
             raise Exception(f"获取 access_token 失败：{result.get('msg', 'Unknown error')}")
-        
+
         self._access_token = result.get("tenant_access_token")
+        # 飞书 tenant_access_token 有效期 7200 秒，取 expire 或默认 7200
+        expire = result.get("expire", 7200)
+        self._token_expire_time = time.time() + expire
         return self._access_token
     
     def _send_message(self, msg_type: str, content: dict, receiver_id: str = None, 

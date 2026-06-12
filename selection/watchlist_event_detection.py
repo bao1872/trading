@@ -30,6 +30,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from features.bbmacd_viewer import compute_bbmacd
 from features.pavp_tv_fixed_params_factors import compute_pavp
 from features.dynamic_swing_anchored_vwap import dynamic_swing_anchored_vwap, DSAConfig
+from datasource.adj_factor import apply_adj_factor
 
 try:
     from config import DATABASE_URL
@@ -97,6 +98,8 @@ def get_kline_data(ts_code: str, freq: str = 'd', bars: int = 60) -> pd.DataFram
     df = pd.read_sql(text(sql), engine, params=params)
     if not df.empty:
         df = df.sort_values('bar_time').set_index('bar_time')
+        suffix = '.SH' if symbol.startswith(('6', '9')) else '.SZ'
+        df = apply_adj_factor(df, f'{symbol}{suffix}', freq=freq)
     return df
 
 

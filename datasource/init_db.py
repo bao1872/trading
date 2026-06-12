@@ -46,6 +46,7 @@ def check_tables():
         'breakout_pullback_buy_events',
         'limit_up_signals',
         'stock_watchlist',
+        'atr_rope_features',
         'saved_filters'
     ]
 

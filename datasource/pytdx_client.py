@@ -228,6 +228,205 @@ def get_tick_data_for_date(api: TdxHq_API, symbol: str, date_int: int) -> Option
         return None
 
 
+def get_tick_data_for_dates(api: TdxHq_API, symbol: str, date_ints: List[int]) -> pd.DataFrame:
+    """批量获取多日tick汇总数据
+
+    内部循环调用 get_tick_data_for_date，跳过无数据的日期。
+
+    Args:
+        api: TdxHq_API 实例
+        symbol: 股票代码（如 '000001'）
+        date_ints: 日期整数列表，如 [20260301, 20260302]
+
+    Returns:
+        DataFrame，列：date_int, buy_volume, sell_volume, buy_trades, sell_trades
+    """
+    records = []
+    for date_int in sorted(date_ints):
+        result = get_tick_data_for_date(api, symbol, date_int)
+        if result is not None:
+            records.append({
+                'date_int': date_int,
+                'buy_volume': result['buy_volume'],
+                'sell_volume': result['sell_volume'],
+                'buy_trades': result['buy_trades'],
+                'sell_trades': result['sell_trades'],
+            })
+    if not records:
+        return pd.DataFrame(columns=['date_int', 'buy_volume', 'sell_volume', 'buy_trades', 'sell_trades'])
+    return pd.DataFrame(records)
+
+
+def compute_pvdi_for_date(api: TdxHq_API, symbol: str, date_int: int) -> Optional[Dict]:
+    """计算指定日期的PVDI（Price-Volume Distribution Imbalance）三因子
+
+    基于原始逐笔tick数据，分别计算买入/卖出集合的成交量加权价格分布指标，
+    构造三个子因子：F_center(重心偏移)、F_spread(离散度差异)、F_skew(偏度差异)。
+
+    仅使用 buyorsell=0(主动买入) 和 1(主动卖出) 的数据，排除竞价数据(2/8)。
+
+    Args:
+        api: TdxHq_API 实例
+        symbol: 股票代码（如 '002916'）
+        date_int: 日期整数，如 20260603
+
+    Returns:
+        {'f_center': float, 'f_spread': float, 'f_skew': float} 或 None（无数据时）
+    """
+    import numpy as np
+
+    df = get_raw_tick_data(api, symbol, date_int)
+    if df.empty:
+        return None
+
+    # 过滤：仅保留连续竞价的买入(0)和卖出(1)
+    df = df[df['buyorsell'].isin([0, 1])].copy()
+    if df.empty:
+        return None
+
+    # vol 从手转为股数
+    df['vol'] = df['vol'] * 100
+
+    buy_df = df[df['buyorsell'] == 0]
+    sell_df = df[df['buyorsell'] == 1]
+
+    # 若买入或卖出集合为空，三个因子均返回0
+    if buy_df.empty or sell_df.empty:
+        return {'f_center': 0.0, 'f_spread': 0.0, 'f_skew': 0.0, 'skew_b': 0.0, 'skew_s': 0.0, 'pvdi_weighted': 0.0}
+
+    # 窗口内价格范围
+    p_max = df['price'].max()
+    p_min = df['price'].min()
+    price_range = p_max - p_min
+
+    # --- 成交量加权平均价格（重心） ---
+    p_bar_b = (buy_df['vol'] * buy_df['price']).sum() / buy_df['vol'].sum()
+    p_bar_s = (sell_df['vol'] * sell_df['price']).sum() / sell_df['vol'].sum()
+
+    # 整体VWAP和日中价
+    vwap = (df['vol'] * df['price']).sum() / df['vol'].sum()
+    p_mid = (p_max + p_min) / 2
+
+    # --- 成交量加权价格标准差（离散度） ---
+    var_b = (buy_df['vol'] * (buy_df['price'] - p_bar_b) ** 2).sum() / buy_df['vol'].sum()
+    var_s = (sell_df['vol'] * (sell_df['price'] - p_bar_s) ** 2).sum() / sell_df['vol'].sum()
+    sigma_b = np.sqrt(var_b)
+    sigma_s = np.sqrt(var_s)
+
+    # --- 成交量加权偏度 ---
+    if sigma_b > 0:
+        skew_b = (buy_df['vol'] * (buy_df['price'] - p_bar_b) ** 3).sum() / (buy_df['vol'].sum() * sigma_b ** 3)
+    else:
+        skew_b = 0.0
+
+    if sigma_s > 0:
+        skew_s = (sell_df['vol'] * (sell_df['price'] - p_bar_s) ** 3).sum() / (sell_df['vol'].sum() * sigma_s ** 3)
+    else:
+        skew_s = 0.0
+
+    # --- 构造三个子因子 ---
+    # F_center: VWAP偏离日中价，反映成交量在价格区间内的真实分布方向
+    # 旧公式 (p̄_B - p̄_S)/(p_max-p_min) 因bid-ask价差存在结构性正偏，已弃用
+    f_center = 2 * (vwap - p_mid) / price_range if price_range > 0 else 0.0
+
+    # F_spread: 价格离散度差异
+    f_spread = (sigma_s - sigma_b) / (sigma_s + sigma_b) if (sigma_s + sigma_b) > 0 else 0.0
+
+    # F_skew: 偏度差异，除以2压缩至[-1,1]，截断
+    f_skew = float(np.clip((skew_b - skew_s) / 2, -1, 1))
+
+    # PVDI加权和：重心0.5 + 偏度0.3 + 离散度0.2
+    pvdi_weighted = 0.5 * f_center + 0.3 * f_skew + 0.2 * f_spread
+
+    return {'f_center': f_center, 'f_spread': f_spread, 'f_skew': f_skew, 'skew_b': float(skew_b), 'skew_s': float(skew_s), 'pvdi_weighted': pvdi_weighted}
+
+
+def classify_pvdi_pattern(f_center: float, f_spread: float, f_skew: float) -> Dict:
+    """根据PVDI三因子符号组合判断市场微观结构状态
+
+    8种模式基于 F_center(重心偏移)、F_spread(离散度差异)、F_skew(偏度差异) 的符号组合。
+    当所有因子绝对值均<0.1时，视为中性无信号，返回pattern=0。
+
+    Args:
+        f_center: 重心偏移因子
+        f_spread: 离散度差异因子
+        f_skew: 偏度差异因子
+
+    Returns:
+        {'pattern': int, 'label': str, 'signal': str, 'strength': str}
+    """
+    # 中性判断：所有因子绝对值均<0.1
+    if abs(f_center) < 0.1 and abs(f_spread) < 0.1 and abs(f_skew) < 0.1:
+        return {'pattern': 0, 'label': '中性', 'signal': 'neutral', 'strength': 'weak'}
+
+    # 符号判断
+    c = '+' if f_center >= 0 else '-'
+    s = '+' if f_spread >= 0 else '-'
+    k = '+' if f_skew >= 0 else '-'
+
+    # 8种模式映射
+    patterns = {
+        ('+', '-', '+'): {'pattern': 1, 'label': '吸筹式上涨', 'signal': 'bullish'},
+        ('+', '-', '-'): {'pattern': 2, 'label': '谨慎推升', 'signal': 'bullish'},
+        ('+', '+', '+'): {'pattern': 3, 'label': '追涨狂热', 'signal': 'extreme_bull'},
+        ('+', '+', '-'): {'pattern': 4, 'label': '虚涨派发', 'signal': 'neutral'},
+        ('-', '-', '+'): {'pattern': 5, 'label': '恐慌下跌', 'signal': 'bearish'},
+        ('-', '-', '-'): {'pattern': 6, 'label': '承接式下跌', 'signal': 'bearish'},
+        ('-', '+', '+'): {'pattern': 7, 'label': '多杀多', 'signal': 'extreme_bear'},
+        ('-', '+', '-'): {'pattern': 8, 'label': '震荡出货', 'signal': 'neutral'},
+    }
+
+    key = (c, s, k)
+    result = patterns.get(key, {'pattern': 0, 'label': '中性', 'signal': 'neutral'})
+
+    # 强度判断：取三个因子绝对值的最大值
+    max_abs = max(abs(f_center), abs(f_spread), abs(f_skew))
+    if max_abs >= 0.5:
+        result['strength'] = 'strong'
+    elif max_abs >= 0.2:
+        result['strength'] = 'medium'
+    else:
+        result['strength'] = 'weak'
+
+    return result
+
+
+def compute_pvdi_for_dates(api: TdxHq_API, symbol: str, date_ints: List[int]) -> pd.DataFrame:
+    """批量计算多日PVDI因子
+
+    Args:
+        api: TdxHq_API 实例
+        symbol: 股票代码（如 '002916'）
+        date_ints: 日期整数列表，如 [20260529, 20260602]
+
+    Returns:
+        DataFrame，列：date_int, f_center, f_spread, f_skew, skew_b, skew_s,
+                       pvdi_weighted, pattern, label, signal, strength
+    """
+    records = []
+    for date_int in sorted(date_ints):
+        result = compute_pvdi_for_date(api, symbol, date_int)
+        if result is not None:
+            cls = classify_pvdi_pattern(result['f_center'], result['f_spread'], result['f_skew'])
+            records.append({
+                'date_int': date_int,
+                'f_center': result['f_center'],
+                'f_spread': result['f_spread'],
+                'f_skew': result['f_skew'],
+                'skew_b': result['skew_b'],
+                'skew_s': result['skew_s'],
+                'pvdi_weighted': result['pvdi_weighted'],
+                'pattern': cls['pattern'],
+                'label': cls['label'],
+                'signal': cls['signal'],
+                'strength': cls['strength'],
+            })
+    if not records:
+        return pd.DataFrame(columns=['date_int', 'f_center', 'f_spread', 'f_skew', 'skew_b', 'skew_s',
+                                     'pvdi_weighted', 'pattern', 'label', 'signal', 'strength'])
+    return pd.DataFrame(records)
+
+
 def get_raw_tick_data(api: TdxHq_API, symbol: str, date_int: int, page_size: int = 2000) -> pd.DataFrame:
     """
     获取指定日期的原始逐笔成交数据（DataFrame格式）

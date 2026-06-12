@@ -89,6 +89,34 @@ def _detect_reclaim_support_close_strong(factors_df: pd.DataFrame) -> pd.Series:
     return (pierce & (close_pos > 0.7)).astype(int)
 
 
+def _detect_pierce_strong_support_cluster_reclaim(factors_df: pd.DataFrame) -> pd.Series:
+    return factors_df["evt_pierce_strong_support_cluster_reclaim"].fillna(False).astype(int)
+
+
+def _detect_pierce_support_zone_reclaim(factors_df: pd.DataFrame) -> pd.Series:
+    return factors_df["evt_pierce_support_zone_reclaim"].fillna(False).astype(int)
+
+
+def _detect_pierce_support_zone_reclaim_strong(factors_df: pd.DataFrame) -> pd.Series:
+    return factors_df["evt_pierce_support_zone_reclaim_strong"].fillna(False).astype(int)
+
+
+def _detect_break_strong_support_cluster(factors_df: pd.DataFrame) -> pd.Series:
+    return factors_df["evt_break_strong_support_cluster"].fillna(False).astype(int)
+
+
+def _detect_break_strong_support_cluster_high_volume(factors_df: pd.DataFrame) -> pd.Series:
+    return factors_df["evt_break_strong_support_cluster_high_volume"].fillna(False).astype(int)
+
+
+def _detect_pierce_support_cluster_reclaim_low_volume(factors_df: pd.DataFrame) -> pd.Series:
+    return factors_df["evt_pierce_support_cluster_reclaim_low_volume"].fillna(False).astype(int)
+
+
+def _detect_pierce_support_cluster_reclaim_high_volume(factors_df: pd.DataFrame) -> pd.Series:
+    return factors_df["evt_pierce_support_cluster_reclaim_high_volume"].fillna(False).astype(int)
+
+
 register_event(
     name="evt_pierce_recent_support",
     category="SR支撑事件",
@@ -237,6 +265,76 @@ register_event(
     description="刺破收回+收盘强势",
     direction="positive",
     is_core=False,
+)
+
+register_event(
+    name="evt_pierce_strong_support_cluster_reclaim",
+    category="SR支撑事件",
+    detect_func=_detect_pierce_strong_support_cluster_reclaim,
+    required_factors=["evt_pierce_strong_support_cluster_reclaim"],
+    description="刺破强支撑簇后收回",
+    direction="positive",
+    is_core=True,
+)
+
+register_event(
+    name="evt_pierce_support_zone_reclaim",
+    category="SR支撑事件",
+    detect_func=_detect_pierce_support_zone_reclaim,
+    required_factors=["evt_pierce_support_zone_reclaim"],
+    description="刺破支撑区间后收回(下界)",
+    direction="positive",
+    is_core=True,
+)
+
+register_event(
+    name="evt_pierce_support_zone_reclaim_strong",
+    category="SR支撑事件",
+    detect_func=_detect_pierce_support_zone_reclaim_strong,
+    required_factors=["evt_pierce_support_zone_reclaim_strong"],
+    description="刺破支撑区间后收回(上界)",
+    direction="positive",
+    is_core=True,
+)
+
+register_event(
+    name="evt_break_strong_support_cluster",
+    category="SR支撑事件",
+    detect_func=_detect_break_strong_support_cluster,
+    required_factors=["evt_break_strong_support_cluster"],
+    description="跌破强支撑簇",
+    direction="negative",
+    is_core=True,
+)
+
+register_event(
+    name="evt_break_strong_support_cluster_high_volume",
+    category="SR支撑事件",
+    detect_func=_detect_break_strong_support_cluster_high_volume,
+    required_factors=["evt_break_strong_support_cluster_high_volume"],
+    description="跌破强支撑簇+放量",
+    direction="negative",
+    is_core=True,
+)
+
+register_event(
+    name="evt_pierce_support_cluster_reclaim_low_volume",
+    category="SR支撑事件",
+    detect_func=_detect_pierce_support_cluster_reclaim_low_volume,
+    required_factors=["evt_pierce_support_cluster_reclaim_low_volume"],
+    description="强支撑簇刺破收回+缩量",
+    direction="positive",
+    is_core=True,
+)
+
+register_event(
+    name="evt_pierce_support_cluster_reclaim_high_volume",
+    category="SR支撑事件",
+    detect_func=_detect_pierce_support_cluster_reclaim_high_volume,
+    required_factors=["evt_pierce_support_cluster_reclaim_high_volume"],
+    description="强支撑簇刺破收回+放量",
+    direction="negative",
+    is_core=True,
 )
 
 

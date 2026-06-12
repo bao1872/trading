@@ -95,6 +95,7 @@ HOLDINGS_DIR = os.path.join(OUTPUT_DIR, "holdings")            # DEPRECATED: 仅
 LIVE_DIR = os.path.join(OUTPUT_DIR, "live")                    # DEPRECATED: live 模式已移除
 DECISIONS_DIR = os.path.join(LIVE_DIR, "decisions")            # DEPRECATED: live 模式已移除
 EXECUTIONS_DIR = os.path.join(LIVE_DIR, "executions")          # DEPRECATED: live 模式已移除
+FILTER_QUALITY_DIR = os.path.join(OUTPUT_DIR, "filter_quality")
 
 # ==================== VSA 因子开关 ====================
 VSA_ENABLED = False  # 默认关闭，研究需要时改为 True

@@ -2,8 +2,9 @@
 """
 factor_lib/categories/stage_maturity.py - 阶段成熟度因子
 
-Purpose: 成本区成熟度/洗盘循环/震仓候选/修复/失败因子的批量计算与注册。
+Purpose: 价格穿越/触边/收回/循环计数等纯连续型因子的批量计算与注册。
          依赖 stage_position 因子提供统一边界（lower/mid/upper）。
+         不输出阶段判断类因子（repair_score/failure_score 已移至 research 层）。
 
 Public API:
     compute_stage_maturity_factors(df, dsa_result=None, bb_result=None) -> DataFrame
@@ -14,17 +15,15 @@ Registered Factors:
     - lower_touch_count_n: 下沿测试次数
     - lower_reclaim_count_n: 下沿假破/收回次数
     - upper_reject_count_n: 上沿试盘失败次数
-    - wash_cycle_count_n: 有效洗盘循环次数
+    - wash_cycle_count_n: 区间回踩收回循环次数
     - break_lower_intrabar: 当bar跌破下沿
     - reclaim_lower_close: 收盘收回下沿
-    - break_last_wash_low: 跌破最近洗盘低点
+    - break_last_wash_low: 跌破最近收回低点
     - lower_shadow_ratio: 下影线占比
-    - shake_range_atr: 强洗bar振幅ATR归一
-    - repair_score: 强洗后修复评分
-    - failure_score: 阶段失败评分
+    - shake_range_atr: bar振幅ATR归一
 
 Inputs: df with open/high/low/close/volume
-Outputs: DataFrame with 13 factor columns
+Outputs: DataFrame with 11 factor columns
 How to Run:
     python -m factor_lib.categories.stage_maturity
 Examples:
@@ -36,8 +35,6 @@ import pandas as pd
 import numpy as np
 
 _TOUCH_WINDOW = 20
-_RECLAIM_TOLERANCE_ATR = 0.3
-_WASH_LOOKBACK = 60
 
 
 def compute_stage_maturity_factors(
@@ -54,7 +51,7 @@ def compute_stage_maturity_factors(
         bb_result: 预计算的 compute_bbmacd 结果，若为 None 则内部计算
 
     Returns:
-        DataFrame 含 13 列阶段成熟度因子
+        DataFrame 含 11 列阶段成熟度因子
     """
     from features.dsa_bbmacd_24factors_viewer import compute_dsa, compute_bbmacd, DSAConfig
     from factor_lib.categories.stage_position import compute_stage_position_factors
@@ -82,7 +79,6 @@ def compute_stage_maturity_factors(
     upper = pos_result["stage_upper_boundary"].to_numpy(dtype=float)
 
     above_mid = pd.Series(close > mid, index=df.index)
-    below_mid = ~above_mid
     cross_mid = (above_mid != above_mid.shift(1)).astype(int)
     result["price_cross_mid_count_n"] = cross_mid.rolling(
         _TOUCH_WINDOW, min_periods=3
@@ -155,52 +151,6 @@ def compute_stage_maturity_factors(
 
     result["shake_range_atr"] = pd.Series(bar_range / safe_atr, index=df.index)
 
-    reclaim_lower_evt = (close >= lower).astype(float)
-    reclaim_mid_evt = (close >= mid).astype(float)
-    reclaim_upper_evt = (close >= upper).astype(float)
-    pos_repair = (reclaim_lower_evt * 0.3 + reclaim_mid_evt * 0.4 + reclaim_upper_evt * 0.3)
-
-    slope5 = pd.Series(
-        np.where(
-            np.isfinite(dsa_result["DSA_VWAP"].to_numpy(float)),
-            dsa_result["DSA_VWAP"].diff(5) / (5.0 * safe_atr),
-            np.nan,
-        ),
-        index=df.index,
-    )
-    slope_repair = np.clip((slope5 > 0).astype(float) * 0.5 + 0.5, 0, 1).fillna(0.5)
-
-    bbmacd_sign = bb_result["bbmacd"].fillna(0).to_numpy(float)
-    bbmacd_slope = bb_result["bbmacd"].diff(3).fillna(0).to_numpy(float)
-    bb_repair = np.clip(
-        np.where(bbmacd_sign > 0, 0.5, 0) + np.where(bbmacd_slope > 0, 0.5, 0),
-        0, 1,
-    )
-
-    repair = pos_repair * 0.4 + slope_repair.to_numpy(float) * 0.3 + bb_repair * 0.3
-    result["repair_score"] = pd.Series(np.clip(repair, 0, 1), index=df.index)
-
-    break_no_reclaim = (low_vals < lower) & (close < lower)
-    break_no_reclaim_s = pd.Series(break_no_reclaim.astype(float), index=df.index)
-    break_density = break_no_reclaim_s.rolling(_TOUCH_WINDOW, min_periods=3).mean()
-
-    dsa_dir = dsa_result["dsa_dir"].to_numpy(float)
-    trend_down = ((dsa_dir < 0) & (slope5.to_numpy(float) < 0)).astype(float)
-
-    weak_rebound = np.zeros(n, dtype=float)
-    below_mid_mask = close < mid
-    vol_shrink = np.zeros(n, dtype=float)
-    if "vol_zscore_20" in df.columns:
-        vol_shrink = (df["vol_zscore_20"].fillna(0).to_numpy(float) < -1).astype(float)
-    weak_rebound[below_mid_mask] = 0.5
-    weak_rebound[below_mid_mask & (vol_shrink > 0)] = 1.0
-
-    failure = (
-        break_density.to_numpy(float) * 0.4
-        + trend_down * 0.3
-        + weak_rebound * 0.3
-    )
-    result["failure_score"] = pd.Series(np.clip(failure, 0, 1), index=df.index)
     return result
 
 
@@ -246,14 +196,6 @@ def _compute_lower_shadow_ratio(df):
 
 def _compute_shake_range_atr(df):
     return compute_stage_maturity_factors(df)["shake_range_atr"]
-
-
-def _compute_repair_score(df):
-    return compute_stage_maturity_factors(df)["repair_score"]
-
-
-def _compute_failure_score(df):
-    return compute_stage_maturity_factors(df)["failure_score"]
 
 
 register_factor(
@@ -317,7 +259,7 @@ register_factor(
     compute_func=_compute_wash_cycle_count_n,
     source_module="factor_lib.categories.stage_maturity",
     source_function="_compute_wash_cycle_count_n",
-    description="有效洗盘循环次数（上沿测试+下沿收回为一轮）",
+    description="区间回踩收回循环次数（上沿测试+下沿收回为一轮）",
     direction="neutral",
     is_core=True,
 )
@@ -350,7 +292,7 @@ register_factor(
     compute_func=_compute_break_last_wash_low,
     source_module="factor_lib.categories.stage_maturity",
     source_function="_compute_break_last_wash_low",
-    description="跌破最近洗盘低点",
+    description="跌破最近收回低点",
     direction="negative",
     is_core=False,
 )
@@ -372,31 +314,9 @@ register_factor(
     compute_func=_compute_shake_range_atr,
     source_module="factor_lib.categories.stage_maturity",
     source_function="_compute_shake_range_atr",
-    description="强洗bar振幅ATR归一",
+    description="bar振幅ATR归一",
     direction="neutral",
     is_core=False,
-)
-
-register_factor(
-    name="repair_score",
-    category="阶段成熟度",
-    compute_func=_compute_repair_score,
-    source_module="factor_lib.categories.stage_maturity",
-    source_function="_compute_repair_score",
-    description="强洗后修复评分（0-1），综合位置/趋势/动量修复",
-    direction="positive",
-    is_core=True,
-)
-
-register_factor(
-    name="failure_score",
-    category="阶段成熟度",
-    compute_func=_compute_failure_score,
-    source_module="factor_lib.categories.stage_maturity",
-    source_function="_compute_failure_score",
-    description="阶段失败评分（0-1），综合破位/弱反弹/趋势下行",
-    direction="negative",
-    is_core=True,
 )
 
 
@@ -417,9 +337,6 @@ if __name__ == "__main__":
     )
 
     result = compute_stage_maturity_factors(df)
+    print(f"因子列数: {len(result.columns)}")
     print(result.describe())
-    print("\nrepair_score 分布:")
-    print(result["repair_score"].value_counts(bins=5, sort=False))
-    print("\nfailure_score 分布:")
-    print(result["failure_score"].value_counts(bins=5, sort=False))
     print("\nwash_cycle_count_n 最大值:", result["wash_cycle_count_n"].max())

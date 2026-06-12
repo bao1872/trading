@@ -1,0 +1,49 @@
+event_groups:
+  cost:
+    - evt_trend_flat
+    - evt_price_cross_mid_freq_high
+    - evt_volatility_compress
+  wash:
+    - evt_upper_reject
+    - evt_lower_touch
+    - evt_pullback_to_lower
+    - evt_price_cross_above_mid
+    - evt_range_pullback_reclaim_cycle
+  shake:
+    - evt_lower_break
+    - evt_lower_break_reclaim
+    - evt_stop_cluster_reclaim
+    - evt_range_expand_down_reclaim
+  repair:
+    - evt_reclaim_lower
+    - evt_reclaim_mid
+    - evt_reclaim_dsa_vwap
+    - evt_trend_slope_turn_positive
+    - evt_bbmacd_turn_positive
+  failure:
+    - evt_lower_break_no_reclaim
+    - evt_trend_down_confirm
+    - evt_weak_rebound
+  auxiliary:
+    - evt_long_lower_shadow
+    - evt_break_last_reclaim_low
+    - evt_upper_touch
+    - evt_multi_range_cycle
+    - evt_lower_break_short_hold_long
+    - evt_distribution_risk
+
+density_windows:
+  short: 10
+  mid: 20
+  long: 40
+
+decay:
+  half_life_short: 5
+  half_life_mid: 10
+  half_life_long: 20
+
+forward_returns:
+  - 5
+  - 10
+  - 20
+  - 40

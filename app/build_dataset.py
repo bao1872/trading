@@ -7,6 +7,7 @@
 数据规格（在 PERIOD_CONFIG 中配置）：
     - 日线：1300 bar
     - 周线：500 bar
+    - 15分钟线：1500 bar（仅自选股）
 
 保存路径：
     PostgreSQL 远程数据库 (config.DATABASE_URL)
@@ -27,6 +28,15 @@
     # 只回补周线数据（500 bar）
     python app/build_dataset.py --period w
 
+    # 回补自选股15分钟K线数据（1500 bar）
+    python app/build_dataset.py --period 15m
+
+    # 增量更新自选股15分钟K线
+    python app/build_dataset.py --update --period 15m
+
+    # 刷新自选股Tick缓存（汇总+PVDI因子）
+    python app/build_dataset.py --period tick
+
     # 测试模式（只处理前10只股票）
     python app/build_dataset.py --period d --limit 10
 
@@ -35,6 +45,16 @@
     - 更新时先删除该股票本周的数据（本周一到下周一之前）
     - 然后从pytdx获取最新周线数据，只保留本周及之后的数据
     - 插入最新的本周数据，确保周线数据始终最新且不会重复
+
+15分钟线更新逻辑：
+    - 仅处理自选股（stock_watchlist 表）
+    - 增量更新：查询每只股票最新bar_time，拉取缺失部分
+    - 首次回补：拉取1500根15分钟K线
+
+Tick缓存更新逻辑：
+    - 仅处理自选股（stock_watchlist 表）
+    - 刷新最近30个交易日的tick汇总+PVDI因子到tick_cache表
+    - 复用 selection_tick.py 的 refresh_tick_cache() 逻辑
 
 注意：
     这是一个耗时操作，只需要运行一次
@@ -69,6 +89,7 @@ from datasource.database import get_session, bulk_upsert
 PERIOD_CONFIG = {
     "d": {"bars": 1300, "desc": "日线"},
     "w": {"bars": 500, "desc": "周线"},
+    "15m": {"bars": 1500, "desc": "15分钟线"},
 }
 
 
@@ -103,7 +124,8 @@ def _code_to_symbol(code: str) -> str:
 
 def save_to_database(session, data_cache: Dict[str, Dict], freq: str,
                      delete_before_week_start: bool = False,
-                     confirmed_codes: Optional[set] = None):
+                     confirmed_codes: Optional[set] = None,
+                     quiet: bool = False):
     """
     将数据缓存保存到数据库
 
@@ -113,6 +135,7 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str,
         freq: 周期 ('d', 'w', '60m')
         delete_before_week_start: 是否删除本周的数据（本周一到下周一之前，仅对周线有效）
         confirmed_codes: 确认有数据的 code 集合（None 表示遍历 data_cache 内部判断）
+        quiet: 为 True 时禁用 tqdm 进度条（Streamlit 环境需设为 True）
     """
     from datetime import timedelta
     from sqlalchemy import text
@@ -158,7 +181,7 @@ def save_to_database(session, data_cache: Dict[str, Dict], freq: str,
                 session.rollback()
 
     all_dfs = []
-    for code, stock_data in tqdm(data_cache.items(), desc=f"整理{freq}"):
+    for code, stock_data in tqdm(data_cache.items(), desc=f"整理{freq}", disable=quiet):
         if code not in codes_with_data:
             continue
 
@@ -391,13 +414,199 @@ def update_dataset(cache_df: pd.DataFrame, bar_type: str, bar_count: int, force:
         print(f"{freq_label}更新成功率: {success_rate:.1%} ({success_count}/{total_stocks})")
 
 
+def _load_watchlist_df() -> pd.DataFrame:
+    """从 stock_watchlist 表加载自选股列表
+
+    Returns:
+        DataFrame，列：ts_code, stock_name
+    """
+    from datasource.database import query_df
+    with get_session() as session:
+        wl_df = query_df(session, "stock_watchlist", columns=["ts_code", "stock_name"])
+    if wl_df.empty:
+        print("⚠️  自选股列表为空")
+    return wl_df
+
+
+def update_watchlist_15m(watchlist_df: pd.DataFrame = None, bar_count: int = 1500, quiet: bool = False):
+    """增量更新自选股15分钟K线数据
+
+    从 stock_k_data 表查询每只股票 freq='15m' 的最新 bar_time，
+    增量拉取缺失数据并入库。
+
+    Args:
+        watchlist_df: 自选股 DataFrame（列：ts_code, stock_name）。
+                      为 None 时自动从数据库加载。
+        bar_count: 首次回补时拉取的K线数量
+        quiet: 为 True 时禁用 tqdm 进度条（Streamlit 环境需设为 True）
+    """
+    from sqlalchemy import text
+
+    if watchlist_df is None:
+        watchlist_df = _load_watchlist_df()
+    if watchlist_df.empty:
+        return
+
+    print(f"\n{'='*70}")
+    print(f"🔄 增量更新自选股15分钟K线数据")
+    print(f"{'='*70}")
+    print(f"自选股: {len(watchlist_df)} 只\n")
+
+    # 批量查询每只股票15分钟K线的最新bar_time
+    with get_session() as session:
+        results = session.execute(
+            text("SELECT ts_code, MAX(bar_time) as max_time "
+                 "FROM stock_k_data WHERE freq = '15m' GROUP BY ts_code"),
+        ).fetchall()
+    max_time_map = {}
+    for r in results:
+        if r[1]:
+            code = r[0].split(".")[0]
+            max_time_map[code] = pd.to_datetime(r[1])
+
+    api = connect_pytdx()
+    data_cache: Dict[str, Dict] = {}
+
+    try:
+        for _, row in tqdm(watchlist_df.iterrows(), total=len(watchlist_df), desc="更新15m", disable=quiet):
+            symbol = row["ts_code"].split(".")[0]
+            name = row.get("stock_name", "")
+            stock_max_time = max_time_map.get(symbol)
+
+            try:
+                if stock_max_time:
+                    # 增量：只拉取最新30根，过滤已有数据
+                    df = get_kline_data(api, symbol, "15m", 30)
+                    if df.empty:
+                        continue
+                    df = df.set_index("datetime")
+                    df = df[df.index > stock_max_time]
+                    if df.empty:
+                        continue
+                else:
+                    # 首次：拉取全量
+                    df = get_kline_data(api, symbol, "15m", bar_count)
+                    if df.empty or len(df) < 10:
+                        continue
+                    df = df.set_index("datetime")
+
+                data_cache[symbol] = {"name": name, "data": df}
+
+            except Exception:
+                continue
+
+    finally:
+        api.disconnect()
+
+    if data_cache:
+        total_new_bars = sum(len(d["data"]) for d in data_cache.values())
+        print(f"\n获取到 {len(data_cache)} 只股票的新数据，共 {total_new_bars} 条K线")
+        with get_session() as session:
+            save_to_database(session, data_cache, "15m", quiet=quiet)
+        print(f"✅ 15分钟K线更新完成")
+    else:
+        print(f"⚠️  无新数据需要更新")
+
+
+def update_watchlist_tick(watchlist_df: pd.DataFrame = None, n_days: int = 30, quiet: bool = False):
+    """刷新自选股Tick缓存（汇总+PVDI因子）
+
+    复用 selection_tick.py 的 refresh_tick_cache() 逻辑，
+    仅处理自选股的 tick_cache 数据。
+
+    Args:
+        watchlist_df: 自选股 DataFrame（列：ts_code, stock_name）。
+                      为 None 时自动从数据库加载。
+        n_days: 回补最近 n_days 个交易日的数据
+        quiet: 为 True 时禁用 tqdm 进度条（Streamlit 环境需设为 True）
+    """
+    from datasource.pytdx_client import get_tick_data_for_dates, compute_pvdi_for_dates
+    from selection.selection_tick import (
+        ensure_cache_table_exists, get_cached_tick_data, cache_tick_data,
+    )
+
+    if watchlist_df is None:
+        watchlist_df = _load_watchlist_df()
+    if watchlist_df.empty:
+        return
+
+    print(f"\n{'='*70}")
+    print(f"🔄 刷新自选股Tick缓存（最近{n_days}天）")
+    print(f"{'='*70}")
+    print(f"自选股: {len(watchlist_df)} 只\n")
+
+    ensure_cache_table_exists()
+
+    # 获取最近n_days个交易日的日期列表
+    with get_session() as session:
+        from sqlalchemy import text
+        result = session.execute(text(
+            "SELECT DISTINCT bar_time FROM stock_k_data "
+            "WHERE freq = 'd' ORDER BY bar_time DESC LIMIT :limit"
+        ), {"limit": n_days})
+        trade_dates_df = pd.DataFrame(result.fetchall(), columns=["bar_time"])
+    if trade_dates_df.empty:
+        print("⚠️  无法获取交易日列表")
+        return
+
+    trade_dates_df["bar_time"] = pd.to_datetime(trade_dates_df["bar_time"])
+    recent_dates = trade_dates_df.head(n_days)["bar_time"]
+    date_ints = [int(d.strftime("%Y%m%d")) for d in recent_dates]
+
+    if not date_ints:
+        print("⚠️  无交易日数据")
+        return
+
+    api = connect_pytdx()
+    success_count = 0
+
+    try:
+        for _, row in tqdm(watchlist_df.iterrows(), total=len(watchlist_df), desc="刷新Tick缓存", disable=quiet):
+            ts_code = row["ts_code"]
+            symbol = ts_code.split(".")[0]
+
+            try:
+                # 检查缓存缺失日期
+                cached = get_cached_tick_data(ts_code)
+                if not cached.empty:
+                    cached_date_ints = set(
+                        int(pd.Timestamp(d).strftime("%Y%m%d"))
+                        for d in cached["trade_date"]
+                    )
+                else:
+                    cached_date_ints = set()
+
+                missing_date_ints = sorted(set(date_ints) - cached_date_ints)
+
+                if not missing_date_ints:
+                    continue
+
+                # 拉取缺失日期的tick和PVDI数据
+                tick_df = get_tick_data_for_dates(api, symbol, missing_date_ints)
+                pvdi_df = compute_pvdi_for_dates(api, symbol, missing_date_ints)
+
+                # 写入缓存
+                saved = cache_tick_data(ts_code, tick_df, pvdi_df)
+                if saved > 0:
+                    success_count += 1
+
+            except Exception as e:
+                print(f"  {ts_code} Tick缓存刷新失败: {e}")
+                continue
+
+    finally:
+        api.disconnect()
+
+    print(f"\n✅ Tick缓存刷新完成: {success_count}/{len(watchlist_df)} 只股票更新")
+
+
 def main():
     parser = argparse.ArgumentParser(description="构建多周期数据集（保存到数据库）")
     parser.add_argument("--update", action="store_true", help="增量更新到当天")
     parser.add_argument("--force", action="store_true", help="强制更新，忽略时间限制（如周五15:00限制）")
     parser.add_argument("--limit", type=int, default=None, help="限制处理的股票数量（用于测试）")
-    parser.add_argument("--period", type=str, choices=["d", "w"], default=None,
-                        help="只回补指定周期: d=日线, w=周线")
+    parser.add_argument("--period", type=str, choices=["d", "w", "15m", "tick"], default=None,
+                        help="只回补指定周期: d=日线, w=周线, 15m=15分钟线, tick=Tick缓存")
     args = parser.parse_args()
 
     from datasource.database import query_df
@@ -429,6 +638,17 @@ def main():
 
     # 如果只回补指定周期
     if args.period:
+        if args.period == "tick":
+            # Tick缓存刷新（不走PERIOD_CONFIG）
+            print(f"\n{'='*70}")
+            print(f"📊 刷新自选股Tick缓存")
+            print(f"{'='*70}\n")
+            update_watchlist_tick()
+            print(f"\n{'='*70}")
+            print(f"✅ Tick缓存刷新完成")
+            print(f"{'='*70}\n")
+            return
+
         cfg = PERIOD_CONFIG[args.period]
         print(f"\n{'='*70}")
         print(f"📊 单独回补 {cfg['desc']} 数据 ({cfg['bars']} bar)")
@@ -438,6 +658,8 @@ def main():
             do_daily()
         elif args.period == "w":
             do_weekly()
+        elif args.period == "15m":
+            update_watchlist_15m(bar_count=cfg["bars"])
 
         print(f"\n{'='*70}")
         print(f"✅ {cfg['desc']} 回补完成")
@@ -446,7 +668,7 @@ def main():
 
     # 全量回补所有周期
     if args.update:
-        # 增量更新模式：必须指定 --period 参数，日线和周线分开更新
+        # 增量更新模式：必须指定 --period 参数
         if args.period == "d":
             print(f"\n{'='*70}")
             print(f"🔄 增量更新日线数据")
@@ -463,11 +685,17 @@ def main():
             print(f"\n{'='*70}")
             print(f"✅ 周线增量更新完成")
             print(f"{'='*70}\n")
+        elif args.period == "15m":
+            update_watchlist_15m()
+        elif args.period == "tick":
+            update_watchlist_tick()
         else:
-            print("\n❌ 错误：--update 模式必须指定 --period 参数（d=日线 或 w=周线）")
+            print("\n❌ 错误：--update 模式必须指定 --period 参数")
             print("示例：")
-            print("  python app/build_dataset.py --update --period d  # 更新日线")
-            print("  python app/build_dataset.py --update --period w  # 更新周线")
+            print("  python app/build_dataset.py --update --period d    # 更新日线")
+            print("  python app/build_dataset.py --update --period w    # 更新周线")
+            print("  python app/build_dataset.py --update --period 15m  # 更新15分钟线")
+            print("  python app/build_dataset.py --period tick          # 刷新Tick缓存")
             return
     else:
         print(f"\n{'='*70}")

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Purpose: 从数据库批量构建 SR 因子面板，输出分片 parquet（内存友好，不合并）
+Purpose: 从数据库批量构建 SR 因子面板，输出分片 parquet（内存友好，支持断点续跑）
 Inputs:  数据库股票池 + stock_k_data 行情表
 Outputs: results/shards/{freq}_pv{pivot_len}/panel_XXXX.parquet (分片面板)
          results/shards/{freq}_pv{pivot_len}/events_XXXX.parquet (分片事件)
@@ -45,11 +45,24 @@ def _shard_dir(freq: str, pivot_len: int) -> Path:
     return Path(OUT_DIR) / "shards" / f"{freq}_pv{pivot_len}"
 
 
+def _scan_done_stocks(sdir: Path) -> set[str]:
+    """扫描已有分片文件，提取已完成的 ts_code 集合（用于断点续跑）。"""
+    done = set()
+    for p in sorted(sdir.glob("panel_*.parquet")):
+        try:
+            df = pd.read_parquet(p, columns=["ts_code"])
+            done.update(df["ts_code"].unique().tolist())
+        except Exception:
+            pass
+    return done
+
+
 def build_panel(
     freq: str,
     pivot_len: int,
     limit_stocks: int | None = None,
     batch_size: int = 200,
+    resume: bool = True,
 ) -> tuple[int, int]:
     pool = get_stock_pool()
     codes = pool["ts_code"].tolist()
@@ -60,20 +73,42 @@ def build_panel(
     sdir = _shard_dir(freq, pivot_len)
     sdir.mkdir(parents=True, exist_ok=True)
 
-    for p in sdir.glob("panel_*.parquet"):
-        p.unlink()
-    for p in sdir.glob("events_*.parquet"):
-        p.unlink()
+    done_stocks: set[str] = set()
+    if resume:
+        done_stocks = _scan_done_stocks(sdir)
+        if done_stocks:
+            print(f"断点续跑: 已有 {len(done_stocks)} 只股票的分片，跳过")
 
-    total_done = 0
-    total_events = 0
+    existing_panels = sorted(sdir.glob("panel_*.parquet"))
+    existing_events = sorted(sdir.glob("events_*.parquet"))
+    batch_idx = len(existing_panels)
+
+    manifest = {"panel_shards": [], "event_shards": [], "total_rows": 0, "total_event_rows": 0}
+    for p in existing_panels:
+        try:
+            df = pd.read_parquet(p, columns=["ts_code"])
+            manifest["panel_shards"].append(p.name)
+            manifest["total_rows"] += len(df)
+        except Exception:
+            pass
+    for p in existing_events:
+        try:
+            df = pd.read_parquet(p, columns=["ts_code"])
+            manifest["event_shards"].append(p.name)
+            manifest["total_event_rows"] += len(df)
+        except Exception:
+            pass
+
+    total_done = len(done_stocks)
+    total_events = manifest["total_event_rows"]
     skipped = []
     batch_frames = []
     batch_event_frames = []
-    batch_idx = 0
-    manifest = {"panel_shards": [], "event_shards": [], "total_rows": 0, "total_event_rows": 0}
 
-    for ts_code in tqdm(codes, desc=f"Building panel [{freq}] pv{pivot_len}"):
+    remaining = [c for c in codes if c not in done_stocks]
+    print(f"待处理: {len(remaining)} 只股票 (总池: {len(codes)}, 已完成: {len(done_stocks)})")
+
+    for ts_code in tqdm(remaining, desc=f"Building panel [{freq}] pv{pivot_len}"):
         try:
             raw = load_kline(ts_code, freq)
         except Exception:
@@ -176,15 +211,19 @@ def iter_shards(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="从数据库批量构建 SR 因子面板（分片保存，不合并）")
+    parser = argparse.ArgumentParser(description="从数据库批量构建 SR 因子面板（分片保存，支持断点续跑）")
     parser.add_argument("--freq", type=str, default="w", help="周期 (d/w/60m)")
     parser.add_argument("--pivot-len", type=int, default=10, help="pivot 左右确认长度")
     parser.add_argument("--limit-stocks", type=int, default=None, help="限制股票数量（调试用）")
     parser.add_argument("--batch-size", type=int, default=200, help="每批保存的股票数（默认200）")
+    parser.add_argument("--no-resume", action="store_true", help="不从断点续跑，清空重来")
     args = parser.parse_args()
 
     t0 = time.time()
-    total_done, total_events = build_panel(args.freq, args.pivot_len, args.limit_stocks, args.batch_size)
+    total_done, total_events = build_panel(
+        args.freq, args.pivot_len, args.limit_stocks, args.batch_size,
+        resume=not args.no_resume,
+    )
     elapsed = time.time() - t0
     print(f"耗时: {elapsed:.1f}s")
 

@@ -28,6 +28,8 @@ CSV 需要包含：datetime/open/high/low/close/volume；amount 可选。
 """
 from __future__ import annotations
 
+SR_EVENT_FACTOR_LAB_VERSION = "cluster_confluence_v2_2026_05_18"
+
 import argparse
 import warnings
 from dataclasses import dataclass
@@ -293,6 +295,125 @@ def _rolling_last_touch_bars(price_arr: np.ndarray, level_arr: np.ndarray, atr_a
     return out
 
 
+def _change_events_from_level(level_arr: np.ndarray) -> np.ndarray:
+    """把连续持有的水平序列压缩成“发生变化才记录一次”的事件序列。"""
+    out = np.full(len(level_arr), np.nan)
+    prev = np.nan
+    for i, val in enumerate(level_arr):
+        if not np.isfinite(val):
+            prev = val
+            continue
+        changed = (not np.isfinite(prev)) or abs(float(val) - float(prev)) > 1e-12
+        if changed:
+            out[i] = float(val)
+        prev = val
+    return out
+
+
+def _level_cluster_features(
+    level_ref: np.ndarray,
+    primary_events: np.ndarray,
+    secondary_events: np.ndarray,
+    extra_events: Optional[np.ndarray],
+    atr_arr: np.ndarray,
+    lookback: int = 120,
+    tol_pct: float = 0.015,
+    tol_atr: float = 0.50,
+    primary_weight: float = 1.0,
+    secondary_weight: float = 1.0,
+    extra_weight: float = 1.50,
+) -> Dict[str, np.ndarray]:
+    """
+    围绕当前 level_ref 统计过去 lookback 根内的结构位聚集程度。
+
+    说明：
+    - primary_events / secondary_events 是“只在确认 bar 有值”的事件序列，例如 pvt_low / pvt_high。
+    - extra_events 用于 R2S/其他结构位，必须也是“只在变化 bar 有值”的事件序列，避免连续持有导致重复计数。
+    - 返回 count/score/zone_low/zone_high/density/has_*，用于区分单线支撑与结构共振区。
+    """
+    n = len(level_ref)
+    count = np.full(n, np.nan)
+    score = np.full(n, np.nan)
+    zone_low = np.full(n, np.nan)
+    zone_high = np.full(n, np.nan)
+    width_pct = np.full(n, np.nan)
+    density = np.full(n, np.nan)
+    has_primary = np.zeros(n, dtype=bool)
+    has_secondary = np.zeros(n, dtype=bool)
+    has_extra = np.zeros(n, dtype=bool)
+
+    for i in range(n):
+        level = level_ref[i]
+        if not np.isfinite(level) or level == 0:
+            continue
+        atr_i = atr_arr[i] if np.isfinite(atr_arr[i]) else 0.0
+        tol = max(abs(level) * tol_pct, atr_i * tol_atr)
+        start = max(0, i - int(lookback) + 1)
+
+        vals: List[float] = [float(level)]
+        weights: List[float] = [1.0]
+
+        pvals = primary_events[start:i + 1]
+        mask = np.isfinite(pvals) & (np.abs(pvals - level) <= tol)
+        if mask.any():
+            has_primary[i] = True
+            vals.extend([float(x) for x in pvals[mask]])
+            weights.extend([primary_weight] * int(mask.sum()))
+
+        svals = secondary_events[start:i + 1]
+        mask = np.isfinite(svals) & (np.abs(svals - level) <= tol)
+        if mask.any():
+            has_secondary[i] = True
+            vals.extend([float(x) for x in svals[mask]])
+            weights.extend([secondary_weight] * int(mask.sum()))
+
+        if extra_events is not None:
+            evals = extra_events[start:i + 1]
+            mask = np.isfinite(evals) & (np.abs(evals - level) <= tol)
+            if mask.any():
+                has_extra[i] = True
+                vals.extend([float(x) for x in evals[mask]])
+                weights.extend([extra_weight] * int(mask.sum()))
+
+        # 去掉几乎完全重复的价格点，避免同一个水平被重复记录导致 count 虚高。
+        # 但 score 保留来源权重，反映多来源共振。
+        if vals:
+            arr = np.array(vals, dtype=float)
+            w = np.array(weights, dtype=float)
+            order = np.argsort(arr)
+            arr = arr[order]
+            w = w[order]
+            unique_vals: List[float] = []
+            unique_w: List[float] = []
+            bucket_tol = max(abs(level) * 0.001, atr_i * 0.05)
+            for v, ww in zip(arr, w):
+                if not unique_vals or abs(v - unique_vals[-1]) > bucket_tol:
+                    unique_vals.append(float(v))
+                    unique_w.append(float(ww))
+                else:
+                    unique_w[-1] += float(ww)
+            arr_u = np.array(unique_vals, dtype=float)
+            w_u = np.array(unique_w, dtype=float)
+            count[i] = float(len(arr_u))
+            score[i] = float(w_u.sum())
+            zone_low[i] = float(arr_u.min())
+            zone_high[i] = float(arr_u.max())
+            width_pct[i] = float((zone_high[i] - zone_low[i]) / abs(level)) if level != 0 else np.nan
+            density[i] = float(score[i] / max(width_pct[i], 0.001))
+
+    return {
+        "count": count,
+        "score": score,
+        "zone_low": zone_low,
+        "zone_high": zone_high,
+        "width_pct": width_pct,
+        "density": density,
+        "has_primary": has_primary,
+        "has_secondary": has_secondary,
+        "has_extra": has_extra,
+    }
+
+
 def _pivot_sequence_features(pvt_confirm: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """返回 active/prev/is_higher/slope2/slope3。"""
     n = len(pvt_confirm)
@@ -349,6 +470,12 @@ class LabConfig:
     low_zone_thresholds: Tuple[float, ...] = (0.25, 0.35, 0.50)
     low_zone_windows: Tuple[int, ...] = (5, 10)
     horizons: Tuple[int, ...] = (1, 3, 5, 10, 20)
+    # 结构簇 / 共振区参数：用于区分单一支撑/压力与多结构位重叠区
+    cluster_lookback: int = 120
+    cluster_tolerance_pct: float = 0.015
+    cluster_tolerance_atr: float = 0.50
+    strong_cluster_count: int = 3
+    strong_cluster_score: float = 3.0
 
 
 # =============================================================================
@@ -414,42 +541,65 @@ def compute_sr_factor_lab(df: pd.DataFrame, cfg: LabConfig) -> pd.DataFrame:
         resistance_slope_2_ref = resistance_slope_2.copy()
         resistance_slope_3_ref = resistance_slope_3.copy()
 
+    # -------------------------------------------------------------------------
+    # R2S：压力突破后转化为支撑。
+    # 保留 pivot_support_ref 作为传统 pivot low 支撑；support_ref 改为 active_support_ref，
+    # 即 max(pivot_support_ref, flipped_support_ref)，兼容旧字段但更适合趋势股。
+    # -------------------------------------------------------------------------
+    pivot_support_ref = support_ref.copy()
+    pivot_resistance_ref = resistance_ref.copy()
     prev_close_r2s = pd.Series(c).shift(1).to_numpy(dtype=float)
-    evt_cross_res_r2s = np.isfinite(resistance_ref) & (c > resistance_ref) & (prev_close_r2s <= resistance_ref)
-
-    flipped_support_active = np.full(n, np.nan)
-    flipped_support_confirm_idx_active = np.full(n, np.nan)
-    _cur_flipped = np.nan
-    _cur_flipped_idx = np.nan
+    evt_cross_res_r2s = np.isfinite(pivot_resistance_ref) & (c > pivot_resistance_ref) & (prev_close_r2s <= pivot_resistance_ref)
+    flipped_active = np.full(n, np.nan)
+    flipped_age_active = np.full(n, np.nan)
+    cur_flip = np.nan
+    cur_age: Optional[int] = None
     for i in range(n):
-        if np.isfinite(_cur_flipped) and c[i] < _cur_flipped:
-            _cur_flipped = np.nan
-            _cur_flipped_idx = np.nan
-        if evt_cross_res_r2s[i] and np.isfinite(resistance_ref[i]):
-            _cur_flipped = resistance_ref[i]
-            _cur_flipped_idx = float(i)
-        flipped_support_active[i] = _cur_flipped
-        flipped_support_confirm_idx_active[i] = _cur_flipped_idx
+        # 先判断旧 R2S 是否失效：收盘跌破则取消。
+        if np.isfinite(cur_flip) and c[i] < cur_flip:
+            cur_flip = np.nan
+            cur_age = None
+        # 再判断本 bar 是否有效突破压力，生成新的 R2S。
+        if evt_cross_res_r2s[i] and np.isfinite(pivot_resistance_ref[i]):
+            cur_flip = float(pivot_resistance_ref[i])
+            cur_age = 0
+        if np.isfinite(cur_flip):
+            flipped_active[i] = cur_flip
+            flipped_age_active[i] = float(cur_age or 0)
+            cur_age = (cur_age or 0) + 1
 
     if cfg.use_prev_confirmed_level:
-        flipped_support_ref = pd.Series(flipped_support_active).shift(1).to_numpy(dtype=float)
-        flipped_support_confirm_idx_ref = pd.Series(flipped_support_confirm_idx_active).shift(1).to_numpy(dtype=float)
+        flipped_support_ref = pd.Series(flipped_active).shift(1).to_numpy(dtype=float)
+        flipped_support_age_bars = pd.Series(flipped_age_active).shift(1).to_numpy(dtype=float)
     else:
-        flipped_support_ref = flipped_support_active.copy()
-        flipped_support_confirm_idx_ref = flipped_support_confirm_idx_active.copy()
+        flipped_support_ref = flipped_active
+        flipped_support_age_bars = flipped_age_active
 
-    pivot_support_ref = support_ref.copy()
-    active_support_ref = np.where(
-        np.isfinite(flipped_support_ref) & np.isfinite(pivot_support_ref),
-        np.maximum(flipped_support_ref, pivot_support_ref),
-        np.where(np.isfinite(flipped_support_ref), flipped_support_ref, pivot_support_ref),
+    active_support_ref = np.full(n, np.nan)
+    for i in range(n):
+        vals = [v for v in (pivot_support_ref[i], flipped_support_ref[i]) if np.isfinite(v)]
+        if vals:
+            active_support_ref[i] = max(vals)
+    is_support_flipped = np.isfinite(flipped_support_ref) & (
+        ~np.isfinite(pivot_support_ref) | (flipped_support_ref >= pivot_support_ref)
     )
+    support_gap_pct = np.where(
+        np.isfinite(pivot_support_ref) & np.isfinite(flipped_support_ref) & (pivot_support_ref != 0),
+        (flipped_support_ref - pivot_support_ref) / pivot_support_ref,
+        np.nan,
+    )
+
+    out["pivot_support_ref"] = pivot_support_ref
+    out["pivot_resistance_ref"] = pivot_resistance_ref
+    out["flipped_support_ref"] = flipped_support_ref
+    out["active_support_ref"] = active_support_ref
+    out["is_support_flipped"] = is_support_flipped.astype(bool)
+    out["flipped_support_age_bars"] = flipped_support_age_bars
+    out["support_gap_pct"] = support_gap_pct
+
     support_ref = active_support_ref
 
     out["support_ref"] = support_ref
-    out["pivot_support_ref"] = pivot_support_ref
-    out["flipped_support_ref"] = flipped_support_ref
-    out["active_support_ref"] = active_support_ref
     out["resistance_ref"] = resistance_ref
     out["prev_support_ref"] = prev_support_ref
     out["prev_resistance_ref"] = prev_resistance_ref
@@ -565,6 +715,82 @@ def compute_sr_factor_lab(df: pd.DataFrame, cfg: LabConfig) -> pd.DataFrame:
     out["support_is_overused"] = (out["support_touch_count_60"] >= 4).astype(bool)
     out["resistance_is_overused"] = (out["resistance_touch_count_60"] >= 4).astype(bool)
 
+    # -------------------------------------------------------------------------
+    # 支撑/压力簇：把“线”升级成“结构区”。
+    # 逻辑：围绕当前 support_ref / resistance_ref，统计 lookback 内接近的 pivot/R2S 水平。
+    # 目的：区分普通刺破/突破 与 强结构簇刺破/突破。
+    # -------------------------------------------------------------------------
+    flipped_support_events = _change_events_from_level(flipped_support_ref) if "flipped_support_ref" in out.columns else None
+    support_cluster = _level_cluster_features(
+        support_ref,
+        primary_events=pvt_low,
+        secondary_events=pvt_high,
+        extra_events=flipped_support_events,
+        atr_arr=atr_arr,
+        lookback=cfg.cluster_lookback,
+        tol_pct=cfg.cluster_tolerance_pct,
+        tol_atr=cfg.cluster_tolerance_atr,
+        primary_weight=1.0,
+        secondary_weight=1.2,
+        extra_weight=1.5,
+    )
+    resistance_cluster = _level_cluster_features(
+        resistance_ref,
+        primary_events=pvt_high,
+        secondary_events=pvt_low,
+        extra_events=None,
+        atr_arr=atr_arr,
+        lookback=cfg.cluster_lookback,
+        tol_pct=cfg.cluster_tolerance_pct,
+        tol_atr=cfg.cluster_tolerance_atr,
+        primary_weight=1.0,
+        secondary_weight=1.1,
+        extra_weight=1.0,
+    )
+
+    out["support_cluster_count"] = support_cluster["count"]
+    out["support_cluster_score"] = support_cluster["score"]
+    out["support_cluster_density"] = support_cluster["density"]
+    out["support_cluster_width_pct"] = support_cluster["width_pct"]
+    out["support_zone_low"] = support_cluster["zone_low"]
+    out["support_zone_high"] = support_cluster["zone_high"]
+    out["support_cluster_has_pivot_low"] = support_cluster["has_primary"].astype(bool)
+    out["support_cluster_has_old_resistance"] = support_cluster["has_secondary"].astype(bool)
+    out["support_cluster_has_r2s"] = support_cluster["has_extra"].astype(bool)
+    out["support_cluster_is_strong"] = (
+        (out["support_cluster_count"] >= cfg.strong_cluster_count) |
+        (out["support_cluster_score"] >= cfg.strong_cluster_score)
+    ).fillna(False).astype(bool)
+
+    out["resistance_cluster_count"] = resistance_cluster["count"]
+    out["resistance_cluster_score"] = resistance_cluster["score"]
+    out["resistance_cluster_density"] = resistance_cluster["density"]
+    out["resistance_cluster_width_pct"] = resistance_cluster["width_pct"]
+    out["resistance_zone_low"] = resistance_cluster["zone_low"]
+    out["resistance_zone_high"] = resistance_cluster["zone_high"]
+    out["resistance_cluster_has_pivot_high"] = resistance_cluster["has_primary"].astype(bool)
+    out["resistance_cluster_has_old_support"] = resistance_cluster["has_secondary"].astype(bool)
+    out["resistance_cluster_is_strong"] = (
+        (out["resistance_cluster_count"] >= cfg.strong_cluster_count) |
+        (out["resistance_cluster_score"] >= cfg.strong_cluster_score)
+    ).fillna(False).astype(bool)
+
+    # 共振分：后续可扩展 PAVP/多周期；当前先用 pivot/R2S/cluster/验证次数量化。
+    out["support_confluence_score"] = (
+        out["support_cluster_score"].fillna(0)
+        + out["is_support_flipped"].astype(float) * 1.0
+        + (out["flipped_support_age_bars"].fillna(0) > 20).astype(float) * 0.8
+        + out["support_is_higher_low"].fillna(0).astype(float) * 0.5
+        - out["support_is_overused"].astype(float) * 0.6
+    )
+    out["resistance_confluence_score"] = (
+        out["resistance_cluster_score"].fillna(0)
+        + out["resistance_is_higher_high"].fillna(0).astype(float) * 0.5
+        + out["resistance_is_overused"].astype(float) * 0.4
+    )
+    out["support_confluence_is_strong"] = (out["support_confluence_score"] >= 3.5).astype(bool)
+    out["resistance_confluence_is_strong"] = (out["resistance_confluence_score"] >= 3.0).astype(bool)
+
     # 事件 A：刺破支撑收回
     prev_close = out["close"].shift(1).to_numpy(dtype=float)
     prev_high = out["high"].shift(1).to_numpy(dtype=float)
@@ -601,66 +827,49 @@ def compute_sr_factor_lab(df: pd.DataFrame, cfg: LabConfig) -> pd.DataFrame:
     out["is_mid_support_pierce"] = ((out["support_pierce_depth_atr"] > 0.30) & (out["support_pierce_depth_atr"] <= 0.80)).fillna(False).astype(bool)
     out["is_deep_support_pierce"] = (out["support_pierce_depth_atr"] > 0.80).fillna(False).astype(bool)
 
-    is_support_flipped = np.isfinite(flipped_support_ref) & (
-        ~np.isfinite(pivot_support_ref) | (flipped_support_ref >= pivot_support_ref)
+    # 细分：pivot 支撑 / R2S 支撑 / active 支撑
+    evt_pierce_pivot_support = np.isfinite(pivot_support_ref) & (l < pivot_support_ref)
+    evt_pierce_flipped_support = np.isfinite(flipped_support_ref) & (l < flipped_support_ref)
+    evt_pierce_pivot_reclaim = evt_pierce_pivot_support & (c >= pivot_support_ref)
+    evt_pierce_flipped_reclaim = evt_pierce_flipped_support & (c >= flipped_support_ref)
+    evt_failed_pivot_reclaim = evt_pierce_pivot_support & (c < pivot_support_ref)
+    evt_failed_flipped_reclaim = evt_pierce_flipped_support & (c < flipped_support_ref)
+    evt_breakdown_flipped_support = np.isfinite(flipped_support_ref) & (c < flipped_support_ref) & (prev_close >= flipped_support_ref)
+    evt_retest_flipped_support = (
+        np.isfinite(flipped_support_ref) & np.isfinite(atr_arr) &
+        (l >= flipped_support_ref) & ((l - flipped_support_ref) <= 0.30 * atr_arr)
     )
-    out["is_support_flipped"] = is_support_flipped.astype(bool)
-
-    out["flipped_support_age_bars"] = np.where(
-        np.isfinite(flipped_support_confirm_idx_ref),
-        np.arange(n, dtype=float) - flipped_support_confirm_idx_ref,
-        np.nan,
-    )
-
-    out["support_gap_pct"] = np.where(
-        np.isfinite(flipped_support_ref) & np.isfinite(pivot_support_ref) & (pivot_support_ref != 0),
-        (flipped_support_ref - pivot_support_ref) / pivot_support_ref,
-        np.nan,
-    )
-
-    pivot_pierce = np.isfinite(pivot_support_ref) & (l < pivot_support_ref)
-    pivot_reclaim = pivot_pierce & (c >= pivot_support_ref)
-    flipped_pierce = np.isfinite(flipped_support_ref) & (l < flipped_support_ref)
-    flipped_reclaim = flipped_pierce & (c >= flipped_support_ref)
-
-    out["pivot_support_pierce_depth_atr"] = _safe_div(
-        np.where(pivot_pierce, pivot_support_ref - l, np.nan), atr_arr
-    )
-    out["pivot_support_reclaim_strength_atr"] = _safe_div(
-        np.where(pivot_reclaim, c - pivot_support_ref, np.nan), atr_arr
-    )
-    out["flipped_support_pierce_depth_atr"] = _safe_div(
-        np.where(flipped_pierce, flipped_support_ref - l, np.nan), atr_arr
-    )
-    out["flipped_support_reclaim_strength_atr"] = _safe_div(
-        np.where(flipped_reclaim, c - flipped_support_ref, np.nan), atr_arr
+    evt_clean_hold_flipped_support = (
+        np.isfinite(flipped_support_ref) & np.isfinite(atr_arr) &
+        (l > flipped_support_ref + 0.30 * atr_arr)
     )
 
-    out["evt_pierce_pivot_support_reclaim"] = pivot_reclaim.astype(bool)
-    out["evt_pierce_flipped_support_reclaim"] = flipped_reclaim.astype(bool)
-    out["evt_pierce_active_support_reclaim"] = out["evt_pierce_support_reclaim"].copy()
-    out["evt_failed_reclaim_pivot_support"] = (pivot_pierce & ~pivot_reclaim).astype(bool)
-    out["evt_failed_reclaim_flipped_support"] = (flipped_pierce & ~flipped_reclaim).astype(bool)
-    out["evt_failed_reclaim_active_support"] = out["evt_failed_reclaim_support"].copy()
+    out["evt_pierce_pivot_support_reclaim"] = evt_pierce_pivot_reclaim.astype(bool)
+    out["evt_pierce_flipped_support_reclaim"] = evt_pierce_flipped_reclaim.astype(bool)
+    out["evt_pierce_active_support_reclaim"] = out["evt_pierce_support_reclaim"].astype(bool)
+    out["evt_failed_reclaim_pivot_support"] = evt_failed_pivot_reclaim.astype(bool)
+    out["evt_failed_reclaim_flipped_support"] = evt_failed_flipped_reclaim.astype(bool)
+    out["evt_failed_reclaim_active_support"] = out["evt_failed_reclaim_support"].astype(bool)
+    out["evt_breakdown_flipped_support"] = evt_breakdown_flipped_support.astype(bool)
+    out["evt_retest_flipped_support"] = evt_retest_flipped_support.astype(bool)
+    out["evt_clean_hold_flipped_support"] = evt_clean_hold_flipped_support.astype(bool)
+    out["pivot_support_pierce_depth_atr"] = np.where(evt_pierce_pivot_support, (pivot_support_ref - l) / np.where(atr_arr == 0, np.nan, atr_arr), np.nan)
+    out["pivot_support_reclaim_strength_atr"] = np.where(evt_pierce_pivot_reclaim, (c - pivot_support_ref) / np.where(atr_arr == 0, np.nan, atr_arr), np.nan)
+    out["flipped_support_pierce_depth_atr"] = np.where(evt_pierce_flipped_support, (flipped_support_ref - l) / np.where(atr_arr == 0, np.nan, atr_arr), np.nan)
+    out["flipped_support_reclaim_strength_atr"] = np.where(evt_pierce_flipped_reclaim, (c - flipped_support_ref) / np.where(atr_arr == 0, np.nan, atr_arr), np.nan)
 
-    flipped_tol = atr_arr * 0.3
-    out["evt_retest_flipped_support"] = (
-        np.isfinite(flipped_support_ref)
-        & (l >= flipped_support_ref)
-        & np.isfinite(flipped_tol)
-        & ((l - flipped_support_ref) <= flipped_tol)
-    ).astype(bool)
-
-    out["evt_clean_hold_flipped_support"] = (
-        is_support_flipped
-        & np.isfinite(flipped_support_ref)
-        & np.isfinite(flipped_tol)
-        & (l > flipped_support_ref + flipped_tol)
-    ).astype(bool)
-
-    out["evt_breakdown_flipped_support"] = (
-        is_support_flipped & np.isfinite(flipped_support_ref) & (c < flipped_support_ref)
-    ).astype(bool)
+    # 支撑区事件：用 zone_low/zone_high 替代单点支撑，识别强支撑簇假破/破位。
+    support_zone_low = out["support_zone_low"].to_numpy(dtype=float)
+    support_zone_high = out["support_zone_high"].to_numpy(dtype=float)
+    strong_support_cluster = out["support_cluster_is_strong"].to_numpy(dtype=bool)
+    evt_pierce_support_zone = np.isfinite(support_zone_low) & (l < support_zone_low)
+    evt_pierce_support_zone_reclaim_low = evt_pierce_support_zone & (c >= support_zone_low)
+    evt_pierce_support_zone_reclaim_high = evt_pierce_support_zone & (c >= support_zone_high)
+    evt_break_support_zone_low = np.isfinite(support_zone_low) & (c < support_zone_low) & (prev_close >= support_zone_low)
+    out["evt_pierce_support_zone_reclaim"] = evt_pierce_support_zone_reclaim_low.astype(bool)
+    out["evt_pierce_support_zone_reclaim_strong"] = evt_pierce_support_zone_reclaim_high.astype(bool)
+    out["evt_pierce_strong_support_cluster_reclaim"] = (evt_pierce_support_zone_reclaim_low & strong_support_cluster).astype(bool)
+    out["evt_break_strong_support_cluster"] = (evt_break_support_zone_low & strong_support_cluster).astype(bool)
 
     # 事件 B：压力突破 / 低位突破
     evt_high_break_res = np.isfinite(resistance_ref) & (h > resistance_ref)
@@ -692,6 +901,22 @@ def compute_sr_factor_lab(df: pd.DataFrame, cfg: LabConfig) -> pd.DataFrame:
     out["breakout_is_strong_close"] = evt_break_res_close_strong.astype(bool)
     out["breakout_is_long_upper_shadow"] = (evt_cross_res & out["is_long_upper_shadow"].to_numpy(dtype=bool)).astype(bool)
 
+    # 压力区事件：突破/假突破强压力簇上沿，而不只是单点 resistance_ref。
+    resistance_zone_high = out["resistance_zone_high"].to_numpy(dtype=float)
+    resistance_zone_low = out["resistance_zone_low"].to_numpy(dtype=float)
+    strong_resistance_cluster = out["resistance_cluster_is_strong"].to_numpy(dtype=bool)
+    evt_high_break_res_cluster = np.isfinite(resistance_zone_high) & (h > resistance_zone_high)
+    evt_close_above_res_cluster = np.isfinite(resistance_zone_high) & (c > resistance_zone_high)
+    evt_break_res_cluster = evt_close_above_res_cluster & (prev_close <= resistance_zone_high)
+    evt_wick_break_res_cluster_fail = evt_high_break_res_cluster & (c <= resistance_zone_high)
+    out["evt_high_break_resistance_cluster"] = evt_high_break_res_cluster.astype(bool)
+    out["evt_break_resistance_cluster"] = (evt_break_res_cluster & strong_resistance_cluster).astype(bool)
+    out["evt_break_strong_resistance_cluster"] = (evt_break_res_cluster & strong_resistance_cluster).astype(bool)
+    out["evt_wick_break_resistance_cluster_fail"] = (evt_wick_break_res_cluster_fail & strong_resistance_cluster).astype(bool)
+    out["evt_close_above_resistance_cluster_upper"] = evt_close_above_res_cluster.astype(bool)
+    out["resistance_cluster_break_strength_pct"] = np.where(evt_break_res_cluster & (resistance_zone_high != 0), (c - resistance_zone_high) / resistance_zone_high, np.nan)
+    out["resistance_cluster_break_strength_atr"] = np.where(evt_break_res_cluster, (c - resistance_zone_high) / np.where(atr_arr == 0, np.nan, atr_arr), np.nan)
+
     # 低位区：不要用突破当天 close 位置，而使用突破前 N 根位置。
     sr_pos_01 = out["sr_pos_01"]
     for win in cfg.low_zone_windows:
@@ -722,6 +947,23 @@ def compute_sr_factor_lab(df: pd.DataFrame, cfg: LabConfig) -> pd.DataFrame:
     out["is_volume_expansion"] = (out["volume_ratio_20"] >= 1.50).fillna(False).astype(bool)
     out["is_volume_shrink"] = (out["volume_ratio_20"] <= 0.70).fillna(False).astype(bool)
     out["is_amount_expansion"] = (out["amount_ratio_20"] >= 1.50).fillna(False).astype(bool)
+
+    # 支撑簇事件的量能质量：全量实验中“缩量收回”明显优于“放量回踩/放量收回”。
+    if "evt_pierce_support_zone_reclaim" in out.columns:
+        out["evt_pierce_support_cluster_reclaim_low_volume"] = (
+            out["evt_pierce_support_zone_reclaim"].fillna(False).astype(bool) &
+            out["support_cluster_is_strong"].fillna(False).astype(bool) &
+            out["is_volume_shrink"].fillna(False).astype(bool)
+        ).astype(bool)
+        out["evt_pierce_support_cluster_reclaim_high_volume"] = (
+            out["evt_pierce_support_zone_reclaim"].fillna(False).astype(bool) &
+            out["support_cluster_is_strong"].fillna(False).astype(bool) &
+            out["is_volume_expansion"].fillna(False).astype(bool)
+        ).astype(bool)
+        out["evt_break_strong_support_cluster_high_volume"] = (
+            out["evt_break_strong_support_cluster"].fillna(False).astype(bool) &
+            out["is_volume_expansion"].fillna(False).astype(bool)
+        ).astype(bool)
 
     # 趋势/波动/前期收益
     for ma in [5, 10, 20, 60]:
@@ -824,7 +1066,10 @@ def build_html(df_full: pd.DataFrame, df_plot: pd.DataFrame, out_html: str, titl
     fig.add_trace(go.Scatter(x=x_num, y=df_plot["resistance_ref"], mode="lines", line=dict(width=1.4, dash="dot", color="#00e676"), name="resistance_ref"), row=1, col=1)
     fig.add_trace(go.Scatter(x=x_num, y=df_plot["support_ref"], mode="lines", line=dict(width=1.4, dash="dot", color="#ff5252"), name="support_ref"), row=1, col=1)
     if "flipped_support_ref" in df_plot.columns:
-        fig.add_trace(go.Scatter(x=x_num, y=df_plot["flipped_support_ref"], mode="lines", line=dict(width=1.4, dash="dash", color="#2196f3"), name="flipped_support_ref"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=x_num, y=df_plot["flipped_support_ref"], mode="lines", line=dict(width=1.2, dash="dash", color="#2196f3"), name="flipped_support_ref"), row=1, col=1)
+    for col, nm, color in [("support_zone_low", "support_zone_low", "#ff8a80"), ("support_zone_high", "support_zone_high", "#ff8a80"), ("resistance_zone_low", "resistance_zone_low", "#69f0ae"), ("resistance_zone_high", "resistance_zone_high", "#69f0ae")]:
+        if col in df_plot.columns:
+            fig.add_trace(go.Scatter(x=x_num, y=df_plot[col], mode="lines", line=dict(width=0.8, dash="dash", color=color), name=nm, opacity=0.65), row=1, col=1)
     if "ma20" in df_plot.columns:
         fig.add_trace(go.Scatter(x=x_num, y=df_plot["ma20"], mode="lines", line=dict(width=1.0, color="#ffd54f"), name="ma20"), row=1, col=1)
     if "ma60" in df_plot.columns:
@@ -867,9 +1112,10 @@ def build_html(df_full: pd.DataFrame, df_plot: pd.DataFrame, out_html: str, titl
     _event_scatter("evt_break_resistance_from_low_zone", "high", "低位上穿压力", "star-triangle-up", 16, "#ffd740", price_pad * 2)
     _event_scatter("evt_wick_break_resistance_fail", "high", "影线突破失败", "triangle-down", 12, "#ffab40", price_pad * 3)
     _event_scatter("evt_close_break_recent_support", "low", "收盘跌破支撑", "triangle-down", 13, "#ff5252", -price_pad)
-    _event_scatter("evt_pierce_flipped_support_reclaim", "low", "刺破压力转支撑收回", "diamond", 13, "#00bcd4", -price_pad * 2)
-    _event_scatter("evt_retest_flipped_support", "low", "回踩压力转支撑", "circle", 10, "#9c27b0", -price_pad)
-    _event_scatter("evt_breakdown_flipped_support", "low", "跌破压力转支撑", "x", 13, "#f44336", -price_pad * 3)
+    _event_scatter("evt_pierce_strong_support_cluster_reclaim", "low", "强支撑簇刺破收回", "diamond", 15, "#18ffff", -price_pad * 4)
+    _event_scatter("evt_break_strong_support_cluster", "low", "跌破强支撑簇", "x", 15, "#d50000", -price_pad * 5)
+    _event_scatter("evt_break_strong_resistance_cluster", "high", "突破强压力簇", "diamond", 15, "#76ff03", price_pad * 4)
+    _event_scatter("evt_wick_break_resistance_cluster_fail", "high", "强压力簇假突破", "x", 14, "#ff6d00", price_pad * 5)
 
     # pivot 标签画回 anchor 位置
     for full_i in range(plot_start, len(df_full)):
@@ -911,9 +1157,10 @@ def build_html(df_full: pd.DataFrame, df_plot: pd.DataFrame, out_html: str, titl
         ("evt_wick_break_resistance_fail", 3.0, "压力假破"),
         ("evt_cross_recent_resistance", 4.0, "上穿压力"),
         ("evt_break_resistance_from_low_zone", 5.0, "低位突破"),
-        ("evt_breakdown_flipped_support", 6.0, "跌破R2S"),
-        ("evt_retest_flipped_support", 7.0, "回踩R2S"),
-        ("evt_pierce_flipped_support_reclaim", 8.0, "R2S收回"),
+        ("evt_pierce_strong_support_cluster_reclaim", 6.0, "强支撑簇收回"),
+        ("evt_break_strong_support_cluster", 7.0, "跌破强支撑簇"),
+        ("evt_break_strong_resistance_cluster", 8.0, "突破强压力簇"),
+        ("evt_wick_break_resistance_cluster_fail", 9.0, "强压力假破"),
     ]
     for col, base, name in event_rows:
         if col not in df_plot.columns:
@@ -969,6 +1216,11 @@ def run_one(args, freq: str) -> Dict[str, str]:
         pivot_len=int(args.pivot_len),
         use_prev_confirmed_level=not args.use_current_confirmed_level,
         horizons=tuple(int(x) for x in args.horizons.split(",") if x.strip()),
+        cluster_lookback=int(args.cluster_lookback),
+        cluster_tolerance_pct=float(args.cluster_tolerance_pct),
+        cluster_tolerance_atr=float(args.cluster_tolerance_atr),
+        strong_cluster_count=int(args.strong_cluster_count),
+        strong_cluster_score=float(args.strong_cluster_score),
     )
     out_full = compute_sr_factor_lab(raw, cfg)
 
@@ -988,7 +1240,10 @@ def run_one(args, freq: str) -> Dict[str, str]:
     event_mask_cols = [
         "evt_pierce_support_reclaim", "evt_failed_reclaim_support", "evt_cross_recent_resistance",
         "evt_break_resistance_from_low_zone", "evt_wick_break_resistance_fail", "evt_close_break_recent_support",
-        "evt_pierce_flipped_support_reclaim", "evt_retest_flipped_support", "evt_breakdown_flipped_support",
+        "evt_pierce_strong_support_cluster_reclaim", "evt_pierce_support_cluster_reclaim_low_volume",
+        "evt_break_strong_support_cluster", "evt_break_strong_resistance_cluster",
+        "evt_wick_break_resistance_cluster_fail", "evt_pierce_flipped_support_reclaim",
+        "evt_breakdown_flipped_support",
     ]
     mask_any_event = np.zeros(len(out_full), dtype=bool)
     for col in event_mask_cols:
@@ -1013,9 +1268,9 @@ def run_one(args, freq: str) -> Dict[str, str]:
         "breakout_from_low_zone": str(int(out_full["evt_break_resistance_from_low_zone"].sum())),
         "wick_break_resistance_fail": str(int(out_full["evt_wick_break_resistance_fail"].sum())),
         "close_break_support": str(int(out_full["evt_close_break_recent_support"].sum())),
-        "pierce_flipped_support_reclaim": str(int(out_full["evt_pierce_flipped_support_reclaim"].sum())),
-        "retest_flipped_support": str(int(out_full["evt_retest_flipped_support"].sum())),
-        "breakdown_flipped_support": str(int(out_full["evt_breakdown_flipped_support"].sum())),
+        "strong_support_cluster_reclaim": str(int(out_full.get("evt_pierce_strong_support_cluster_reclaim", pd.Series(False, index=out_full.index)).sum())),
+        "support_cluster_reclaim_low_volume": str(int(out_full.get("evt_pierce_support_cluster_reclaim_low_volume", pd.Series(False, index=out_full.index)).sum())),
+        "break_strong_resistance_cluster": str(int(out_full.get("evt_break_strong_resistance_cluster", pd.Series(False, index=out_full.index)).sum())),
     }
     return stats
 
@@ -1034,6 +1289,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out-html", default="", help="单周期时可指定 HTML 输出路径")
     p.add_argument("--horizons", default="1,3,5,10,20", help="未来标签周期，例如 1,3,5,10,20")
     p.add_argument("--use-current-confirmed-level", action="store_true", help="事件判断使用当前bar刚确认的水平；默认使用上一bar已确认水平，避免当前确认当前使用")
+    p.add_argument("--cluster-lookback", type=int, default=120, help="支撑/压力簇统计回看窗口")
+    p.add_argument("--cluster-tolerance-pct", type=float, default=0.015, help="结构位聚类价格容忍度，例如 0.015=1.5%")
+    p.add_argument("--cluster-tolerance-atr", type=float, default=0.50, help="结构位聚类 ATR 容忍度")
+    p.add_argument("--strong-cluster-count", type=int, default=3, help="强支撑/压力簇的最小结构位数量")
+    p.add_argument("--strong-cluster-score", type=float, default=3.0, help="强支撑/压力簇的最小加权分数")
     return p
 
 

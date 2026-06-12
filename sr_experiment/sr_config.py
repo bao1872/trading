@@ -22,6 +22,16 @@ EVENT_COLS = [
     "evt_cross_recent_resistance",
     "evt_wick_break_resistance_fail",
     "evt_break_resistance_from_low_zone",
+    "evt_pierce_strong_support_cluster_reclaim",
+    "evt_pierce_support_zone_reclaim",
+    "evt_pierce_support_zone_reclaim_strong",
+    "evt_break_strong_support_cluster",
+    "evt_break_strong_support_cluster_high_volume",
+    "evt_break_strong_resistance_cluster",
+    "evt_wick_break_resistance_cluster_fail",
+    "evt_close_above_resistance_cluster_upper",
+    "evt_pierce_support_cluster_reclaim_low_volume",
+    "evt_pierce_support_cluster_reclaim_high_volume",
 ]
 FWD_RET_COLS = ["fwd_ret_1", "fwd_ret_3", "fwd_ret_5", "fwd_ret_10", "fwd_ret_20"]
 FWD_MDD_COLS = ["fwd_mdd_5", "fwd_mdd_10", "fwd_mdd_20"]
@@ -37,5 +47,9 @@ PANEL_GROUP_STAT_COLS = (
     + ["sr_pos_01", "support_pierce_depth_atr", "support_reclaim_strength_atr",
        "volume_z_20", "trend_ma_bull", "trend_ma_bear", "is_support_flipped",
        "close_pos_in_bar", "is_volume_expansion", "is_volume_shrink",
-       "is_long_lower_shadow", "support_is_higher_low", "flipped_support_age_bars"]
+       "is_long_lower_shadow", "support_is_higher_low", "flipped_support_age_bars",
+       "support_cluster_count", "support_cluster_score", "support_cluster_is_strong",
+       "support_confluence_score", "support_confluence_is_strong",
+       "resistance_cluster_count", "resistance_cluster_score", "resistance_cluster_is_strong",
+       "resistance_confluence_score", "resistance_confluence_is_strong"]
 )

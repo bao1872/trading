@@ -5,73 +5,60 @@
 
 功能：集中管理所有定时调度任务
 作者：项目团队
-修改日期：2026-05-05
-版本：v1.3.0
+修改日期：2026-06-13
+版本：v1.4.0
 
 ================================================================================
-当前任务列表（共 4 类任务）
+当前任务列表（共 3 类任务）
 ================================================================================
 
-1. 盘前预览选股与预测 (task_盘前预览选股与预测) - [已授权]
-   - 函数：pre_market_preview_task()
-   - 触发器：Cron (每天 14:25)
-   - 执行时间：交易日 14:25（收盘前，含节假日判断）
-   - 交易日检查：通过 datasource.trade_calendar.is_trading_day() 判断，非交易日自动跳过
-   - 执行流程：
-        1. 日线K线增量更新（未收盘数据）
-        2. Stop-Loss Clustering 选股
-        3. SLC 模型预测（候选池 + 持仓股）
-   - 配置：ENABLE_PREVIEW_WORKFLOW=true
-   - 日志：scheduler.log 中搜索 "盘前预览"
-   - 注意：14:25 数据为未收盘版本，15:10 正式任务会清理后重新计算
-   - 状态：✅ 已授权并启用
-
-2. 每日数据更新与策略任务 (task_每日数据更新与选股) - [已授权]
+1. 每日数据更新与选股任务 (task_每日数据更新与选股) - [已授权]
    - 函数：daily_update_and_selection_task()
    - 触发器：Cron (每天 15:10)
    - 执行时间：交易日 15:10（收盘后，含节假日判断）
    - 交易日检查：通过 datasource.trade_calendar.is_trading_day() 判断，非交易日自动跳过
    - 执行流程：
-        0. 清理预览数据（14:25 产生的临时数据）
-        1. 日线K线增量更新（每天）
-        2. 周线K线增量更新（每天）
-        3. 日线因子入库（已停用）
-        4. 周线因子入库（已停用）
-        5. DSA策略全流程（已停用）
-        6. BSM选股 + BSM事件检测（已停用）
-        7. Stop-Loss Clustering 选股
-        8. SLC 模型预测（07_generate_daily_predictions，候选池 + 持仓股统一计算，写入 prediction_store + DB）
+        0. 清理预览数据
+        0.5. 复权因子增量更新（adj_factor，选股前复权数据依赖此步骤）
+        1. 日线K线增量更新
+        2. 周线K线增量更新
+        3. ATR Rope 选股（seletion_atr.py）
+        4. ATR GBDT 双模型预测（daily_predict_pipeline.py）
+        5. ATR Rope 周线选股（selection_atr_week.py）
+        6. DSA 选股（selection_dsa.py）
    - 配置：ENABLE_DAILY_WORKFLOW=true
    - 日志：scheduler.log 中搜索 "每日数据更新与选股"
    - 状态：✅ 已授权并启用
 
-3. Streamlit 可视化应用启动 - [已授权]
+2. Streamlit 可视化应用启动 - [已授权]
    - 应用：vis/financial_score_app.py
    - 端口：8502
    - 访问地址：http://localhost:8502
    - 配置：ENABLE_STREAMLIT=true
    - 状态：✅ 已授权并启用（脚本启动时自动启动）
 
-4. 盘中预测池监控任务 - [已授权]
-   - 函数：pred_pool_monitor_task(freq)
-   - 触发器：Cron (交易时段内按周期执行)
-   - 执行时间：交易日 9:30-15:00（含节假日判断）
+3. BB+节点 自选股监控任务 - [已授权]
+   - 函数：start_bb_node_monitor_task()
+   - 触发器：Cron (交易日 9:30 启动一次)
+   - 执行时间：交易日 9:30
    - 交易日检查：通过 datasource.trade_calendar.is_trading_day() 判断，非交易日自动跳过
-   - 检测周期：
-     a. 15分钟：每15分钟整点执行（9:45, 10:00, 10:15... 14:45, 15:00）
-     b. 60分钟：每天4个固定时间点（10:30, 11:30, 14:00, 14:55）
-   - 检测对象：stop_loss_predictions 表上一交易日 Top 20（按 pred_sell_reg DESC）
-   - 检测内容：MACD/Hist 常规/隐藏顶底背离、DSA VWAP触及
-   - 推送方式：飞书消息
-   - 配置：ENABLE_DIV_MONITOR=true
-   - 日志：scheduler.log 中搜索 "预测池监控"
+   - 功能：启动 app/monitoring.py --schedule 子进程
+   - 内部循环：app/monitoring.py::start_scheduled_monitor()
+        - 上午 9:30-11:30：每 30 秒一轮
+        - 午休 11:30-13:00：自动暂停
+        - 下午 13:00-15:00：每 30 秒一轮
+        - 收盘 15:00：自动退出
+   - 文件锁：/tmp/bb_node_monitor.lock（防重复启动）
+   - 配置：ENABLE_BB_NODE_MONITOR=true
    - 状态：✅ 已授权并启用
 
-5. 交易工作台 - [已停用]
-   - 应用：vis/trading_workbench/app.py
-   - 端口：8502
-   - 配置：ENABLE_WORKBENCH=false
-   - 状态：❌ 已停用（默认不启动，如需启用设 ENABLE_WORKBENCH=true）
+4. 自选股缓存定时刷新任务 - [已授权]
+   - 函数：watchlist_cache_refresh_task()
+   - 触发器：Cron (交易日 16:30)
+   - 执行时间：交易日 16:30（收盘后，保证次日缓存齐全）
+   - 交易日检查：通过 datasource.trade_calendar.is_trading_day() 判断，非交易日自动跳过
+   - 功能：增量更新自选股的 15m K线 + tick 缓存（app.build_dataset.update_watchlist_15m + update_watchlist_tick）
+   - 状态：✅ 已授权并启用
 
 ================================================================================
 系统服务管理（重要）
@@ -203,10 +190,8 @@
 
 # 已授权任务配置
 ENABLE_DAILY_WORKFLOW=true     # 每日数据更新与选股任务
-ENABLE_PREVIEW_WORKFLOW=true   # 盘前预览选股与预测任务（14:25）
 ENABLE_STREAMLIT=true          # Streamlit 可视化应用
-ENABLE_WORKBENCH=false         # 交易工作台（已停用）
-ENABLE_DIV_MONITOR=true        # 盘中预测池监控
+ENABLE_BB_NODE_MONITOR=true    # 布林带+节点集群 自选股监控
 
 # 日志配置
 LOG_LEVEL=INFO                 # 日志级别：DEBUG, INFO, WARNING, ERROR
@@ -220,12 +205,10 @@ LOG_FILE=scheduler.log         # 日志文件路径
 - 不允许创建或调度任何未在配置中显式指定的任务
 - 所有任务必须经过明确授权才能注册到调度器
 - 当前已授权 4 个任务：
-  1. 盘前预览选股与预测任务
-  2. 每日数据更新与选股任务
-  3. Streamlit 可视化应用启动
-  4. 盘中预测池监控任务
-- 已停用 1 个任务：
-  5. 交易工作台（ENABLE_WORKBENCH=false）
+  1. 每日数据更新与选股任务
+  2. Streamlit 可视化应用启动
+  3. BB+节点 自选股监控任务（9:30 启动 monitoring.py，内部循环）
+  4. 自选股缓存定时刷新任务（16:30 收盘后）
 
 如需添加新任务，必须：
 1. 在本文档头部明确列出任务信息
@@ -548,7 +531,7 @@ def _cleanup_preview_data(target_date_str: str) -> dict:
         target_date_str: 目标日期字符串，格式 YYYY-MM-DD
 
     Returns:
-        dict: 各表删除行数 {'stock_k_data': N, 'stop_loss_selection': N, 'stop_loss_predictions': N, 'parquet_files': N}
+        dict: 各表删除行数 {'stock_k_data': N, 'stop_loss_selection': N, 'stop_loss_predictions': N, 'atr_rope_selection': N, 'atr_rope_features': N, 'parquet_files': N}
     """
     from sqlalchemy import text
     from datasource.database import get_engine
@@ -578,6 +561,30 @@ def _cleanup_preview_data(target_date_str: str) -> dict:
             )
             result['stop_loss_predictions'] = pred_del.rowcount
             logger.info(f"[清理预览数据] stop_loss_predictions 删除 {pred_del.rowcount} 条 (date={target_date_str})")
+
+            # 清理 ATR 选股结果
+            atr_sel_del = conn.execute(
+                text("DELETE FROM atr_rope_selection WHERE selection_date = :d"),
+                {"d": target_date_str}
+            )
+            result['atr_rope_selection'] = atr_sel_del.rowcount
+            logger.info(f"[清理预览数据] atr_rope_selection 删除 {atr_sel_del.rowcount} 条 (date={target_date_str})")
+
+            # 清理 ATR 预测结果
+            atr_feat_del = conn.execute(
+                text("DELETE FROM atr_rope_features WHERE feature_date = :d"),
+                {"d": target_date_str}
+            )
+            result['atr_rope_features'] = atr_feat_del.rowcount
+            logger.info(f"[清理预览数据] atr_rope_features 删除 {atr_feat_del.rowcount} 条 (date={target_date_str})")
+
+            # 清理 ATR 周线选股结果
+            atr_week_del = conn.execute(
+                text("DELETE FROM atr_week_selection WHERE selection_date = :d"),
+                {"d": target_date_str}
+            )
+            result['atr_week_selection'] = atr_week_del.rowcount
+            logger.info(f"[清理预览数据] atr_week_selection 删除 {atr_week_del.rowcount} 条 (date={target_date_str})")
     finally:
         engine.dispose()
 
@@ -608,91 +615,24 @@ def _cleanup_preview_data(target_date_str: str) -> dict:
 
 
 @trading_day_only
-def pre_market_preview_task():
-    """盘前预览任务 - 已授权（交易日14:25执行）
-
-    在收盘前拉取当天 K 线（未收盘数据），运行选股和预测，提前获得决策依据。
-    15:10 正式任务会清理此任务产生的临时数据并重新计算。
-
-    执行流程（3 步）：
-    1. 日线K线增量更新（未收盘数据）
-    2. Stop-Loss Clustering 选股
-    3. SLC 模型预测（含持仓股）
-    """
-    today = datetime.now()
-    today_str = today.strftime('%Y-%m-%d')
-
-    logger.info("=" * 60)
-    logger.info(f"盘前预览任务开始 - {today_str} 14:25")
-    logger.info("=" * 60)
-
-    send_feishu_notification(
-        f"盘前预览任务开始 - {today_str}",
-        f"开始时间：{today.strftime('%H:%M:%S')}\n"
-        f"注意：此为未收盘数据，仅供提前决策参考"
-    )
-
-    try:
-        logger.info("[Step 1/3] 日线K线增量更新（未收盘）...")
-        run_subprocess([
-            sys.executable, str(PROJECT_ROOT / "app" / "build_dataset.py"),
-            "--period", "d", "--update",
-        ], "日线K线更新(预览)", timeout=3600)
-
-        logger.info("[Step 2/3] Stop-Loss Clustering 选股（预览）...")
-        try:
-            run_subprocess([
-                sys.executable, str(PROJECT_ROOT / "selection" / "selection_stop.py"),
-            ], "SLC选股(预览)", timeout=3600)
-            logger.info("✅ SLC 选股（预览）完成")
-        except Exception as e:
-            logger.error(f"SLC 选股（预览）失败: {e}")
-            send_feishu_notification("SLC选股(预览)失败", str(e), is_error=True)
-
-        logger.info("[Step 3/3] SLC 模型预测（预览）...")
-        try:
-            run_subprocess([
-                sys.executable, "-m", "stop_experiment.pipeline.07_generate_daily_predictions",
-                "--date", today_str, "--force",
-            ], "SLC模型预测(预览)", timeout=3600)
-            logger.info("✅ SLC 模型预测（预览）完成")
-        except Exception as e:
-            logger.error(f"SLC 模型预测（预览）失败: {e}")
-            send_feishu_notification("SLC模型预测(预览)失败", str(e), is_error=True)
-
-        end_time = datetime.now()
-        duration = (end_time - today).total_seconds() / 60
-        logger.info(f"✅ 盘前预览任务完成 ({duration:.1f}分钟)")
-        send_feishu_notification(
-            f"盘前预览任务完成 - {today_str}",
-            f"完成时间：{end_time.strftime('%H:%M:%S')}\n"
-            f"执行时长：{duration:.1f}分钟\n"
-            f"⚠️ 数据为未收盘版本，15:10 将重新计算"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ 盘前预览任务失败: {e}")
-        send_feishu_notification(
-            f"盘前预览任务失败 - {today_str}",
-            f"错误：{str(e)}",
-            is_error=True
-        )
-        raise
-
-
-@trading_day_only
 def daily_update_and_selection_task():
     """每日数据更新与策略任务 - 已授权（交易日15:10执行）
 
-    执行流程（7 步）：
+    执行流程：
     0. 清理预览数据（14:25 产生的临时数据）
+    0.5. 复权因子增量更新（adj_factor，选股前复权数据依赖此步骤）
     1. 日线K线增量更新
     2. 周线K线增量更新
     3. 日线因子入库 [已停用]
     4. 周线因子入库 [已停用]
     5. DSA策略全流程 [已停用]
     6. BSM选股 + BSM事件 [已停用]
-    7. Stop-Loss Clustering 选股
+    7. Stop-Loss Clustering 选股 [已停用]
+    8. SLC 模型预测 [已停用]
+    9. ATR Rope 选股
+    10. ATR GBDT 双模型预测
+    11. ATR Rope 周线选股
+    12. DSA 选股
     """
     today = datetime.now()
     today_str = today.strftime('%Y-%m-%d')
@@ -706,9 +646,6 @@ def daily_update_and_selection_task():
         f"开始时间：{today.strftime('%H:%M:%S')}"
     )
 
-    factors_ok = True
-    weekly_factors_ok = True
-
     try:
         # ===== Step 0：清理预览数据 =====
         logger.info("[Step 0] 清理14:25预览任务产生的临时数据...")
@@ -721,6 +658,18 @@ def daily_update_and_selection_task():
                 logger.info("无预览数据需要清理（可能未执行预览任务）")
         except Exception as e:
             logger.warning(f"清理预览数据失败（非致命，继续执行）: {e}")
+
+        # ===== Step 0.5：复权因子增量更新 =====
+        logger.info("[Step 0.5] 复权因子(adj_factor)增量更新...")
+        try:
+            run_subprocess([
+                sys.executable, str(PROJECT_ROOT / "datasource" / "adj_factor.py"),
+                "--incremental",
+            ], "复权因子增量更新", timeout=1800)
+            logger.info("✅ 复权因子增量更新完成")
+        except Exception as e:
+            logger.warning(f"复权因子增量更新失败（非致命，继续执行）: {e}")
+            send_feishu_notification("复权因子增量更新失败", str(e), is_error=True)
 
         # ===== Step 1/6：日线K线增量 =====
         logger.info("[Step 1/6] 日线K线增量更新...")
@@ -740,73 +689,52 @@ def daily_update_and_selection_task():
             logger.warning(f"周线K线更新失败，继续: {e}")
             send_feishu_notification("周线K线更新失败", str(e), is_error=True)
 
-        # ===== Step 3/6：日线因子入库 [已停用] =====
-        logger.info("[Step 3/6] 日线因子入库 - 已停用，跳过")
-        # 因子/事件不再每日写入 DB，实验请直接引用 factor_lib
-
-        # ===== Step 4/6：周线因子入库 [已停用] =====
-        logger.info("[Step 4/6] 周线因子入库 - 已停用，跳过")
-        # 因子/事件不再每日写入 DB，实验请直接引用 factor_lib
-
-        # ===== Step 5/6：DSA策略全流程 [已停用] =====
-        logger.info("[Step 5/6] DSA策略全流程 - 已停用，跳过")
-        # DSA策略已停用，如需启用请取消注释以下代码
-        # if factors_ok and weekly_factors_ok:
-        #     logger.info("[Step 5/6] DSA策略全流程...")
-        #     try:
-        #         run_subprocess([
-        #             sys.executable, str(PROJECT_ROOT / "dsa_experiment" / "run_daily.py"),
-        #             "--date", today_str, "--skip-factors", "--notify",
-        #         ], "DSA策略全流程", timeout=7200)
-        #     except Exception as e:
-        #         logger.error(f"DSA策略全流程失败: {e}")
-        #         send_feishu_notification("DSA策略失败", str(e), is_error=True)
-        # else:
-        #     logger.warning("因子计算不完整，跳过 DSA 策略全流程")
-
-        # ===== Step 6/7：BSM选股 + BSM事件 [已停用] =====
-        logger.info("[Step 6/7] BSM选股 + BSM事件检测 - 已停用，跳过")
-        # BSM选股已停用，如需启用请取消注释以下代码
-        # logger.info("[Step 6/7] BSM选股...")
-        # try:
-        #     run_subprocess([
-        #         sys.executable, str(PROJECT_ROOT / "selection" / "selection_ana.py"),
-        #     ], "BSM选股", timeout=3600)
-        # except Exception as e:
-        #     logger.error(f"BSM选股失败: {e}")
-        #     send_feishu_notification("BSM选股失败", str(e), is_error=True)
-        #
-        # logger.info("[Step 6/7] BSM事件检测...")
-        # try:
-        #     from selection.watchlist_event_detection import detect_and_save_bsm_events
-        #     detect_and_save_bsm_events()
-        #     logger.info("✅ BSM事件检测完成")
-        # except Exception as e:
-        #     logger.error(f"BSM事件检测失败: {e}")
-        #     send_feishu_notification("BSM事件检测失败", str(e), is_error=True)
-
-        # ===== Step 7/8：Stop-Loss Clustering 选股 =====
-        logger.info("[Step 7/8] Stop-Loss Clustering 选股...")
+        # ===== Step 3：ATR Rope 选股 =====
+        logger.info("[Step 3] ATR Rope 选股...")
         try:
             run_subprocess([
-                sys.executable, str(PROJECT_ROOT / "selection" / "selection_stop.py"),
-            ], "SLC选股", timeout=3600)
-            logger.info("✅ Stop-Loss Clustering 选股完成")
+                sys.executable, str(PROJECT_ROOT / "selection" / "seletion_atr.py"),
+                today_str,
+            ], "ATR Rope选股", timeout=3600)
+            logger.info("✅ ATR Rope 选股完成")
         except Exception as e:
-            logger.error(f"Stop-Loss Clustering 选股失败: {e}")
-            send_feishu_notification("SLC选股失败", str(e), is_error=True)
+            logger.error(f"ATR Rope 选股失败: {e}")
+            send_feishu_notification("ATR Rope选股失败", str(e), is_error=True)
 
-        # ===== Step 8/9：SLC 模型预测 =====
-        logger.info("[Step 8/9] SLC 模型预测...")
+        # Step 4: ATR GBDT 预测
         try:
             run_subprocess([
-                sys.executable, "-m", "stop_experiment.pipeline.07_generate_daily_predictions",
-                "--date", today_str, "--force",
-            ], "SLC模型预测", timeout=3600)
-            logger.info("✅ SLC 模型预测完成")
+                sys.executable, str(PROJECT_ROOT / "atr_experiment" / "daily_predict_pipeline.py"),
+                today_str,
+            ], "ATR GBDT预测", timeout=1800)
+            logger.info("✅ ATR GBDT 预测完成")
         except Exception as e:
-            logger.error(f"SLC 模型预测失败: {e}")
-            send_feishu_notification("SLC模型预测失败", str(e), is_error=True)
+            logger.error(f"ATR GBDT 预测失败: {e}")
+            send_feishu_notification("ATR GBDT预测失败", str(e), is_error=True)
+
+        # ===== Step 5：ATR Rope 周线选股 =====
+        logger.info("[Step 5] ATR Rope 周线选股...")
+        try:
+            run_subprocess([
+                sys.executable, str(PROJECT_ROOT / "selection" / "selection_atr_week.py"),
+                today_str,
+            ], "ATR Rope周线选股", timeout=3600)
+            logger.info("✅ ATR Rope 周线选股完成")
+        except Exception as e:
+            logger.error(f"ATR Rope 周线选股失败: {e}")
+            send_feishu_notification("ATR Rope周线选股失败", str(e), is_error=True)
+
+        # ===== Step 6：DSA 选股 =====
+        logger.info("[Step 6] DSA 选股...")
+        try:
+            run_subprocess([
+                sys.executable, str(PROJECT_ROOT / "selection" / "selection_dsa.py"),
+                today_str,
+            ], "DSA选股", timeout=3600)
+            logger.info("✅ DSA 选股完成")
+        except Exception as e:
+            logger.error(f"DSA 选股失败: {e}")
+            send_feishu_notification("DSA选股失败", str(e), is_error=True)
 
         # 完成
         end_time = datetime.now()
@@ -815,8 +743,7 @@ def daily_update_and_selection_task():
         send_feishu_notification(
             f"每日策略任务完成 - {today_str}",
             f"完成时间：{end_time.strftime('%H:%M:%S')}\n"
-            f"执行时长：{duration:.1f}分钟\n"
-            f"因子状态: 1d={'✅' if factors_ok else '❌'} 1w={'✅' if weekly_factors_ok else '❌'}"
+            f"执行时长：{duration:.1f}分钟"
         )
 
     except Exception as e:
@@ -830,30 +757,126 @@ def daily_update_and_selection_task():
 
 
 @trading_day_only
-def pred_pool_monitor_task(freq: str):
-    """盘中预测池监控任务
+def watchlist_cache_refresh_task():
+    """自选股缓存定时刷新任务（16:30 收盘后执行）
 
-    Args:
-        freq: 检测周期（5m/15m/60m）
+    增量更新自选股的 15 分钟 K 线 + tick 缓存数据，保证次日开盘时缓存齐全。
+    通过 app.build_dataset._load_watchlist_df / update_watchlist_15m / update_watchlist_tick 实现。
     """
+    today = datetime.now()
+    today_str = today.strftime('%Y-%m-%d')
+
+    logger.info("=" * 60)
+    logger.info(f"自选股缓存定时刷新开始 - {today_str} 16:30")
+    logger.info("=" * 60)
+
+    try:
+        from app.build_dataset import _load_watchlist_df, update_watchlist_15m, update_watchlist_tick
+        watchlist_df = _load_watchlist_df()
+        if watchlist_df is None or watchlist_df.empty:
+            logger.warning("自选股列表为空，跳过缓存刷新")
+            return
+
+        n_stocks = len(watchlist_df)
+        logger.info(f"共 {n_stocks} 只自选股，开始更新 15m K线 + tick 缓存...")
+
+        # 更新 15 分钟 K 线缓存
+        logger.info("[1/2] 增量更新 15m K线缓存...")
+        try:
+            update_watchlist_15m(watchlist_df=watchlist_df, quiet=True)
+            logger.info("✅ 15m K线 缓存更新完成")
+        except Exception as e:
+            logger.error(f"❌ 15m K线 缓存更新失败：{e}", exc_info=True)
+            send_feishu_notification(
+                "自选股 15m K线 缓存更新失败",
+                f"时间：{today_str} 16:30\n错误：{str(e)}",
+                is_error=True
+            )
+
+        # 更新 tick 缓存
+        logger.info("[2/2] 增量更新 tick 缓存...")
+        try:
+            update_watchlist_tick(watchlist_df=watchlist_df, quiet=True)
+            logger.info("✅ tick 缓存更新完成")
+        except Exception as e:
+            logger.error(f"❌ tick 缓存更新失败：{e}", exc_info=True)
+            send_feishu_notification(
+                "自选股 tick 缓存更新失败",
+                f"时间：{today_str} 16:30\n错误：{str(e)}",
+                is_error=True
+            )
+
+        end_time = datetime.now()
+        duration = (end_time - today).total_seconds() / 60
+        logger.info(f"✅ 自选股缓存定时刷新完成 ({duration:.1f}分钟, {n_stocks} 只)")
+
+    except Exception as e:
+        logger.error(f"❌ 自选股缓存定时刷新失败：{e}", exc_info=True)
+        send_feishu_notification(
+            f"自选股缓存定时刷新失败 - {today_str}",
+            f"时间：{today.strftime('%H:%M:%S')}\n错误：{str(e)}",
+            is_error=True
+        )
+        raise
+
+
+@trading_day_only
+def start_bb_node_monitor_task():
+    """启动 BB+节点 自选股监控子进程（9:30 一次性启动）
+
+    内部循环由 app/monitoring.py::start_scheduled_monitor() 负责：
+    - 上午 9:30 - 11:30：每轮 30 秒 sleep
+    - 午休 11:30 - 13:00：自动暂停
+    - 下午 13:00 - 15:00：每轮 30 秒 sleep
+    - 收盘 15:00：自动退出
+
+    文件锁互斥（/tmp/bb_node_monitor.lock）防止重复启动。
+
+    调用方式：
+        python app/monitoring.py --schedule
+    """
+    from pathlib import Path
+
     now = datetime.now()
     now_str = now.strftime('%Y-%m-%d %H:%M:%S')
 
-    logger.info(f"=" * 60)
-    logger.info(f"开始执行预测池监控任务 (周期: {freq}) - {now_str}")
-    logger.info(f"=" * 60)
+    logger.info("=" * 60)
+    logger.info(f"启动 BB+节点 自选股监控子进程 - {now_str}")
+    logger.info("=" * 60)
+
+    # 文件锁互斥检查
+    lock_file = "/tmp/bb_node_monitor.lock"
+    if Path(lock_file).exists():
+        logger.warning(f"锁文件 {lock_file} 已存在，跳过启动（已有监控进程在运行）")
+        return
 
     try:
-        from app.monitoring import run_monitor
-        run_monitor(freq)
+        # 启动 monitoring.py --schedule 子进程（内部负责循环 + 午休 + 收盘退出）
+        proc = subprocess.Popen(
+            [sys.executable, str(PROJECT_ROOT / "app" / "monitoring.py"), "--schedule"],
+            cwd=str(PROJECT_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
 
-        logger.info(f"✅ 预测池监控任务完成 (周期: {freq})")
+        logger.info(f"✅ BB+节点监控子进程已启动 (PID: {proc.pid})")
+        logger.info(f"   内部循环：9:30-11:30 / 13:00-15:00，每轮 30 秒 sleep")
+
+        send_feishu_notification(
+            "BB+节点 监控已启动",
+            f"启动时间：{now_str}\n"
+            f"进程 PID：{proc.pid}\n"
+            f"内部循环：每 30 秒一轮\n"
+            f"午休暂停：11:30 - 13:00\n"
+            f"自动退出：15:00"
+        )
 
     except Exception as e:
-        logger.error(f"❌ 预测池监控任务失败 (周期: {freq})：{e}", exc_info=True)
+        logger.error(f"❌ BB+节点监控子进程启动失败：{e}", exc_info=True)
         send_feishu_notification(
-            f"预测池监控失败 - {freq}",
-            f"时间：{now.strftime('%H:%M:%S')}\n错误：{str(e)}",
+            "BB+节点 监控启动失败",
+            f"时间：{now_str}\n错误：{str(e)}",
             is_error=True
         )
 
@@ -885,46 +908,11 @@ def start_streamlit():
         logger.info(f"✅ Streamlit 已启动 (PID: {process.pid})")
         logger.info(f"   访问地址: http://localhost:8502")
         logger.info(f"   命令: {' '.join(streamlit_cmd)}")
-        
+
         return process
-    
+
     except Exception as e:
         logger.error(f"❌ Streamlit 启动失败: {e}", exc_info=True)
-        return None
-
-
-def start_trading_workbench():
-    logger.info("=" * 60)
-    logger.info("启动交易工作台 Streamlit 应用...")
-    logger.info("=" * 60)
-    
-    workbench_cmd = [
-        sys.executable, "-m", "streamlit", "run",
-        str(PROJECT_ROOT / "vis" / "trading_workbench" / "app.py"),
-        "--server.port", "8502",
-        "--server.address", "0.0.0.0",
-        "--server.headless", "true",
-        "--server.enableCORS", "false",
-        "--server.enableXsrfProtection", "false",
-    ]
-    
-    try:
-        process = subprocess.Popen(
-            workbench_cmd,
-            cwd=str(PROJECT_ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        
-        logger.info(f"✅ 交易工作台已启动 (PID: {process.pid})")
-        logger.info(f"   访问地址: http://localhost:8502")
-        logger.info(f"   命令: {' '.join(workbench_cmd)}")
-        
-        return process
-    
-    except Exception as e:
-        logger.error(f"❌ 交易工作台启动失败: {e}", exc_info=True)
         return None
 
 
@@ -953,41 +941,12 @@ def main():
     else:
         logger.warning("Streamlit 可视化应用未启用（ENABLE_STREAMLIT=false）")
 
-    # 启动交易工作台（后台运行，端口 8502）
-    ENABLE_WORKBENCH = os.getenv('ENABLE_WORKBENCH', 'false').lower() == 'true'
-    workbench_process = None
-    workbench_status = "未启用"
-
-    if ENABLE_WORKBENCH:
-        workbench_process = start_trading_workbench()
-        if workbench_process:
-            workbench_status = f"已启动 (PID: {workbench_process.pid})"
-        else:
-            workbench_status = "启动失败"
-    else:
-        logger.warning("交易工作台未启用（ENABLE_WORKBENCH=false）")
-    
     # 创建调度器
     scheduler = TaskScheduler(use_async=False)
-    
+
     # 从环境变量读取任务配置（仅支持已授权的任务）
     ENABLE_DAILY_WORKFLOW = os.getenv('ENABLE_DAILY_WORKFLOW', 'true').lower() == 'true'
-    ENABLE_PREVIEW_WORKFLOW = os.getenv('ENABLE_PREVIEW_WORKFLOW', 'true').lower() == 'true'
-    ENABLE_DIV_MONITOR = os.getenv('ENABLE_DIV_MONITOR', 'true').lower() == 'true'
-
-    # 盘前预览任务 - 周一至周五 14:25 执行
-    if ENABLE_PREVIEW_WORKFLOW:
-        scheduler.register_task(
-            name='盘前预览选股与预测',
-            func=pre_market_preview_task,
-            trigger='cron',
-            job_id='task_盘前预览选股与预测',
-            hour=14,
-            minute=25,
-            day_of_week='mon-fri',
-        )
-    else:
-        logger.warning("盘前预览任务未启用（ENABLE_PREVIEW_WORKFLOW=false）")
+    ENABLE_BB_NODE_MONITOR = os.getenv('ENABLE_BB_NODE_MONITOR', 'true').lower() == 'true'
 
     # 每日数据更新与选股任务 - 周一至周五 15:10 执行
     if ENABLE_DAILY_WORKFLOW:
@@ -1002,58 +961,35 @@ def main():
         )
     else:
         logger.warning("每日数据更新与选股任务未启用（ENABLE_DAILY_WORKFLOW=false）")
-    
-    # 盘中预测池监控任务
-    if ENABLE_DIV_MONITOR:
-        # 15分钟周期：每15分钟整点执行（9:45-14:55）
-        for h in range(9, 15):
-            for m in [0, 15, 30, 45]:
-                if h == 9 and m < 45:
-                    continue
-                if h == 11 and m > 30:
-                    continue
-                if h == 12:
-                    continue
-                if h == 13 and m < 15:
-                    continue
-                scheduler.register_task(
-                    name=f'预测池监控15m_{h:02d}:{m:02d}',
-                    func=lambda h=h, m=m: pred_pool_monitor_task('15m'),
-                    trigger='cron',
-                    job_id=f'task_pred_pool_15m_{h:02d}{m:02d}',
-                    hour=h,
-                    minute=m,
-                    day_of_week='mon-fri',
-                )
 
-        # 15分钟周期：收盘前5分钟额外执行
+    # BB+节点 自选股监控任务（9:30 启动一次，内部循环由 app/monitoring.py 负责）
+    if ENABLE_BB_NODE_MONITOR:
         scheduler.register_task(
-            name='预测池监控15m_14:55',
-            func=lambda: pred_pool_monitor_task('15m'),
+            name='BB节点监控启动',
+            func=start_bb_node_monitor_task,
             trigger='cron',
-            job_id='task_pred_pool_15m_1455',
-            hour=14,
-            minute=55,
+            job_id='task_bb_node_monitor_start',
+            hour=9,
+            minute=30,
             day_of_week='mon-fri',
         )
-
-        # 60分钟周期：每天4个固定时间点（10:30, 11:30, 14:00, 14:55）
-        for h, m in [(10, 30), (11, 30), (14, 0), (14, 55)]:
-            scheduler.register_task(
-                name=f'预测池监控60m_{h:02d}:{m:02d}',
-                func=lambda h=h, m=m: pred_pool_monitor_task('60m'),
-                trigger='cron',
-                job_id=f'task_pred_pool_60m_{h:02d}{m:02d}',
-                hour=h,
-                minute=m,
-                day_of_week='mon-fri',
-            )
     else:
-        logger.warning("预测池监控任务未启用（ENABLE_DIV_MONITOR=false）")
-    
+        logger.warning("BB+节点 监控任务未启用（ENABLE_BB_NODE_MONITOR=false）")
+
+    # 自选股缓存定时刷新（16:30 收盘后）
+    scheduler.register_task(
+        name='自选股缓存刷新',
+        func=watchlist_cache_refresh_task,
+        trigger='cron',
+        job_id='task_watchlist_cache_refresh',
+        hour=16,
+        minute=30,
+        day_of_week='mon-fri',
+    )
+
     logger.info(f"已注册 {len(scheduler.tasks)} 个已授权任务")
     logger.info(f"任务列表：{list(scheduler.tasks.keys())}")
-    
+
     # 发送服务启动成功通知
     task_list = ", ".join(scheduler.tasks.keys()) if scheduler.tasks else "无"
     send_feishu_notification(
@@ -1064,7 +1000,7 @@ def main():
         f"每日选股时间：15:10（周一至周五）",
         is_error=False
     )
-    
+
     try:
         # 启动调度器
         scheduler.start()
@@ -1075,12 +1011,6 @@ def main():
             streamlit_process.terminate()
             streamlit_process.wait(timeout=5)
             logger.info("Streamlit 进程已终止")
-        # 关闭时终止交易工作台进程
-        if workbench_process and workbench_process.poll() is None:
-            logger.info("正在终止交易工作台进程...")
-            workbench_process.terminate()
-            workbench_process.wait(timeout=5)
-            logger.info("交易工作台进程已终止")
 
 
 if __name__ == '__main__':

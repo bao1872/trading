@@ -2,11 +2,11 @@
 """
 财务评分与选股结果可视化分析（Streamlit 应用）
 
-Purpose: 展示个股财务评分、选股结果、ATR Rope指标等多维度数据
+Purpose: 展示个股财务评分、选股结果、ATR Rope周线突破指标等多维度数据
 Inputs:
     - financial_scores 表（新财务评分系统 - 5维度14指标）
     - stock_financial_score_pool 表（旧财务评分系统 - 6维度，用于其他页面）
-    - stock_selection_results 表（选股结果：ATR Rope震荡上轨信号、POC斜率、Z-Score指标）
+    - atr_week_selection 表（ATR Rope周线突破选股结果：突破c_hi + DSA多头确认）
     - stock_k_data 表（K线数据，用于ATR Rope和BSM指标计算）
     - stock_pools 表（股票名称、概念）
 Outputs: Streamlit Web 界面
@@ -40,11 +40,174 @@ from features.dynamic_swing_anchored_vwap import dynamic_swing_anchored_vwap, DS
 from features.atr_rope_with_factors_pytdx_plotly import (
     ATRRopeEngine, UP_COL, DOWN_COL, FLAT_COL, CHANNEL_LINE_COL, CHANNEL_FILL_COL
 )
+from features.luxalgo_volume_profile_pytdx import (
+    compute_volume_profile,
+    make_volume_profile_figure,
+    VolumeProfileConfig,
+)
 import argparse
 import tushare as ts
 
 _kline_cache = {}
 _cache_ttl = 300
+
+
+def render_sr_selection_page(session, sidebar):
+    """渲染SR场景选股结果页面"""
+    st.header("📊 SR 场景选股结果（周线）")
+
+    available_dates = get_available_sr_dates(session)
+    if not available_dates:
+        st.info("暂无SR选股结果数据，请先运行 selection/selection_sr.py 生成数据")
+        return
+
+    with sidebar:
+        st.markdown("---")
+        st.subheader("⚙️ SR选股配置")
+        available_dates_dt = []
+        for d in available_dates:
+            if isinstance(d, str):
+                available_dates_dt.append(datetime.datetime.strptime(d, "%Y-%m-%d").date())
+            elif isinstance(d, datetime.datetime):
+                available_dates_dt.append(d.date())
+            elif isinstance(d, datetime.date):
+                available_dates_dt.append(d)
+        default_date = available_dates_dt[0] if available_dates_dt else datetime.date.today()
+        selected_date_dt = st.date_input(
+            "选股日期",
+            value=default_date,
+            min_value=min(available_dates_dt) if available_dates_dt else None,
+            max_value=max(available_dates_dt) if available_dates_dt else None,
+            key="sr_selection_date"
+        )
+        selected_date = selected_date_dt.strftime("%Y-%m-%d")
+
+        scenario_filter = st.selectbox(
+            "场景过滤",
+            ["全部"] + [f"{v['icon']} {v['label']}" for v in SCENARIO_DISPLAY.values()],
+            key="sr_scenario_filter"
+        )
+
+    with st.spinner("加载SR选股数据..."):
+        df = load_sr_selection_results(session, selected_date)
+
+    if df.empty:
+        st.info(f"{selected_date} 暂无SR选股结果数据")
+        return
+
+    total_count = len(df)
+    scenario_counts = df["scenario_type"].value_counts() if "scenario_type" in df.columns else {}
+
+    stats_parts = [f"**总计**: {total_count} 只"]
+    for stype, sinfo in SCENARIO_DISPLAY.items():
+        cnt = scenario_counts.get(stype, 0)
+        if cnt > 0:
+            stats_parts.append(f"**{sinfo['icon']} {sinfo['label']}**: {cnt} 只")
+    st.markdown(" | ".join(stats_parts))
+
+    display_df = df.copy()
+
+    if scenario_filter != "全部" and "scenario_type" in display_df.columns:
+        filter_map = {f"{v['icon']} {v['label']}": k for k, v in SCENARIO_DISPLAY.items()}
+        filter_key = filter_map.get(scenario_filter)
+        if filter_key:
+            display_df = display_df[display_df["scenario_type"] == filter_key]
+
+    conditions = render_filter_bar(display_df, "SR场景选股")
+    if conditions:
+        display_df = apply_filters(display_df, conditions, TAB_FIELD_CONFIGS["SR场景选股"])
+
+    loaded_conditions = render_filter_manager(session, "SR场景选股", conditions)
+    if loaded_conditions:
+        display_df = df.copy()
+        display_df = apply_filters(display_df, loaded_conditions, TAB_FIELD_CONFIGS["SR场景选股"])
+
+    filtered_count = len(display_df)
+    st.markdown(f"**共 {total_count} 只** | 筛选后: {filtered_count} 只")
+
+    if display_df.empty:
+        st.info("没有匹配的股票")
+        return
+
+    config = TAB_FIELD_CONFIGS["SR场景选股"]
+    display_names = config["display_names"]
+    rename_map = {k: v for k, v in display_names.items() if k in display_df.columns}
+    display_df_renamed = display_df.rename(columns=rename_map)
+
+    available_cols = [display_names.get(f, f) for f in config["fields"] if display_names.get(f, f) in display_df_renamed.columns]
+    display_df_renamed = display_df_renamed[available_cols]
+
+    numeric_cols_display = [
+        display_names.get("manual_rr", "盈亏比"),
+        display_names.get("risk_score", "风险评分"),
+        display_names.get("distance_to_weekly_low_pct", "距周线low(%)"),
+        display_names.get("current_to_resistance_pct", "距压力(%)"),
+        display_names.get("ret_since_signal", "信号以来涨幅(%)"),
+        display_names.get("close_pos_in_bar", "收盘位置"),
+        display_names.get("flipped_support_age_bars", "R2S新鲜度(bar)"),
+    ]
+    numeric_cols_display = [c for c in numeric_cols_display if c in display_df_renamed.columns]
+
+    display_df_renamed_reset = display_df_renamed.reset_index(drop=True)
+
+    event = st.dataframe(
+        colorize_numeric_columns_simple(display_df_renamed_reset, numeric_cols_display),
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        height=500,
+    )
+
+    if event.selection and event.selection.rows:
+        selected_idx = event.selection.rows[0]
+        selected_row = display_df.iloc[selected_idx]
+        ts_code = selected_row["ts_code"]
+        stock_name = selected_row.get("stock_name", "")
+        scenario_type = selected_row.get("scenario_type", "")
+
+        st.markdown("---")
+        sinfo = SCENARIO_DISPLAY.get(scenario_type, {"icon": "📊", "label": scenario_type, "color": "gray"})
+        st.markdown(f"### {sinfo['icon']} {stock_name} ({ts_code}) — {sinfo['label']}")
+
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.markdown("**操作建议**")
+            st.info(selected_row.get("action_suggestion", ""))
+        with col2:
+            st.markdown("**失效条件**")
+            st.warning(selected_row.get("invalid_condition", ""))
+
+        tag_col1, tag_col2 = st.columns(2)
+        with tag_col1:
+            reason = selected_row.get("reason_tags", "")
+            if reason:
+                st.markdown("**✅ 原因标签**")
+                for tag in reason.split("; "):
+                    if tag.strip():
+                        st.markdown(f"- {tag.strip()}")
+        with tag_col2:
+            risk = selected_row.get("risk_tags", "")
+            if risk:
+                st.markdown("**⚠️ 风险标签**")
+                for tag in risk.split("; "):
+                    if tag.strip():
+                        st.markdown(f"- {tag.strip()}")
+
+        price_cols = {}
+        for field, label in [("flipped_support_ref", "R2S支撑"), ("active_support_ref", "活跃支撑"),
+                             ("resistance_ref", "压力位"), ("weekly_low", "周线low"), ("weekly_close", "周线收盘")]:
+            val = selected_row.get(field)
+            if pd.notna(val):
+                price_cols[label] = float(val)
+
+        if price_cols:
+            st.markdown("**关键价位**")
+            price_str = " | ".join([f"{k}: {v:.2f}" for k, v in price_cols.items()])
+            st.markdown(price_str)
+
+        ts_code_full = _format_ts_code(ts_code)
+        _render_stock_detail(session, ts_code_full, stock_name, key_prefix=f"sr_{ts_code}_")
 
 
 def init_saved_filters_table(session):
@@ -191,6 +354,69 @@ def get_cached_kline(ts_code: str, period: str, count: int = 250) -> pd.DataFram
 
     _kline_cache[cache_key] = (df, time.time())
     return df
+
+
+def _symbol_to_ts_code(symbol: str) -> str:
+    """纯数字代码 -> ts_code，如 000001 -> 000001.SZ"""
+    symbol = str(symbol).strip()
+    if "." in symbol:
+        return symbol
+    suffix = "SH" if symbol[0] in ("6", "9") else "SZ"
+    return f"{symbol}.{suffix}"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_tick_data(symbol: str, date_ints: tuple) -> pd.DataFrame:
+    """获取多日tick汇总数据（仅从DB缓存读取）
+
+    Args:
+        symbol: 股票代码（如 '000001'）
+        date_ints: 日期整数元组（tuple用于hash缓存）
+
+    Returns:
+        DataFrame，列：date_int, buy_volume, sell_volume, buy_trades, sell_trades
+    """
+    ts_code = _symbol_to_ts_code(symbol)
+    from selection.selection_tick import get_cached_tick_data
+
+    cached = get_cached_tick_data(ts_code)
+    if not cached.empty:
+        cached["date_int"] = cached["trade_date"].apply(
+            lambda d: int(pd.Timestamp(d).strftime("%Y%m%d"))
+        )
+        cached = cached[cached["date_int"].isin(set(date_ints))]
+
+    return cached
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_pvdi_data(symbol: str, date_ints: tuple) -> pd.DataFrame:
+    """获取多日PVDI因子数据（仅从DB缓存读取）
+
+    Args:
+        symbol: 股票代码（如 '002916'）
+        date_ints: 日期整数元组（tuple用于hash缓存）
+
+    Returns:
+        DataFrame，列：date_int, f_center, f_spread, f_skew, skew_b, skew_s,
+                 pvdi_weighted, pattern, label, signal, strength
+    """
+    ts_code = _symbol_to_ts_code(symbol)
+    from selection.selection_tick import get_cached_tick_data
+
+    cached = get_cached_tick_data(ts_code)
+    if not cached.empty:
+        cached["date_int"] = cached["trade_date"].apply(
+            lambda d: int(pd.Timestamp(d).strftime("%Y%m%d"))
+        )
+        cached = cached[cached["date_int"].isin(set(date_ints))]
+        pvdi_cols = ["date_int", "f_center", "f_spread", "f_skew",
+                     "skew_b", "skew_s", "pvdi_weighted", "pattern",
+                     "label", "signal", "strength"]
+        available_cols = [c for c in pvdi_cols if c in cached.columns]
+        return cached[available_cols].copy()
+
+    return pd.DataFrame()
 
 
 DARK_THEME = {
@@ -861,66 +1087,64 @@ TAB_FIELD_CONFIGS = {
                          "规模与增长_score": "规模与增长", "现金创造能力_score": "现金创造能力",
                          "concepts": "概念", "score_report_date": "财报日期"}
     },
-    "Stop-Loss选股结果": {
-        "fields": ["ts_code", "stock_name", "total_market_cap",
-                   "change_pct", "obs_day",
-                   "pred_sell_reg", "pred_sell_cls", "pred_buy_reg", "pred_buy_cls",
-                   "sell_trigger_max_vol_price", "sell_stop_scale",
-                   "dist_to_nearest_sell_stop_atr",
-                   "last_event_volume", "last_event_bars_ago",
-                   "vol_zscore", "bbmacd_event",
-                   "daily_bb_width_zscore", "concepts"],
-        "types": {"ts_code": "string", "stock_name": "string", "total_market_cap": "numeric",
-                  "change_pct": "numeric", "obs_day": "numeric", "score": "numeric",
-                  "pred_sell_reg": "numeric", "pred_sell_cls": "numeric",
-                  "pred_buy_reg": "numeric", "pred_buy_cls": "numeric",
-                  "sell_stop_triggered": "numeric",
-                  "sell_trigger_volume": "numeric",
-                  "active_sell_cluster_count": "numeric",
-                  "sum_sells_active": "numeric", "sell_trigger_max_vol_price": "numeric", "sell_stop_scale": "numeric",
-                  "nearest_sell_stop_price": "numeric",
-                  "dist_to_nearest_sell_stop_atr": "numeric",
-                  "last_event_type": "string", "last_event_volume": "numeric", "last_event_bars_ago": "numeric",
-                  "vol_zscore": "numeric", "bbmacd_event": "string",
-                  "daily_bb_width_zscore": "numeric", "concepts": "string"},
-        "string_fields": ["ts_code", "stock_name", "last_event_type", "bbmacd_event", "concepts"],
-        "display_names": {"ts_code": "股票代码", "stock_name": "股票名称", "total_market_cap": "当前市值(亿)",
-                         "change_pct": "涨跌幅%", "obs_day": "观察天数", "score": "综合评分",
-                         "pred_sell_reg": "Sell回归", "pred_sell_cls": "Sell分类",
-                         "pred_buy_reg": "Buy回归", "pred_buy_cls": "Buy分类",
-                         "sell_stop_triggered": "突破Sell",
-                         "sell_trigger_volume": "Sell释放量",
-                         "active_sell_cluster_count": "活跃Sell数",
-                         "sum_sells_active": "Sell规模", "sell_trigger_max_vol_price": "突破价格", "sell_stop_scale": "Sell规模×价格",
-                         "nearest_sell_stop_price": "最近Sell价",
-                         "dist_to_nearest_sell_stop_atr": "Sell距离ATR",
-                         "last_event_type": "上次事件", "last_event_volume": "上次量", "last_event_bars_ago": "上次距今天",
-                         "vol_zscore": "成交量Z分", "bbmacd_event": "BBMACD事件",
-                         "daily_bb_width_zscore": "日BB宽度Z分", "concepts": "概念"}
+    "ATR选股": {
+        "fields": [
+            "selection_date", "ts_code", "stock_name", "change_pct", "vol_zscore",
+            "rope_dir", "rope_value", "c_hi", "c_lo", "atr_value",
+            "rope_dev_pct", "rope_dev_atr", "range_width_pct", "range_pos_01",
+            "dsa_dir", "dsa_vwap", "dsa_vwap_dev_pct",
+            "avg_amount_5w",
+            "signal_date",
+        ],
+        "types": {
+            "ts_code": "string", "stock_name": "string",
+            "rope_dir": "numeric", "rope_value": "numeric",
+            "c_hi": "numeric", "c_lo": "numeric", "atr_value": "numeric",
+            "rope_dev_pct": "numeric", "rope_dev_atr": "numeric",
+            "range_width_pct": "numeric", "range_pos_01": "numeric",
+            "dsa_dir": "numeric", "dsa_vwap": "numeric", "dsa_vwap_dev_pct": "numeric",
+            "change_pct": "numeric", "vol_zscore": "numeric", "avg_amount_5w": "numeric",
+            "selection_date": "string", "signal_date": "string",
+        },
+        "string_fields": ["ts_code", "stock_name", "selection_date", "signal_date"],
+        "display_names": {
+            "ts_code": "股票代码", "stock_name": "股票名称",
+            "rope_dir": "Rope方向", "rope_value": "Rope值",
+            "c_hi": "箱体上轨", "c_lo": "箱体下轨", "atr_value": "ATR值",
+            "rope_dev_pct": "Rope偏差%", "rope_dev_atr": "Rope偏差ATR",
+            "range_width_pct": "带宽%", "range_pos_01": "带宽位置",
+            "dsa_dir": "DSA方向", "dsa_vwap": "DSA VWAP", "dsa_vwap_dev_pct": "VWAP偏差%",
+            "change_pct": "涨跌幅%", "vol_zscore": "量Z分", "avg_amount_5w": "5周均额(亿)",
+            "selection_date": "选股日期", "signal_date": "信号日期",
+        }
     },
     "自选股": {
-        "fields": ["ts_code", "stock_name", "priority", "weighted_score", "core_driver",
-                   "total_market_cap", "change_pct",
-                   "pred_sell_reg", "pred_sell_cls", "pred_buy_reg", "pred_buy_cls",
-                   "second_deriv_type", "key_strength", "main_risk",
-                   "concepts", "is_monitored"],
+        "fields": ["ts_code", "stock_name", "change_pct",
+                   "pred_return", "pred_prob", "combined_score",
+                   "total_market_cap",
+                   "regime_strength", "rope_dir1_pct", "rope_dir_neg1_pct",
+                   "range_pos_01", "dsa_vwap_dev_pct", "dsa_dir_bars",
+                   "range_width_pct", "lower_value", "upper_value", "avg_amount_20d", "signal_type",
+                   "in_overlap_top5", "in_overlap_top10"],
         "types": {"ts_code": "string", "stock_name": "string",
-                  "priority": "string", "weighted_score": "numeric", "core_driver": "string",
-                  "total_market_cap": "numeric", "change_pct": "numeric",
-                  "pred_sell_reg": "numeric", "pred_sell_cls": "numeric",
-                  "pred_buy_reg": "numeric", "pred_buy_cls": "numeric",
-                  "second_deriv_type": "string", "key_strength": "string", "main_risk": "string",
-                  "concepts": "string", "is_monitored": "string"},
-        "string_fields": ["ts_code", "stock_name", "priority", "core_driver",
-                          "second_deriv_type", "key_strength", "main_risk",
-                          "concepts", "is_monitored"],
+                  "change_pct": "numeric", "total_market_cap": "numeric",
+                  "pred_return": "numeric", "pred_prob": "numeric", "combined_score": "numeric",
+                  "regime_strength": "numeric", "rope_dir1_pct": "numeric", "rope_dir_neg1_pct": "numeric",
+                  "range_pos_01": "numeric", "dsa_vwap_dev_pct": "numeric", "dsa_dir_bars": "numeric",
+                  "range_width_pct": "numeric", "lower_value": "numeric", "upper_value": "numeric", "avg_amount_20d": "numeric", "signal_type": "string",
+                  "in_overlap_top5": "boolean", "in_overlap_top10": "boolean"},
+        "string_fields": ["ts_code", "stock_name", "signal_type"],
         "display_names": {"ts_code": "股票代码", "stock_name": "股票名称",
-                         "priority": "跟踪优先级", "weighted_score": "加权总分", "core_driver": "核心驱动",
-                         "total_market_cap": "当前市值(亿)", "change_pct": "涨跌幅%",
-                         "pred_sell_reg": "Sell回归", "pred_sell_cls": "Sell分类",
-                         "pred_buy_reg": "Buy回归", "pred_buy_cls": "Buy分类",
-                         "second_deriv_type": "二阶导类型", "key_strength": "主要强点", "main_risk": "主要扣分/风险",
-                         "concepts": "概念", "is_monitored": "监控"}
+                         "change_pct": "涨跌幅%",
+                         "pred_return": "预测收益", "pred_prob": ">7%概率", "combined_score": "综合得分",
+                         "total_market_cap": "当前市值(亿)",
+                         "regime_strength": "状态强度", "rope_dir1_pct": "Rope+1占比",
+                         "rope_dir_neg1_pct": "Rope-1占比", "range_pos_01": "带宽位置",
+                         "dsa_vwap_dev_pct": "DSA VWAP偏差%", "dsa_dir_bars": "DSA方向bar数",
+                         "range_width_pct": "带宽%", "lower_value": "箱体下轨", "upper_value": "箱体上轨",
+                         "avg_amount_20d": "20日均额(亿)",
+                         "signal_type": "信号类型",
+                         "in_overlap_top5": "交集T5", "in_overlap_top10": "交集T10"}
     }
 }
 
@@ -988,6 +1212,78 @@ def apply_filters(df: pd.DataFrame, conditions: list, config: dict) -> pd.DataFr
 
 
 # ==================== 选股结果数据层函数 ====================
+
+
+def get_available_pa_dates(session) -> List[str]:
+    """获取所有可用的PA选股日期"""
+    sql = """
+        SELECT DISTINCT selection_date as date FROM pa_selection
+        ORDER BY selection_date DESC
+    """
+    try:
+        df = query_sql(session, sql, {})
+        return df["date"].tolist() if not df.empty else []
+    except Exception:
+        return []
+
+
+def load_pa_selection_results(session, selection_date: str = None) -> pd.DataFrame:
+    """
+    加载PA选股结果数据
+
+    Args:
+        session: 数据库会话
+        selection_date: 选股日期，为None时取最新日期
+
+    Returns:
+        DataFrame包含PA选股结果
+    """
+    if selection_date is None:
+        dates = get_available_pa_dates(session)
+        if not dates:
+            return pd.DataFrame()
+        selection_date = dates[0]
+
+    sql = """
+        SELECT
+            s.ts_code,
+            s.selection_date,
+            s.signal_date,
+            s.stock_name,
+            p.concepts,
+            p.total_market_cap / 100000000.0 AS total_market_cap,
+            s.evt_choch_up,
+            s.evt_bos_up,
+            s.evt_choch_down,
+            s.evt_bos_down,
+            s.evt_upper_liq_sweep,
+            s.evt_lower_liq_sweep,
+            s.evt_upper_sweep_fail_up,
+            s.evt_lower_sweep_fail_down,
+            s.is_top_signal,
+            s.pat_trend_state,
+            s.pat_last_swing_high,
+            s.pat_last_swing_low,
+            s.pat_atr14,
+            s.change_pct,
+            s.vol_zscore,
+            s.vol_zscore_5,
+            s.vol_zscore_10,
+            s.bbmacd_event,
+            s.daily_bb_width_zscore,
+            s.batch_no,
+            s.created_at
+        FROM pa_selection s
+        LEFT JOIN stock_pools p ON s.ts_code = p.ts_code
+        WHERE s.selection_date = :selection_date
+        ORDER BY s.change_pct DESC NULLS LAST
+    """
+    try:
+        df = query_sql(session, sql, {"selection_date": selection_date})
+        return df
+    except Exception as e:
+        st.error(f"加载PA选股结果失败: {e}")
+        return pd.DataFrame()
 
 
 def get_available_stop_loss_dates(session) -> List[str]:
@@ -1111,51 +1407,136 @@ def compute_change_pct_for_date(session, prediction_date: str, ts_codes: list) -
         return {}
 
 
+def get_available_sr_dates(session) -> List[str]:
+    """获取sr_selection表中有数据的选股日期"""
+    sql = """
+        SELECT DISTINCT selection_date::text as date
+        FROM sr_selection
+        WHERE freq = 'w'
+        ORDER BY date DESC
+    """
+    try:
+        df = query_sql(session, sql, {})
+        return df["date"].tolist() if not df.empty else []
+    except Exception:
+        return []
+
+
+def load_sr_selection_results(session, selection_date: str = None, freq: str = "w") -> pd.DataFrame:
+    """加载指定日期的SR场景选股结果"""
+    if selection_date is None:
+        dates = get_available_sr_dates(session)
+        if not dates:
+            return pd.DataFrame()
+        selection_date = dates[0]
+
+    sql = """
+        SELECT *
+        FROM sr_selection
+        WHERE selection_date = :selection_date AND freq = :freq
+        ORDER BY
+            CASE scenario_type
+                WHEN 'R2S_PIERCE_RECLAIM' THEN 1
+                WHEN 'MOMENTUM_PULLBACK' THEN 2
+                WHEN 'BREAKDOWN_EXCLUDE' THEN 3
+            END,
+            risk_score ASC NULLS LAST
+    """
+    try:
+        df = query_sql(session, sql, {"selection_date": selection_date, "freq": freq})
+        if not df.empty and "ts_code" in df.columns:
+            change_map = compute_change_pct_for_date(session, selection_date, df["ts_code"].tolist())
+            df["change_pct"] = df["ts_code"].map(change_map).fillna(0.0)
+        return df
+    except Exception as e:
+        st.error(f"加载SR选股结果失败: {e}")
+        return pd.DataFrame()
+
+
+def get_available_atr_dates(session) -> List[str]:
+    """获取atr_week_selection表中有数据的选股日期"""
+    sql = """
+        SELECT DISTINCT selection_date::text as date
+        FROM atr_week_selection
+        ORDER BY date DESC
+    """
+    try:
+        df = query_sql(session, sql, {})
+        return df["date"].tolist() if not df.empty else []
+    except Exception:
+        return []
+
+
+def load_atr_selection_results(session, selection_date: str = None) -> pd.DataFrame:
+    """加载指定日期的ATR Rope周线突破选股结果"""
+    if selection_date is None:
+        dates = get_available_atr_dates(session)
+        if not dates:
+            return pd.DataFrame()
+        selection_date = dates[0]
+
+    sql = """
+        SELECT
+            ts_code, stock_name,
+            rope_dir, rope_value, c_hi, c_lo, atr_value,
+            rope_dev_pct, rope_dev_atr, range_width_pct, range_pos_01,
+            dsa_dir, dsa_vwap, dsa_vwap_dev_pct,
+            change_pct, vol_zscore, avg_amount_5w,
+            selection_date::text, signal_date::text
+        FROM atr_week_selection
+        WHERE selection_date = :selection_date
+        ORDER BY vol_zscore DESC NULLS LAST
+    """
+    try:
+        df = query_sql(session, sql, {"selection_date": selection_date})
+        return df
+    except Exception as e:
+        st.error(f"加载ATR周线选股结果失败: {e}")
+        return pd.DataFrame()
+
+
+SCENARIO_DISPLAY = {
+    "R2S_PIERCE_RECLAIM": {"icon": "🔄", "label": "R2S刺破收回", "color": "green"},
+    "MOMENTUM_PULLBACK": {"icon": "📈", "label": "动量回踩", "color": "blue"},
+    "BREAKDOWN_EXCLUDE": {"icon": "❌", "label": "破位剔除", "color": "red"},
+}
+
+
 def load_watchlist_data(session) -> pd.DataFrame:
-    """加载自选股数据，关联 stock_pools 和 stop_loss_predictions
+    """加载自选股数据，关联 stock_pools 获取市值
 
     Returns:
-        DataFrame: 自选股列表（含市值、涨跌幅、4模型评分等）
+        DataFrame: 自选股列表（含市值、涨跌幅）
     """
     sql = """
         SELECT
             w.ts_code,
             w.stock_name,
-            w.added_date,
-            w.sort_order,
-            w.priority,
-            w.weighted_score,
-            w.core_driver,
-            w.second_deriv_type,
-            w.key_strength,
-            w.main_risk,
-            w.is_monitored,
             p.total_market_cap / 100000000.0 AS total_market_cap,
-            p.concepts,
-            pred.pred_sell_reg,
-            pred.pred_sell_cls,
-            pred.pred_buy_reg,
-            pred.pred_buy_cls
+            f.feature_date,
+            f.signal_type,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.regime_strength END AS regime_strength,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.rope_dir1_pct END AS rope_dir1_pct,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.rope_dir_neg1_pct END AS rope_dir_neg1_pct,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.range_pos_01 END AS range_pos_01,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.dsa_vwap_dev_pct END AS dsa_vwap_dev_pct,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.dsa_dir_bars END AS dsa_dir_bars,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.range_width_pct END AS range_width_pct,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.lower_value END AS lower_value,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.upper_value END AS upper_value,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.avg_amount_20d END AS avg_amount_20d,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.pred_return END AS pred_return,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.pred_prob END AS pred_prob,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.combined_score END AS combined_score,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.in_overlap_top5 END AS in_overlap_top5,
+            CASE WHEN f.signal_type IS NOT NULL THEN f.in_overlap_top10 END AS in_overlap_top10
         FROM stock_watchlist w
         LEFT JOIN stock_pools p ON p.ts_code = w.ts_code
             OR p.ts_code = w.ts_code || '.SZ'
             OR p.ts_code = w.ts_code || '.SH'
             OR p.ts_code = w.ts_code || '.BJ'
-        LEFT JOIN LATERAL (
-            SELECT pred_sell_reg, pred_sell_cls, pred_buy_reg, pred_buy_cls
-            FROM stop_loss_predictions
-            WHERE (ts_code = w.ts_code
-                OR ts_code = w.ts_code || '.SZ'
-                OR ts_code = w.ts_code || '.SH'
-                OR ts_code = w.ts_code || '.BJ')
-              AND profile IN ('production', 'position')
-              AND prediction_date = (
-                  SELECT MAX(prediction_date) FROM stop_loss_predictions
-                  WHERE profile IN ('production', 'position')
-              )
-            ORDER BY obs_date DESC
-            LIMIT 1
-        ) pred ON TRUE
+        LEFT JOIN atr_rope_features f ON f.ts_code = w.ts_code
+            AND f.feature_date = (SELECT MAX(feature_date) FROM atr_rope_features)
         ORDER BY w.sort_order, w.added_date DESC
     """
     try:
@@ -1167,8 +1548,6 @@ def load_watchlist_data(session) -> pd.DataFrame:
             df["change_pct"] = df["ts_code"].map(
                 {c: change_map.get(_format_ts_code(c), 0.0) for c in df["ts_code"].tolist()}
             ).fillna(0.0)
-        if not df.empty and "is_monitored" in df.columns:
-            df["is_monitored"] = df["is_monitored"].map({True: "是", False: "否", None: "否"}).fillna("否")
         return df
     except Exception as e:
         st.error(f"加载自选股数据失败: {e}")
@@ -1188,11 +1567,49 @@ def add_to_watchlist(session, ts_code: str, stock_name: str):
 
 
 def remove_from_watchlist(session, ts_code: str):
-    """从自选股列表移除股票"""
+    """从自选股列表移除股票，并清理对应的缓存数据
+
+    缓存清理范围：
+    - stock_k_data 表中 freq='15m' 的低频K线缓存
+    - tick_cache 表的 tick 缓存
+
+    设计原则：数据库中应只保留自选股的缓存数据；非自选股的缓存都应删除
+    """
     from sqlalchemy import text
-    sql = text("DELETE FROM stock_watchlist WHERE ts_code = :ts_code")
-    session.execute(sql, {"ts_code": ts_code})
+    session.execute(text("DELETE FROM stock_watchlist WHERE ts_code = :ts_code"), {"ts_code": ts_code})
+    session.execute(text("DELETE FROM stock_k_data WHERE ts_code = :ts_code AND freq = '15m'"), {"ts_code": ts_code})
+    session.execute(text("DELETE FROM tick_cache WHERE ts_code = :ts_code"), {"ts_code": ts_code})
     session.commit()
+
+
+def remove_batch_from_watchlist(session, ts_codes: list):
+    """批量从自选股列表移除股票，并清理对应的缓存数据
+
+    Args:
+        session: 数据库会话
+        ts_codes: 股票代码列表
+
+    Returns:
+        实际删除的自选股数量
+    """
+    if not ts_codes:
+        return 0
+    from sqlalchemy import text
+    # 批量删除自选股 + 15m K线缓存 + tick 缓存
+    wl_result = session.execute(
+        text("DELETE FROM stock_watchlist WHERE ts_code = ANY(:ts_codes)"),
+        {"ts_codes": ts_codes},
+    )
+    session.execute(
+        text("DELETE FROM stock_k_data WHERE ts_code = ANY(:ts_codes) AND freq = '15m'"),
+        {"ts_codes": ts_codes},
+    )
+    session.execute(
+        text("DELETE FROM tick_cache WHERE ts_code = ANY(:ts_codes)"),
+        {"ts_codes": ts_codes},
+    )
+    session.commit()
+    return wl_result.rowcount
 
 
 def pine_ema(src: pd.Series, length: int) -> pd.Series:
@@ -1239,10 +1656,18 @@ def cross_under(series1: pd.Series, series2: pd.Series) -> pd.Series:
     return (series1 < series2) & (series1.shift(1) >= series2.shift(1))
 
 
-def get_kline_data_from_db(ts_code: str, freq: str = 'd', bars: int = 60) -> pd.DataFrame:
-    """从数据库获取K线数据，返回包含 bar_time 列的 DataFrame。"""
+def get_kline_data_from_db(ts_code: str, freq: str = 'd', bars: int = 60,
+                            adj: str = None) -> pd.DataFrame:
+    """从数据库获取K线数据，返回包含 bar_time 列的 DataFrame。
+
+    Args:
+        ts_code: 股票代码
+        freq: 周期
+        bars: 返回bar数量
+        adj: 复权方式，'qfq' 前复权，None 不复权。日线/周线建议传 'qfq'。
+    """
     try:
-        df = load_k_data(ts_code, freq=freq)
+        df = load_k_data(ts_code, freq=freq, adj=adj)
         if df.empty:
             return pd.DataFrame()
         df = df.tail(bars).copy()
@@ -1374,6 +1799,294 @@ def build_kline_chart_with_bsm(df: pd.DataFrame, stock_name: str,
     if has_bsm:
         fig.update_xaxes(type='category', row=2, col=1)
         fig.update_yaxes(title_text="MACD", row=2, col=1)
+
+    return fig
+
+
+def build_tick_analysis_chart(kline_df: pd.DataFrame, tick_df: pd.DataFrame,
+                              pvdi_df: pd.DataFrame, stock_name: str) -> go.Figure:
+    """构建Tick分析组合图（10行：K线→成交量→成交笔数→PVDI加权→F_center→F_spread→F_skew→skew_B→skew_S→MACD）
+
+    Row1: K线蜡烛图
+    Row2: 主动买入/卖出成交量（并排柱状图）
+    Row3: 主动买入/卖出成交笔数（并排柱状图）
+    Row4: PVDI加权合成因子
+    Row5: F_center 重心偏移因子
+    Row6: F_spread 离散度差异因子
+    Row7: F_skew 偏度差异因子
+    Row8: skew_B 主动买入偏度
+    Row9: skew_S 主动卖出偏度
+    Row10: MACD副图
+
+    Args:
+        kline_df: K线数据，含 bar_time/open/high/low/close 及 BSM指标
+        tick_df: tick汇总数据，需含 x_label/buy_volume/sell_volume/buy_trades/sell_trades
+        pvdi_df: PVDI因子数据，需含 x_label/f_center/f_spread/f_skew
+        stock_name: 股票名称
+
+    Returns:
+        Plotly Figure 对象
+    """
+    if kline_df.empty:
+        return go.Figure()
+
+    from plotly.subplots import make_subplots
+
+    has_bsm = 'macd_line' in kline_df.columns and kline_df['macd_line'].notna().any()
+    has_tick = not tick_df.empty
+    has_pvdi = not pvdi_df.empty
+
+    # 统一X轴为字符串格式，确保所有行标签一致
+    kline_df = kline_df.copy()
+    kline_df['x_date'] = kline_df['bar_time'].apply(lambda d: str(d)[:10])
+
+    # 根据数据确定行数和高度
+    if has_tick and has_pvdi and has_bsm:
+        rows = 10
+        row_heights = [0.24, 0.06, 0.06, 0.08, 0.07, 0.07, 0.07, 0.07, 0.07, 0.07]
+    elif has_tick and has_pvdi:
+        rows = 9
+        row_heights = [0.26, 0.07, 0.07, 0.09, 0.08, 0.08, 0.08, 0.08, 0.08]
+    elif has_tick and has_bsm:
+        rows = 4
+        row_heights = [0.50, 0.15, 0.15, 0.20]
+    elif has_tick:
+        rows = 3
+        row_heights = [0.60, 0.20, 0.20]
+    elif has_bsm:
+        rows = 2
+        row_heights = [0.70, 0.30]
+    else:
+        rows = 1
+        row_heights = [1.0]
+
+    fig = make_subplots(
+        rows=rows, cols=1, shared_xaxes=True,
+        vertical_spacing=0.02, row_heights=row_heights,
+    )
+
+    # Row1: K线蜡烛图
+    fig.add_trace(go.Candlestick(
+        x=kline_df['x_date'], open=kline_df['open'], high=kline_df['high'],
+        low=kline_df['low'], close=kline_df['close'], name='K线',
+        increasing_line_color='#ef5350', decreasing_line_color='#26a69a',
+        increasing_fillcolor='#ef5350', decreasing_fillcolor='#26a69a',
+    ), row=1, col=1)
+
+    if 'ema_rapida' in kline_df.columns:
+        fig.add_trace(go.Scatter(
+            x=kline_df['x_date'], y=kline_df['ema_rapida'],
+            name='EMA8', line=dict(color='#FF9800', width=1),
+        ), row=1, col=1)
+
+    if 'ema_lenta' in kline_df.columns:
+        fig.add_trace(go.Scatter(
+            x=kline_df['x_date'], y=kline_df['ema_lenta'],
+            name='EMA26', line=dict(color='#2196F3', width=1),
+        ), row=1, col=1)
+
+    # PVDI信号marker：在K线行添加看涨/看跌标记
+    if has_pvdi and 'signal' in pvdi_df.columns:
+        # 将pvdi_df与kline_df按日期对齐，获取high/low
+        kline_idx = {str(d)[:10]: i for i, d in enumerate(kline_df['bar_time'])}
+        for _, pvdi_row in pvdi_df.iterrows():
+            x_label = pvdi_row['x_label']
+            if x_label not in kline_idx:
+                continue
+            k_idx = kline_idx[x_label]
+            k_row = kline_df.iloc[k_idx]
+            sig = pvdi_row['signal']
+            strength = pvdi_row.get('strength', 'weak')
+            label = pvdi_row.get('label', '')
+
+            # 中性信号不显示
+            if sig == 'neutral' or pvdi_row.get('pattern', 0) == 0:
+                continue
+
+            # 颜色和符号映射
+            if sig == 'bullish':
+                marker_text = '▲'
+                color_map = {'strong': '#4CAF50', 'medium': '#8BC34A', 'weak': '#CDDC39'}
+                color = color_map.get(strength, '#8BC34A')
+                y_pos = k_row['low']
+                ay = 30  # 箭头向下指向K线
+            elif sig == 'extreme_bull':
+                marker_text = '▲'
+                color = '#FFC107'  # 黄色警示
+                y_pos = k_row['high']
+                ay = -30  # 箭头向上
+            elif sig == 'bearish':
+                marker_text = '▼'
+                color_map = {'strong': '#f44336', 'medium': '#FF5722', 'weak': '#FF9800'}
+                color = color_map.get(strength, '#FF5722')
+                y_pos = k_row['high']
+                ay = -30  # 箭头向上指向K线
+            elif sig == 'extreme_bear':
+                marker_text = '▼'
+                color = '#D32F2F'  # 深红恐慌
+                y_pos = k_row['high']
+                ay = -30
+            else:
+                continue
+
+            # 添加marker annotation
+            fig.add_annotation(
+                x=x_label, y=y_pos,
+                xref="x", yref="y",
+                text=marker_text,
+                showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1.5,
+                arrowcolor=color, ax=0, ay=ay,
+                font=dict(size=14, color=color),
+                bgcolor="rgba(0,0,0,0.5)", bordercolor=color, borderwidth=1,
+                row=1, col=1,
+            )
+            # 添加文字标签
+            fig.add_annotation(
+                x=x_label, y=y_pos,
+                xref="x", yref="y",
+                text=label, showarrow=False,
+                ax=0, ay=ay + (15 if ay > 0 else -15),
+                font=dict(size=9, color=color),
+                bgcolor="rgba(0,0,0,0.6)", bordercolor=color, borderwidth=1,
+                row=1, col=1,
+            )
+
+    current_row = 2
+
+    # Row2: 成交量（买入在左、卖出在右，并排不重叠）
+    if has_tick:
+        x_dates = tick_df['x_label']
+        fig.add_trace(go.Bar(
+            x=x_dates, y=tick_df['buy_volume'], name='主动买入量',
+            marker_color='#ef5350',
+        ), row=current_row, col=1)
+        fig.add_trace(go.Bar(
+            x=x_dates, y=tick_df['sell_volume'], name='主动卖出量',
+            marker_color='#26a69a',
+        ), row=current_row, col=1)
+        fig.update_yaxes(title_text="成交量", row=current_row, col=1)
+        fig.update_xaxes(type='category', row=current_row, col=1)
+        current_row += 1
+
+        # Row3: 成交笔数
+        fig.add_trace(go.Bar(
+            x=x_dates, y=tick_df['buy_trades'], name='主动买入笔数',
+            marker_color='#ef5350', showlegend=False,
+        ), row=current_row, col=1)
+        fig.add_trace(go.Bar(
+            x=x_dates, y=tick_df['sell_trades'], name='主动卖出笔数',
+            marker_color='#26a69a', showlegend=False,
+        ), row=current_row, col=1)
+        fig.update_yaxes(title_text="成交笔数", row=current_row, col=1)
+        fig.update_xaxes(type='category', row=current_row, col=1)
+        current_row += 1
+
+    # PVDI因子：各自独立行，视觉分隔
+    if has_pvdi:
+        pvdi_x = pvdi_df['x_label']
+
+        # PVDI加权合成因子（0.5*F_center + 0.3*F_skew + 0.2*F_spread）
+        fig.add_trace(go.Scatter(
+            x=pvdi_x, y=pvdi_df['pvdi_weighted'], name='PVDI加权(0.5c+0.3k+0.2s)',
+            line=dict(color='#E040FB', width=2),
+            fill='tozeroy', fillcolor='rgba(224,64,251,0.15)',
+        ), row=current_row, col=1)
+        fig.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.3)',
+                       row=current_row, col=1)
+        fig.update_yaxes(title_text="PVDI加权", row=current_row, col=1)
+        fig.update_xaxes(type='category', row=current_row, col=1)
+        current_row += 1
+
+        # F_center（重心偏移）
+        fig.add_trace(go.Scatter(
+            x=pvdi_x, y=pvdi_df['f_center'], name='F_center(重心偏移)',
+            line=dict(color='#2196F3', width=1.5),
+            fill='tozeroy', fillcolor='rgba(33,150,243,0.15)',
+        ), row=current_row, col=1)
+        fig.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.3)',
+                       row=current_row, col=1)
+        fig.update_yaxes(title_text="F_center", row=current_row, col=1)
+        fig.update_xaxes(type='category', row=current_row, col=1)
+        current_row += 1
+
+        # F_spread（离散度差异）
+        fig.add_trace(go.Scatter(
+            x=pvdi_x, y=pvdi_df['f_spread'], name='F_spread(离散度差异)',
+            line=dict(color='#FF9800', width=1.5),
+            fill='tozeroy', fillcolor='rgba(255,152,0,0.15)',
+        ), row=current_row, col=1)
+        fig.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.3)',
+                       row=current_row, col=1)
+        fig.update_yaxes(title_text="F_spread", row=current_row, col=1)
+        fig.update_xaxes(type='category', row=current_row, col=1)
+        current_row += 1
+
+        # F_skew（偏度差异）
+        fig.add_trace(go.Scatter(
+            x=pvdi_x, y=pvdi_df['f_skew'], name='F_skew(偏度差异)',
+            line=dict(color='#4CAF50', width=1.5),
+            fill='tozeroy', fillcolor='rgba(76,175,80,0.15)',
+        ), row=current_row, col=1)
+        fig.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.3)',
+                       row=current_row, col=1)
+        fig.update_yaxes(title_text="F_skew", row=current_row, col=1)
+        fig.update_xaxes(type='category', row=current_row, col=1)
+        current_row += 1
+
+        # skew_B（主动买入偏度）
+        fig.add_trace(go.Scatter(
+            x=pvdi_x, y=pvdi_df['skew_b'], name='skew_B(买入偏度)',
+            line=dict(color='#ef5350', width=1.5),
+            fill='tozeroy', fillcolor='rgba(239,83,80,0.15)',
+        ), row=current_row, col=1)
+        fig.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.3)',
+                       row=current_row, col=1)
+        fig.update_yaxes(title_text="skew_B", row=current_row, col=1)
+        fig.update_xaxes(type='category', row=current_row, col=1)
+        current_row += 1
+
+        # skew_S（主动卖出偏度）
+        fig.add_trace(go.Scatter(
+            x=pvdi_x, y=pvdi_df['skew_s'], name='skew_S(卖出偏度)',
+            line=dict(color='#26a69a', width=1.5),
+            fill='tozeroy', fillcolor='rgba(38,166,154,0.15)',
+        ), row=current_row, col=1)
+        fig.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.3)',
+                       row=current_row, col=1)
+        fig.update_yaxes(title_text="skew_S", row=current_row, col=1)
+        fig.update_xaxes(type='category', row=current_row, col=1)
+        current_row += 1
+
+    # 最后一行：MACD
+    if has_bsm:
+        colors = ['#ef5350' if v >= 0 else '#26a69a' for v in kline_df['histogram'].fillna(0)]
+        fig.add_trace(go.Bar(
+            x=kline_df['x_date'], y=kline_df['histogram'], name='Histogram',
+            marker_color=colors, showlegend=False,
+        ), row=current_row, col=1)
+        fig.add_trace(go.Scatter(
+            x=kline_df['x_date'], y=kline_df['macd_line'],
+            name='MACD', line=dict(color='#FF9800', width=1.5),
+        ), row=current_row, col=1)
+        fig.add_trace(go.Scatter(
+            x=kline_df['x_date'], y=kline_df['signal_line'],
+            name='Signal', line=dict(color='#2196F3', width=1.5),
+        ), row=current_row, col=1)
+        fig.update_yaxes(title_text="MACD", row=current_row, col=1)
+        fig.update_xaxes(type='category', row=current_row, col=1)
+
+    fig.update_layout(
+        title=dict(text=f"{stock_name} Tick分析", font=dict(size=16)),
+        barmode='group',
+        bargap=0.2,
+        bargroupgap=0.1,
+        height=1200,
+        template='plotly_white',
+        margin=dict(l=50, r=50, t=50, b=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis_rangeslider_visible=False,
+    )
+    fig.update_xaxes(type='category', row=1, col=1)
 
     return fig
 
@@ -2490,7 +3203,386 @@ def render_stop_loss_selection_page(session, sidebar):
         _render_stock_detail(session, ts_code_full, stock_name, key_prefix=f"stop_{ts_code}_")
 
 
+def render_pa_selection_page(session, sidebar):
+    """渲染PA选股结果页面
 
+    展示日线CHOCH/BOS/扫流动性6类事件的选股结果，
+    支持日期选择、事件类型过滤、多条件筛选、单选展开详情。
+    """
+    st.header("📈 PA 选股结果（日线结构事件）")
+
+    available_dates = get_available_pa_dates(session)
+    if not available_dates:
+        st.info("暂无PA选股结果数据，请先运行 selection/selection_pa.py 生成数据")
+        return
+
+    with sidebar:
+        st.markdown("---")
+        st.subheader("⚙️ PA选股配置")
+        available_dates_dt = []
+        for d in available_dates:
+            if isinstance(d, str):
+                available_dates_dt.append(datetime.datetime.strptime(d, "%Y-%m-%d").date())
+            elif isinstance(d, datetime.datetime):
+                available_dates_dt.append(d.date())
+            elif isinstance(d, datetime.date):
+                available_dates_dt.append(d)
+        default_date = available_dates_dt[0] if available_dates_dt else datetime.date.today()
+        selected_date_dt = st.date_input(
+            "选股日期",
+            value=default_date,
+            min_value=min(available_dates_dt) if available_dates_dt else None,
+            max_value=max(available_dates_dt) if available_dates_dt else None,
+            key="pa_selection_date"
+        )
+        selected_date = selected_date_dt.strftime("%Y-%m-%d")
+
+        event_filter = st.selectbox(
+            "事件类型过滤",
+            ["全部", "最强组合", "CHoCH↑", "BoS↑", "CHoCH↓", "BoS↓", "扫高收回", "扫低收回", "扫高失败↑", "扫低失败↓"],
+            key="pa_event_filter"
+        )
+
+    with st.spinner("加载PA选股数据..."):
+        df = load_pa_selection_results(session, selected_date)
+
+    if df.empty:
+        st.info(f"{selected_date} 暂无PA选股结果数据")
+        return
+
+    total_count = len(df)
+    choch_up_count = int(df["evt_choch_up"].sum()) if "evt_choch_up" in df.columns else 0
+    bos_up_count = int(df["evt_bos_up"].sum()) if "evt_bos_up" in df.columns else 0
+    choch_down_count = int(df["evt_choch_down"].sum()) if "evt_choch_down" in df.columns else 0
+    bos_down_count = int(df["evt_bos_down"].sum()) if "evt_bos_down" in df.columns else 0
+    upper_sweep_count = int(df["evt_upper_liq_sweep"].sum()) if "evt_upper_liq_sweep" in df.columns else 0
+    lower_sweep_count = int(df["evt_lower_liq_sweep"].sum()) if "evt_lower_liq_sweep" in df.columns else 0
+    upper_sweep_fail_count = int(df["evt_upper_sweep_fail_up"].sum()) if "evt_upper_sweep_fail_up" in df.columns else 0
+    lower_sweep_fail_count = int(df["evt_lower_sweep_fail_down"].sum()) if "evt_lower_sweep_fail_down" in df.columns else 0
+    top_signal_count = int(df["is_top_signal"].sum()) if "is_top_signal" in df.columns else 0
+
+    st.markdown(
+        f"**选股总数**: {total_count} 只 | "
+        f"**CHoCH↑**: {choch_up_count} | **BoS↑**: {bos_up_count} | "
+        f"**CHoCH↓**: {choch_down_count} | **BoS↓**: {bos_down_count} | "
+        f"**扫高收回**: {upper_sweep_count} | **扫低收回**: {lower_sweep_count} | "
+        f"**扫高失败↑**: {upper_sweep_fail_count} | **扫低失败↓**: {lower_sweep_fail_count} | "
+        f"**最强组合**: {top_signal_count}"
+    )
+
+    display_df = df.copy()
+
+    event_filter_map = {
+        "最强组合": "is_top_signal",
+        "CHoCH↑": "evt_choch_up",
+        "BoS↑": "evt_bos_up",
+        "CHoCH↓": "evt_choch_down",
+        "BoS↓": "evt_bos_down",
+        "扫高收回": "evt_upper_liq_sweep",
+        "扫低收回": "evt_lower_liq_sweep",
+        "扫高失败↑": "evt_upper_sweep_fail_up",
+        "扫低失败↓": "evt_lower_sweep_fail_down",
+    }
+    if event_filter != "全部" and event_filter in event_filter_map:
+        filter_col = event_filter_map[event_filter]
+        if filter_col in display_df.columns:
+            display_df = display_df[display_df[filter_col] == True]
+
+    conditions = render_filter_bar(display_df, "PA选股")
+    if conditions:
+        display_df = apply_filters(display_df, conditions, TAB_FIELD_CONFIGS["PA选股"])
+
+    loaded_conditions = render_filter_manager(session, "PA选股", conditions)
+    if loaded_conditions:
+        display_df = df.copy()
+        display_df = apply_filters(display_df, loaded_conditions, TAB_FIELD_CONFIGS["PA选股"])
+
+    filtered_count = len(display_df)
+    st.markdown(f"**共 {total_count} 只** | 筛选后: {filtered_count} 只")
+
+    if display_df.empty:
+        st.info("没有匹配的股票")
+        return
+
+    config = TAB_FIELD_CONFIGS["PA选股"]
+    display_names = config["display_names"]
+    rename_map = {k: v for k, v in display_names.items() if k in display_df.columns}
+    display_df_renamed = display_df.rename(columns=rename_map)
+
+    available_cols = [display_names.get(f, f) for f in config["fields"] if display_names.get(f, f) in display_df_renamed.columns]
+    display_df_renamed = display_df_renamed[available_cols]
+
+    numeric_cols_display = [
+        display_names.get("pat_trend_state", "趋势状态"),
+        display_names.get("pat_last_swing_high", "Swing High"),
+        display_names.get("pat_last_swing_low", "Swing Low"),
+        display_names.get("pat_atr14", "ATR14"),
+        display_names.get("change_pct", "涨跌幅%"),
+        display_names.get("vol_zscore", "成交量Z分"),
+        display_names.get("daily_bb_width_zscore", "日BB宽度Z分"),
+        display_names.get("total_market_cap", "当前市值(亿)"),
+    ]
+    numeric_cols_display = [c for c in numeric_cols_display if c in display_df_renamed.columns]
+
+    display_df_renamed_reset = display_df_renamed.reset_index(drop=True)
+
+    event = st.dataframe(
+        colorize_numeric_columns_simple(display_df_renamed_reset, numeric_cols_display),
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        height=500,
+    )
+
+    if event.selection and event.selection.rows:
+        selected_idx = event.selection.rows[0]
+        selected_row = display_df.iloc[selected_idx]
+        ts_code = selected_row["ts_code"]
+        stock_name = selected_row.get("stock_name", "")
+
+        st.markdown("---")
+        st.markdown(f"### 📊 {stock_name} ({ts_code}) 详情")
+
+        events_list = []
+        event_labels = {
+            "evt_choch_up": "CHoCH↑",
+            "evt_bos_up": "BoS↑",
+            "evt_choch_down": "CHoCH↓",
+            "evt_bos_down": "BoS↓",
+            "evt_upper_liq_sweep": "扫高收回",
+            "evt_lower_liq_sweep": "扫低收回",
+            "evt_upper_sweep_fail_up": "扫高失败↑",
+            "evt_lower_sweep_fail_down": "扫低失败↓",
+            "is_top_signal": "最强组合",
+        }
+        for col, label in event_labels.items():
+            if col in selected_row and selected_row[col]:
+                events_list.append(label)
+        if events_list:
+            st.markdown("**触发事件**: " + " | ".join([f"`{e}`" for e in events_list]))
+
+        ts_code_full = _format_ts_code(ts_code)
+        _render_stock_detail(session, ts_code_full, stock_name, key_prefix=f"pa_{ts_code}_")
+
+
+def render_atr_selection_page(session, sidebar):
+    """渲染ATR Rope周线突破选股结果页面
+
+    展示周线ATR Rope突破c_hi + DSA多头确认的选股结果，
+    支持日期选择、多条件筛选、单选展开详情。
+    """
+    st.header("📈 ATR Rope 周线突破选股结果")
+
+    available_dates = get_available_atr_dates(session)
+    if not available_dates:
+        st.info("暂无ATR周线选股结果数据，请先运行 selection/selection_atr_week.py 生成数据")
+        return
+
+    with sidebar:
+        st.markdown("---")
+        st.subheader("⚙️ ATR周线选股配置")
+        available_dates_dt = []
+        for d in available_dates:
+            if isinstance(d, str):
+                available_dates_dt.append(datetime.datetime.strptime(d, "%Y-%m-%d").date())
+            elif isinstance(d, datetime.datetime):
+                available_dates_dt.append(d.date())
+            elif isinstance(d, datetime.date):
+                available_dates_dt.append(d)
+        default_date = available_dates_dt[0] if available_dates_dt else datetime.date.today()
+        selected_date_dt = st.date_input(
+            "选股日期",
+            value=default_date,
+            min_value=min(available_dates_dt) if available_dates_dt else None,
+            max_value=max(available_dates_dt) if available_dates_dt else None,
+            key="atr_selection_date"
+        )
+        selected_date = selected_date_dt.strftime("%Y-%m-%d")
+
+    with st.spinner("加载ATR周线选股数据..."):
+        df = load_atr_selection_results(session, selected_date)
+
+    if df.empty:
+        st.info(f"{selected_date} 暂无ATR周线突破选股结果数据")
+        return
+
+    total_count = len(df)
+    st.markdown(f"**选股总数**: {total_count} 只（周线突破c_hi + DSA多头确认）")
+
+    display_df = df.copy()
+
+    conditions = render_filter_bar(display_df, "ATR选股")
+    if conditions:
+        display_df = apply_filters(display_df, conditions, TAB_FIELD_CONFIGS["ATR选股"])
+
+    loaded_conditions = render_filter_manager(session, "ATR选股", conditions)
+    if loaded_conditions:
+        display_df = df.copy()
+        display_df = apply_filters(display_df, loaded_conditions, TAB_FIELD_CONFIGS["ATR选股"])
+
+    filtered_count = len(display_df)
+    st.markdown(f"**共 {total_count} 只** | 筛选后: {filtered_count} 只")
+
+    if display_df.empty:
+        st.info("没有匹配的股票")
+        return
+
+    config = TAB_FIELD_CONFIGS["ATR选股"]
+    display_names = config["display_names"]
+    rename_map = {k: v for k, v in display_names.items() if k in display_df.columns}
+    display_df_renamed = display_df.rename(columns=rename_map)
+
+    available_cols = [display_names.get(f, f) for f in config["fields"] if display_names.get(f, f) in display_df_renamed.columns]
+    display_df_renamed = display_df_renamed[available_cols]
+
+    numeric_cols_display = [
+        display_names.get("rope_value", "Rope值"),
+        display_names.get("c_hi", "箱体上轨"),
+        display_names.get("c_lo", "箱体下轨"),
+        display_names.get("atr_value", "ATR值"),
+        display_names.get("rope_dev_pct", "Rope偏差%"),
+        display_names.get("rope_dev_atr", "Rope偏差ATR"),
+        display_names.get("range_width_pct", "带宽%"),
+        display_names.get("range_pos_01", "带宽位置"),
+        display_names.get("dsa_vwap_dev_pct", "VWAP偏差%"),
+        display_names.get("change_pct", "涨跌幅%"),
+        display_names.get("vol_zscore", "量Z分"),
+        display_names.get("avg_amount_5w", "5周均额(亿)"),
+    ]
+    numeric_cols_display = [c for c in numeric_cols_display if c in display_df_renamed.columns]
+
+    display_df_renamed_reset = display_df_renamed.reset_index(drop=True)
+
+    event = st.dataframe(
+        colorize_numeric_columns_simple(display_df_renamed_reset, numeric_cols_display),
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        height=500,
+    )
+
+    if event.selection and event.selection.rows:
+        selected_idx = event.selection.rows[0]
+        selected_row = display_df.iloc[selected_idx]
+        ts_code = selected_row["ts_code"]
+        stock_name = selected_row.get("stock_name", "")
+
+        st.markdown("---")
+        st.markdown(f"### 📊 {stock_name} ({ts_code}) — 周线突破详情")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            rope_dir_val = selected_row.get("rope_dir")
+            rope_dir_label = {0: "蓝色箱体", 1: "绿色上升", -1: "红色下降"}.get(rope_dir_val, str(rope_dir_val)) if pd.notna(rope_dir_val) else "N/A"
+            st.metric("Rope方向", rope_dir_label)
+            c_hi_val = selected_row.get("c_hi")
+            c_lo_val = selected_row.get("c_lo")
+            if pd.notna(c_hi_val) and pd.notna(c_lo_val):
+                st.metric("箱体上轨/下轨", f"{float(c_hi_val):.2f} / {float(c_lo_val):.2f}")
+            atr_val = selected_row.get("atr_value")
+            if pd.notna(atr_val):
+                st.metric("ATR值", f"{float(atr_val):.2f}")
+        with col2:
+            dsa_dir_val = selected_row.get("dsa_dir")
+            dsa_dir_label = {1: "多头↑", 0: "震荡→", -1: "空头↓"}.get(dsa_dir_val, str(dsa_dir_val)) if pd.notna(dsa_dir_val) else "N/A"
+            st.metric("DSA方向", dsa_dir_label)
+            dsa_vwap_val = selected_row.get("dsa_vwap")
+            if pd.notna(dsa_vwap_val):
+                st.metric("DSA VWAP", f"{float(dsa_vwap_val):.2f}")
+            dsa_vwap_dev = selected_row.get("dsa_vwap_dev_pct")
+            if pd.notna(dsa_vwap_dev):
+                st.metric("VWAP偏差%", f"{float(dsa_vwap_dev):.2f}%")
+        with col3:
+            change_val = selected_row.get("change_pct")
+            if pd.notna(change_val):
+                st.metric("当周涨跌幅", f"{float(change_val):.2f}%")
+            vol_z = selected_row.get("vol_zscore")
+            if pd.notna(vol_z):
+                st.metric("量Z分", f"{float(vol_z):.2f}")
+            avg_amt = selected_row.get("avg_amount_5w")
+            if pd.notna(avg_amt):
+                st.metric("5周均额(亿)", f"{float(avg_amt):.2f}")
+
+        ts_code_full = _format_ts_code(ts_code)
+        _render_stock_detail(session, ts_code_full, stock_name, key_prefix=f"atr_{ts_code}_")
+
+
+
+
+
+def _render_volume_profile_tab(ts_code: str, stock_name: str, key_prefix: str):
+    """渲染筹码峰标签页
+
+    调用 luxalgo_volume_profile_pytdx 的 compute_volume_profile + make_volume_profile_figure，
+    使用 st.plotly_chart 展示行情+筹码分布图。
+
+    Args:
+        ts_code: 股票代码（如 688507.SH）
+        stock_name: 股票名称
+        key_prefix: Streamlit widget key 前缀
+    """
+    # 筹码峰固定参数
+    lookback = 360
+    rows = 100
+    value_area = 0.70
+
+    # 拉取数据：日线K线用于显示，15分钟K线用于 volume profile 计算（仅从DB读取）
+    with st.spinner("正在加载行情数据..."):
+        try:
+            daily_df = get_kline_data_from_db(ts_code, 'd', bars=lookback, adj='qfq')
+            ltf_df = get_kline_data_from_db(ts_code, '15m', bars=1500)
+        except Exception as e:
+            st.error(f"行情数据加载失败：{e}")
+            return
+
+    if daily_df is None or (isinstance(daily_df, pd.DataFrame) and daily_df.empty) or len(daily_df) < 10:
+        st.warning("日线数据不足，无法显示行情")
+        return
+    if ltf_df is None or (isinstance(ltf_df, pd.DataFrame) and ltf_df.empty) or len(ltf_df) < 10:
+        st.warning("15分钟数据不足，无法计算筹码分布")
+        return
+
+    # 计算 volume profile（基于15分钟K线，使用全部15m数据）
+    cfg = VolumeProfileConfig(
+        profile_lookback_length=len(ltf_df),
+        profile_number_of_rows=rows,
+        value_area_threshold=value_area,
+        peaks_show="peaks",
+        peaks_detection_percent=0.09,
+        volume_node_threshold=0.01,
+    )
+
+    try:
+        result = compute_volume_profile(ltf_df, cfg=cfg)
+    except Exception as e:
+        st.error(f"筹码峰计算失败：{e}")
+        return
+
+    # 生成图表（日线K线 + 15分钟计算的筹码分布）
+    try:
+        fig = make_volume_profile_figure(daily_df, result, cfg,
+                                         title=f"{stock_name} {ts_code} 筹码分布")
+        st.plotly_chart(fig, use_container_width=True, height=820)
+    except Exception as e:
+        st.error(f"图表渲染失败：{e}")
+
+    # 显示筹码峰价格信息
+    if result.profile_df is not None and not result.profile_df.empty:
+        peak_rows = result.profile_df[result.profile_df["is_peak"]]
+        if not peak_rows.empty:
+            st.subheader("筹码峰价格")
+            peak_data = []
+            for _, row in peak_rows.iterrows():
+                peak_data.append({
+                    "价格": f"{row['price_mid']:.2f}",
+                    "成交量": f"{row['total_volume']:.0f}",
+                    "多头量": f"{row['bullish_volume']:.0f}",
+                    "空头量": f"{row['total_volume'] - row['bullish_volume']:.0f}",
+                    "价值区域内": "是" if row["is_value_area"] else "否",
+                })
+            st.dataframe(pd.DataFrame(peak_data), hide_index=True, use_container_width=True)
 
 
 def _render_stock_detail(session, ts_code: str, stock_name: str, key_prefix: str = ""):
@@ -2505,12 +3597,12 @@ def _render_stock_detail(session, ts_code: str, stock_name: str, key_prefix: str
         stock_name: 股票名称
         key_prefix: 用于区分不同页面的 key 前缀，避免冲突
     """
-    # K线图标签页切换（日线/周线）
-    tab_daily, tab_weekly = st.tabs(["📈 日线", "📈 周线"])
+    # K线图标签页切换（日线/周线/Tick分析/筹码峰）
+    tab_daily, tab_weekly, tab_tick, tab_vp = st.tabs(["📈 日线", "📈 周线", "📊 Tick分析", "📊 筹码峰"])
 
     with tab_daily:
         with st.spinner("加载日线数据..."):
-            daily_kline_df = get_kline_data_from_db(ts_code, 'd', bars=250)
+            daily_kline_df = get_kline_data_from_db(ts_code, 'd', bars=250, adj='qfq')
             if not daily_kline_df.empty:
                 daily_kline_df = calculate_bsm_indicators(daily_kline_df)
                 daily_fig = build_kline_chart_with_bsm(
@@ -2533,6 +3625,49 @@ def _render_stock_detail(session, ts_code: str, stock_name: str, key_prefix: str
                 st.plotly_chart(weekly_fig, use_container_width=True, key=f"{key_prefix}weekly_{ts_code}")
             else:
                 st.warning("⚠️ 无周线数据")
+
+    with tab_tick:
+        with st.spinner("加载Tick数据..."):
+            # 获取最近30个交易日的日线K线
+            tick_kline_df = get_kline_data_from_db(ts_code, 'd', bars=30, adj='qfq')
+            if not tick_kline_df.empty:
+                tick_kline_df = calculate_bsm_indicators(tick_kline_df)
+
+                # 提取最近30个交易日日期，获取tick汇总数据
+                symbol = ts_code.split('.')[0]
+                # bar_time 为 Timestamp，需先转为字符串再转整数
+                date_ints = tuple(int(pd.Timestamp(d).strftime('%Y%m%d')) for d in tick_kline_df['bar_time'].tail(30).tolist())
+
+                # 并行获取tick汇总数据和PVDI因子数据
+                tick_df = _fetch_tick_data(symbol, date_ints)
+                pvdi_df = _fetch_pvdi_data(symbol, date_ints)
+
+                # 构建日期映射，确保X轴对齐
+                kline_date_map = {pd.Timestamp(d).strftime('%Y%m%d'): str(d)[:10] for d in tick_kline_df['bar_time'].tail(30).tolist()}
+
+                # tick数据X轴对齐
+                if not tick_df.empty:
+                    tick_df = tick_df.copy()
+                    tick_df['date_str'] = tick_df['date_int'].astype(str)
+                    tick_df['x_label'] = tick_df['date_str'].map(kline_date_map).fillna(tick_df['date_str'])
+                else:
+                    tick_df = pd.DataFrame()
+
+                # PVDI数据X轴对齐
+                if not pvdi_df.empty:
+                    pvdi_df = pvdi_df.copy()
+                    pvdi_df['date_str'] = pvdi_df['date_int'].astype(str)
+                    pvdi_df['x_label'] = pvdi_df['date_str'].map(kline_date_map).fillna(pvdi_df['date_str'])
+                else:
+                    pvdi_df = pd.DataFrame()
+
+                tick_fig = build_tick_analysis_chart(tick_kline_df, tick_df, pvdi_df, stock_name)
+                st.plotly_chart(tick_fig, use_container_width=True, key=f"{key_prefix}tick_{ts_code}")
+            else:
+                st.warning("⚠️ 无日线数据，无法加载Tick分析")
+
+    with tab_vp:
+        _render_volume_profile_tab(ts_code, stock_name, key_prefix)
 
     st.markdown("---")
 
@@ -2664,479 +3799,14 @@ def _get_score_color(value: float, min_val: float = 0, max_val: float = 100) -> 
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def _load_latest_predictions(session, ts_codes: list) -> tuple[pd.DataFrame, dict]:
-    """从 stop_loss_predictions 加载每只持仓股各自的最新4模型评分。
-
-    对每只 ts_code 取各自最新的预测记录（DISTINCT ON + ORDER BY prediction_date DESC），
-    确保即使不同股票预测日期不同，也能拿到各自的最新数据。
-
-    Args:
-        session: DB session
-        ts_codes: 持仓股票代码列表（格式如 000001.SZ）
-
-    Returns:
-        (pred_df, stats) 其中 stats 为:
-        - found: 查到预测数据的股票数
-        - missing: 查不到预测数据的股票数
-        - missing_codes: 查不到预测数据的股票代码列表
-        - date_distribution: {date_str: count} 各预测日期的股票数量分布
-    """
-    if not ts_codes:
-        return pd.DataFrame(), {"found": 0, "missing": 0, "missing_codes": [], "date_distribution": {}}
-
-    placeholders = ", ".join([f":tc{i}" for i in range(len(ts_codes))])
-    params = {f"tc{i}": code for i, code in enumerate(ts_codes)}
-
-    # 对每只股票取各自最新的预测记录
-    sql = f"""
-        SELECT DISTINCT ON (ts_code)
-            ts_code, pred_sell_reg, pred_sell_cls,
-            pred_buy_reg, pred_buy_cls, score, obs_date, prediction_date
-        FROM stop_loss_predictions
-        WHERE profile IN ('production', 'position')
-        AND ts_code IN ({placeholders})
-        ORDER BY ts_code, prediction_date DESC, obs_date DESC
-    """
-    try:
-        df = query_sql(session, sql, params)
-    except Exception as e:
-        st.warning(f"加载模型评分失败: {e}")
-        return pd.DataFrame(), {"found": 0, "missing": len(ts_codes), "missing_codes": list(ts_codes), "date_distribution": {}}
-
-    # 统计日期分布和缺失股票
-    found_codes = set(df["ts_code"].unique()) if not df.empty else set()
-    missing_codes = [c for c in ts_codes if c not in found_codes]
-
-    date_dist = {}
-    if not df.empty and "prediction_date" in df.columns:
-        date_counts = df["prediction_date"].value_counts().sort_index(ascending=False)
-        date_dist = {str(d): int(c) for d, c in date_counts.items()}
-
-    stats = {
-        "found": len(found_codes),
-        "missing": len(missing_codes),
-        "missing_codes": missing_codes,
-        "date_distribution": date_dist,
-    }
-
-    return df, stats
-
-
-def _fetch_qmt_positions():
-    """从 QMT 获取实时持仓，返回 list[Position]。连接失败时降级到 mock。"""
-    try:
-        from qmt_trader.client import QmtClient
-        from qmt_trader.session import SessionManager
-        from qmt_trader.query import QueryAPI
-
-        client = QmtClient()
-        if not client.health():
-            raise ConnectionError("QMT 服务不可达")
-
-        mgr = SessionManager(client)
-        sess = mgr.open()
-        try:
-            api = QueryAPI(client)
-            positions = api.get_positions(sess.session_id)
-            return positions, "live"
-        finally:
-            mgr.close(sess.session_id)
-    except Exception as e:
-        try:
-            from qmt_trader.mock import MockQmtClient
-            from qmt_trader.query import QueryAPI
-            client = MockQmtClient()
-            api = QueryAPI(client)
-            positions = api.get_positions("mock_session")
-            return positions, "mock"
-        except Exception:
-            return [], "error"
-
-
-BACKTEST_LEDGER_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "stop_experiment", "output", "backtest_ledger",
-)
-
-
-@st.cache_data(ttl=300)
-def _load_backtest_data() -> dict:
-    """加载回测产物CSV，返回 {equity_curve, trade_report, daily_holdings, daily_audit}"""
-    result = {}
-    csv_map = {
-        "equity_curve": "live_equity_curve.csv",
-        "trade_report": "live_trade_report.csv",
-        "daily_holdings": "daily_holdings_report.csv",
-        "daily_audit": "daily_trade_audit.csv",
-    }
-    for key, fname in csv_map.items():
-        fpath = os.path.join(BACKTEST_LEDGER_DIR, fname)
-        if os.path.exists(fpath):
-            try:
-                df = pd.read_csv(fpath)
-                for date_col in ["date", "decision_date"]:
-                    if date_col in df.columns:
-                        df[date_col] = pd.to_datetime(df[date_col])
-                result[key] = df
-            except Exception:
-                result[key] = pd.DataFrame()
-        else:
-            result[key] = pd.DataFrame()
-    return result
-
-
-def _calc_backtest_metrics(eq_df: pd.DataFrame) -> dict:
-    """从净值曲线计算核心回测指标（基于实际有持仓的交易日）"""
-    if eq_df.empty:
-        return {}
-    nav = eq_df["nav_live"]
-    final_nav = nav.iloc[-1]
-    n_days = (eq_df["date"].iloc[-1] - eq_df["date"].iloc[0]).days
-    ann_ret = (final_nav ** (365 / max(n_days, 1)) - 1) if n_days > 0 else 0
-    mdd = eq_df["drawdown"].max()
-    daily_ret = eq_df["daily_return"].dropna()
-    daily_ret = daily_ret[daily_ret != 0]
-    sharpe = 0.0
-    if len(daily_ret) > 5 and daily_ret.std() > 0:
-        sharpe = daily_ret.mean() / daily_ret.std() * (252 ** 0.5)
-    calmar = ann_ret / mdd if mdd > 0 else 0.0
-    return {
-        "final_nav": final_nav,
-        "ann_ret": ann_ret,
-        "mdd": mdd,
-        "sharpe": sharpe,
-        "calmar": calmar,
-        "trade_start": eq_df["date"].iloc[0],
-        "trade_end": eq_df["date"].iloc[-1],
-        "trade_days": n_days,
-        "n_trading_rows": len(eq_df),
-    }
-
-
-def _render_backtest_tab1(eq_df: pd.DataFrame):
-    """Tab1: 净值曲线与核心指标（仅展示有持仓的交易期）"""
-    if eq_df.empty:
-        st.info("暂无净值曲线数据")
-        return
-
-    total_rows = len(eq_df)
-    active_df = eq_df[eq_df["n_positions"] > 0].copy() if "n_positions" in eq_df.columns else eq_df.copy()
-    if active_df.empty:
-        st.info("回测期间无持仓记录")
-        return
-
-    idle_rows = total_rows - len(active_df)
-    if idle_rows > 0:
-        idle_start = eq_df["date"].iloc[0].strftime("%Y-%m-%d")
-        idle_end = active_df["date"].iloc[0].strftime("%Y-%m-%d")
-        st.caption(f"📊 交易区间 {active_df['date'].iloc[0].strftime('%Y-%m-%d')} ~ {active_df['date'].iloc[-1].strftime('%Y-%m-%d')}，共 {len(active_df)} 个交易日"
-                   f"（已过滤空仓期 {idle_rows} 天：{idle_start} ~ {idle_end}）")
-
-    metrics = _calc_backtest_metrics(active_df)
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.metric("累计净值", f"{metrics['final_nav']:.4f}")
-    with c2:
-        st.metric("年化收益率", f"{metrics['ann_ret']:.2%}")
-    with c3:
-        st.metric("最大回撤", f"{metrics['mdd']:.2%}", delta=f"-{metrics['mdd']:.2%}", delta_color="inverse")
-    with c4:
-        st.metric("夏普比率", f"{metrics['sharpe']:.2f}")
-    with c5:
-        st.metric("Calmar比率", f"{metrics['calmar']:.2f}")
-
-    st.markdown("---")
-
-    nav_chart_data = active_df[["date", "nav_live", "drawdown"]].copy()
-    nav_chart_data["drawdown_neg"] = -nav_chart_data["drawdown"]
-
-    base = alt.Chart(nav_chart_data).encode(x=alt.X("date:T", title="日期"))
-
-    nav_line = base.mark_line(color="#2196F3", strokeWidth=2).encode(
-        y=alt.Y("nav_live:Q", title="净值", scale=alt.Scale(zero=False)),
-        tooltip=[alt.Tooltip("date:T", title="日期"), alt.Tooltip("nav_live:Q", title="净值", format=".4f")],
-    )
-
-    dd_area = base.mark_area(color="#FF5252", opacity=0.3).encode(
-        y=alt.Y("drawdown_neg:Q", title="回撤"),
-    )
-
-    st.subheader("净值曲线 & 回撤")
-    st.altair_chart((nav_line + dd_area).resolve_scale(y="independent").properties(height=400, width="container"), use_container_width=True)
-
-    st.markdown("---")
-    st.subheader("月度收益率")
-
-    eq_monthly = active_df[["date", "nav_live"]].copy()
-    eq_monthly["year"] = eq_monthly["date"].dt.year
-    eq_monthly["month"] = eq_monthly["date"].dt.month
-    monthly_nav = eq_monthly.groupby(["year", "month"])["nav_live"].last()
-    monthly_ret = monthly_nav / monthly_nav.shift(1) - 1
-    monthly_ret = monthly_ret.dropna().reset_index()
-    monthly_ret.columns = ["year", "month", "ret"]
-
-    if not monthly_ret.empty:
-        heatmap = alt.Chart(monthly_ret).mark_rect().encode(
-            x=alt.X("month:O", title="月份", scale=alt.Scale(domain=list(range(1, 13)))),
-            y=alt.Y("year:O", title="年份"),
-            color=alt.Color("ret:Q", title="月度收益率",
-                            scale=alt.Scale(scheme="redyellowgreen", domainMid=0)),
-            tooltip=[alt.Tooltip("year:O", title="年"), alt.Tooltip("month:O", title="月"),
-                     alt.Tooltip("ret:Q", title="收益率", format=".2%")],
-        ).properties(height=200, width="container")
-        st.altair_chart(heatmap, use_container_width=True)
-
-
-def _render_backtest_tab2(trade_df: pd.DataFrame):
-    """Tab2: 交易明细"""
-    if trade_df.empty:
-        st.info("暂无交易数据")
-        return
-
-    c1, c2, c3, c4 = st.columns(4)
-    n_total = len(trade_df)
-    n_win = (trade_df["盈亏标签"] == "盈利").sum()
-    n_loss = (trade_df["盈亏标签"] == "亏损").sum()
-    win_rate = n_win / n_total if n_total > 0 else 0
-
-    with c1:
-        st.metric("总交易数", f"{n_total}")
-    with c2:
-        st.metric("胜率", f"{win_rate:.1%}", delta=f"{n_win}胜/{n_loss}亏")
-    with c3:
-        st.metric("盈利次数", f"{n_win}")
-    with c4:
-        st.metric("亏损次数", f"{n_loss}")
-
-    c5, c6, c7, c8 = st.columns(4)
-    with c5:
-        st.metric("盈亏比", trade_df.attrs.get("wl_ratio", "-"))
-    with c6:
-        avg_hold = trade_df["持仓天数"].mean() if "持仓天数" in trade_df.columns else 0
-        st.metric("平均持仓天数", f"{avg_hold:.1f}")
-    with c7:
-        max_win = trade_df["净盈亏%"].max() if "净盈亏%" in trade_df.columns else "-"
-        st.metric("最大单笔盈利", f"{max_win}" if isinstance(max_win, str) else f"{max_win}")
-    with c8:
-        max_loss = trade_df["净盈亏%"].min() if "净盈亏%" in trade_df.columns else "-"
-        st.metric("最大单笔亏损", f"{max_loss}" if isinstance(max_loss, str) else f"{max_loss}")
-
-    st.markdown("---")
-
-    reason_counts = trade_df["退出原因"].value_counts() if "退出原因" in trade_df.columns else pd.Series()
-    rc1, rc2, rc3 = st.columns(3)
-    with rc1:
-        st.metric("模型风险退出", f"{reason_counts.get('模型风险退出', 0)}")
-    with rc2:
-        st.metric("止损退出", f"{reason_counts.get('止损退出', 0)}")
-    with rc3:
-        st.metric("最大持有到期", f"{reason_counts.get('最大持有到期', 0)}")
-
-    st.markdown("---")
-
-    filter_col1, filter_col2 = st.columns(2)
-    with filter_col1:
-        label_filter = st.multiselect("盈亏标签", options=["盈利", "亏损", "持平"],
-                                       default=["盈利", "亏损", "持平"], key="bt_label_filter")
-    with filter_col2:
-        reason_options = trade_df["退出原因"].unique().tolist() if "退出原因" in trade_df.columns else []
-        reason_filter = st.multiselect("退出原因", options=reason_options,
-                                        default=reason_options, key="bt_reason_filter")
-
-    filtered = trade_df[
-        trade_df["盈亏标签"].isin(label_filter) &
-        trade_df["退出原因"].isin(reason_filter)
-    ].copy()
-
-    if filtered.empty:
-        st.info("无匹配交易")
-        return
-
-    display_cols = ["序号", "股票代码", "股票名称", "买入日期", "卖出日期",
-                    "买入价", "卖出价", "持仓天数", "毛盈亏%", "净盈亏%", "盈亏标签", "退出原因", "入场评分"]
-    avail_cols = [c for c in display_cols if c in filtered.columns]
-    df_display = filtered[avail_cols].reset_index(drop=True)
-
-    event = st.dataframe(df_display, use_container_width=True, hide_index=True,
-                          on_select="rerun", selection_mode="single-row")
-
-    if event.selection and event.selection.rows:
-        idx = event.selection.rows[0]
-        row = filtered.iloc[idx] if idx < len(filtered) else None
-        if row is not None:
-            st.markdown("---")
-            st.subheader(f"📊 {row.get('股票名称', '')} ({row.get('股票代码', '')}) 交易详情")
-            d1, d2, d3, d4 = st.columns(4)
-            with d1:
-                st.metric("买入价", f"¥{row.get('买入价', '-')}")
-            with d2:
-                st.metric("卖出价", f"¥{row.get('卖出价', '-')}")
-            with d3:
-                st.metric("净盈亏", row.get("净盈亏%", "-"))
-            with d4:
-                st.metric("退出原因", row.get("退出原因", "-"))
-
-
-def _render_backtest_tab3(holdings_df: pd.DataFrame):
-    """Tab3: 每日持仓"""
-    if holdings_df.empty:
-        st.info("暂无每日持仓数据")
-        return
-
-    available_dates = sorted(holdings_df["date"].unique())
-    latest_date = available_dates[-1]
-
-    selected_date = st.date_input("选择日期", value=latest_date, key="bt_holdings_date")
-    selected_dt = pd.to_datetime(selected_date)
-
-    day_data = holdings_df[holdings_df["date"] == selected_dt].copy()
-    if day_data.empty:
-        st.info(f"{selected_date} 无持仓数据")
-        return
-
-    st.caption(f"📅 {selected_date} 共 {len(day_data)} 只持仓")
-
-    rename_map = {
-        "ts_code": "股票代码", "stock_name": "名称", "entry_date": "入场日期",
-        "entry_price": "入场价", "days_held": "持仓天数", "cur_ret": "当日收益",
-        "score": "综合评分",
-        "pred_sell_reg": "卖出回归", "pred_sell_cls": "卖出分类",
-        "pred_buy_reg": "买入回归", "pred_buy_cls": "买入分类",
-    }
-    df_display = day_data.rename(columns=rename_map)
-    display_cols = ["股票代码", "名称", "入场日期", "入场价", "持仓天数", "当日收益", "综合评分",
-                    "卖出回归", "卖出分类", "买入回归", "买入分类"]
-    avail_cols = [c for c in display_cols if c in df_display.columns]
-    df_display = df_display[avail_cols].reset_index(drop=True)
-
-    numeric_cols = ["卖出回归", "卖出分类", "买入回归", "买入分类", "当日收益", "综合评分"]
-    numeric_cols = [c for c in numeric_cols if c in df_display.columns]
-    styled = colorize_numeric_columns_simple(df_display, numeric_cols)
-
-    event = st.dataframe(styled, use_container_width=True, hide_index=True,
-                          on_select="rerun", selection_mode="single-row")
-
-    if event.selection and event.selection.rows:
-        idx = event.selection.rows[0]
-        row = day_data.iloc[idx] if idx < len(day_data) else None
-        if row is not None:
-            ts_code = row.get("ts_code", "")
-            stock_name = row.get("stock_name", "")
-            st.markdown("---")
-            st.subheader(f"📊 {stock_name} ({ts_code}) 评分时间线")
-
-            stock_timeline = holdings_df[holdings_df["ts_code"] == ts_code].sort_values("date").copy()
-            if stock_timeline.empty:
-                st.info("无历史数据")
-                return
-
-            entry_date = stock_timeline["entry_date"].min() if "entry_date" in stock_timeline.columns else None
-
-            df_kline = get_kline_data_from_db(ts_code, freq='d', bars=120)
-
-            fig = build_factor_tracking_chart(df_kline, stock_timeline, stock_name, ts_code, entry_date)
-            st.plotly_chart(fig, use_container_width=True)
-
-
-def _render_backtest_tab4(audit_df: pd.DataFrame):
-    """Tab4: 决策审计"""
-    if audit_df.empty:
-        st.info("暂无决策审计数据")
-        return
-
-    available_dates = sorted(audit_df["decision_date"].unique())
-    latest_date = available_dates[-1]
-
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        selected_date = st.date_input("选择日期", value=latest_date, key="bt_audit_date")
-    with c2:
-        action_options = audit_df["action"].unique().tolist() if "action" in audit_df.columns else []
-        selected_actions = st.multiselect("动作筛选", options=action_options,
-                                           default=action_options, key="bt_audit_action")
-
-    selected_dt = pd.to_datetime(selected_date)
-    day_data = audit_df[
-        (audit_df["decision_date"] == selected_dt) &
-        (audit_df["action"].isin(selected_actions))
-    ].copy()
-
-    if day_data.empty:
-        st.info(f"{selected_date} 无匹配决策")
-        return
-
-    st.caption(f"📅 {selected_date} 共 {len(day_data)} 条决策")
-
-    rename_map = {
-        "ts_code": "股票代码", "stock_name": "名称", "action": "动作",
-        "reason": "原因", "score": "评分", "days_held": "持仓天数",
-        "cur_ret": "当日收益", "rank": "排名",
-        "pred_sell_reg": "卖出回归", "pred_sell_cls": "卖出分类",
-        "pred_buy_reg": "买入回归", "pred_buy_cls": "买入分类",
-    }
-    df_display = day_data.rename(columns=rename_map)
-    display_cols = ["股票代码", "名称", "动作", "评分", "持仓天数", "当日收益", "排名",
-                    "卖出回归", "卖出分类", "买入回归", "买入分类"]
-    avail_cols = [c for c in display_cols if c in df_display.columns]
-    df_display = df_display[avail_cols].reset_index(drop=True)
-
-    numeric_cols = ["卖出回归", "卖出分类", "买入回归", "买入分类", "评分", "当日收益"]
-    numeric_cols = [c for c in numeric_cols if c in df_display.columns]
-    styled = colorize_numeric_columns_simple(df_display, numeric_cols)
-
-    event = st.dataframe(styled, use_container_width=True, hide_index=True,
-                          on_select="rerun", selection_mode="single-row")
-
-    if event.selection and event.selection.rows:
-        idx = event.selection.rows[0]
-        row = day_data.iloc[idx] if idx < len(day_data) else None
-        if row is not None:
-            ts_code = row.get("ts_code", "")
-            stock_name = row.get("stock_name", "")
-            action = row.get("action", "")
-            why = row.get("why", "")
-            st.markdown("---")
-            st.subheader(f"🔍 {stock_name} ({ts_code}) - {action}")
-
-            if why:
-                st.markdown("**决策推理:**")
-                st.text(why)
-
-            scores = {
-                "卖出回归": row.get("pred_sell_reg"),
-                "卖出分类": row.get("pred_sell_cls"),
-                "买入回归": row.get("pred_buy_reg"),
-                "买入分类": row.get("pred_buy_cls"),
-            }
-            valid_scores = {k: v for k, v in scores.items() if pd.notna(v)}
-            if valid_scores:
-                score_df = pd.DataFrame([valid_scores])
-                score_melt = score_df.melt(var_name="model", value_name="score")
-                chart = alt.Chart(score_melt).mark_bar().encode(
-                    x=alt.X("model:N", title="模型"),
-                    y=alt.Y("score:Q", title="评分"),
-                    color=alt.condition(
-                        alt.datum.score > 0,
-                        alt.value("#4CAF50"),
-                        alt.value("#F44336"),
-                    ),
-                    tooltip=[alt.Tooltip("model:N", title="模型"), alt.Tooltip("score:Q", title="评分", format=".4f")],
-                ).properties(height=250, width=400)
-                st.altair_chart(chart, use_container_width=True)
-
-            detail_cols = ["threshold_value", "planned_price", "planned_weight",
-                           "signal_id", "is_held", "is_pending_buy", "obs_day"]
-            details = {c: row.get(c) for c in detail_cols if c in row.index and pd.notna(row.get(c))}
-            if details:
-                st.markdown("**交易参数:**")
-                st.json(details)
-
-
 def render_watchlist_page(session, sidebar):
-    """渲染自选股页面：展示自选股列表 + 添加/移除 + 筛选 + 个股详情展开"""
+    """渲染自选股页面：展示自选股列表（股票名称、代码、涨跌幅、市值）+ 添加/删除 + 个股详情展开"""
     st.header("⭐ 自选股")
 
-    with st.expander("➕ 添加自选股", expanded=False):
+    # 添加区域放在侧边栏
+    with sidebar:
+        st.markdown("---")
+        st.subheader("➕ 添加自选股")
         stock_list = load_stock_list(session)
         if stock_list.empty:
             st.info("暂无股票数据")
@@ -3159,14 +3829,13 @@ def render_watchlist_page(session, sidebar):
                     index=0,
                     key="watchlist_add_select",
                 )
-                col_add, col_spacer = st.columns([1, 4])
-                with col_add:
-                    if st.button("添加", key="watchlist_add_btn"):
-                        sel = matched.iloc[selected_option]
-                        add_to_watchlist(session, sel["ts_code"], sel["name"])
-                        st.success(f"已添加 {sel['name']} ({sel['ts_code']})")
-                        st.rerun()
+                if st.button("添加", key="watchlist_add_btn"):
+                    sel = matched.iloc[selected_option]
+                    add_to_watchlist(session, sel["ts_code"], sel["name"])
+                    st.success(f"已添加 {sel['name']} ({sel['ts_code']})")
+                    st.rerun()
 
+    # 加载数据
     with st.spinner("加载自选股数据..."):
         df = load_watchlist_data(session)
 
@@ -3174,287 +3843,532 @@ def render_watchlist_page(session, sidebar):
         st.info("暂无自选股，请通过上方添加")
         return
 
-    total_count = len(df)
-    monitored_count = int((df["is_monitored"] == "是").sum()) if "is_monitored" in df.columns else 0
-
-    priority_order = ["S", "S-", "A", "A-", "A-/B+", "B+", "B"]
-    priority_counts = {}
-    if "priority" in df.columns:
-        for p in priority_order:
-            cnt = int((df["priority"] == p).sum())
-            if cnt > 0:
-                priority_counts[p] = cnt
-
-    cols_spec = [1, 1] + [0.7] * len(priority_counts) + [0.5]
-    cols = st.columns(cols_spec)
-    with cols[0]:
-        st.metric("自选股数", f"{total_count} 只")
-    with cols[1]:
-        st.metric("监控中", f"{monitored_count} 只")
-    for i, (p, cnt) in enumerate(priority_counts.items()):
-        with cols[2 + i]:
-            st.metric(f"{p}级", f"{cnt} 只")
-    with cols[-1]:
+    # 统计 + 缓存 + 刷新 + 批量删除模式切换
+    col_count, col_cache, col_refresh, col_batch = st.columns([3, 1, 1, 1])
+    with col_count:
+        st.metric("自选股数", f"{len(df)} 只")
+    with col_cache:
+        # 检查缺失缓存的自选股（15m K线或tick缓存为空）
+        missing_ts_codes = []
+        for ts_code in df["ts_code"]:
+            ltf_df = get_kline_data_from_db(ts_code, '15m', bars=10)
+            if ltf_df.empty or len(ltf_df) < 10:
+                missing_ts_codes.append(ts_code)
+        if missing_ts_codes:
+            if st.button(f"📦 缓存数据({len(missing_ts_codes)})", key="watchlist_cache_btn"):
+                with st.spinner(f"正在刷新 {len(missing_ts_codes)} 只自选股缓存数据..."):
+                    from app.build_dataset import _load_watchlist_df, update_watchlist_15m, update_watchlist_tick
+                    watchlist_df = _load_watchlist_df()
+                    missing_df = watchlist_df[watchlist_df["ts_code"].isin(missing_ts_codes)]
+                    update_watchlist_15m(watchlist_df=missing_df, quiet=True)
+                    update_watchlist_tick(watchlist_df=missing_df, quiet=True)
+                st.success(f"已刷新 {len(missing_ts_codes)} 只自选股缓存")
+                st.rerun()
+    with col_refresh:
         if st.button("🔄", key="watchlist_refresh_btn"):
             st.rerun()
+    with col_batch:
+        # 批量删除模式开关
+        is_batch_mode = st.session_state.get("watchlist_batch_mode", False)
+        btn_label = "退出批量删除" if is_batch_mode else "批量删除"
+        if st.button(btn_label, key="watchlist_batch_toggle"):
+            st.session_state["watchlist_batch_mode"] = not is_batch_mode
+            st.rerun()
+
+    # 批量删除模式提示
+    if st.session_state.get("watchlist_batch_mode", False):
+        st.info("🗑️ 批量删除模式已开启，请勾选要删除的自选股，然后点击下方\"批量删除\"按钮")
 
     st.markdown("---")
 
-    display_df = df.copy()
-    conditions = render_filter_bar(display_df, "自选股")
-    if conditions:
-        display_df = apply_filters(display_df, conditions, TAB_FIELD_CONFIGS["自选股"])
-
-    loaded_conditions = render_filter_manager(session, "自选股", conditions)
-    if loaded_conditions:
-        display_df = df.copy()
-        display_df = apply_filters(display_df, loaded_conditions, TAB_FIELD_CONFIGS["自选股"])
-
-    filtered_count = len(display_df)
-    st.markdown(f"**共 {total_count} 只** | 筛选后: {filtered_count} 只")
-
-    if display_df.empty:
-        st.info("没有匹配的自选股")
-        return
-
+    # 数据表格（4列：股票代码、股票名称、涨跌幅%、当前市值(亿)）
     config = TAB_FIELD_CONFIGS["自选股"]
     display_names = config["display_names"]
-    rename_map = {k: v for k, v in display_names.items() if k in display_df.columns}
-    display_df_renamed = display_df.rename(columns=rename_map)
+    rename_map = {k: v for k, v in display_names.items() if k in df.columns}
+    display_df = df.rename(columns=rename_map)
+    available_cols = [display_names[f] for f in config["fields"] if display_names[f] in display_df.columns]
+    display_df = display_df[available_cols]
 
-    available_cols = [display_names.get(f, f) for f in config["fields"] if display_names.get(f, f) in display_df_renamed.columns]
-    display_df_renamed = display_df_renamed[available_cols]
-
-    numeric_cols_display = [
-        display_names.get("weighted_score", "加权总分"),
-        display_names.get("total_market_cap", "当前市值(亿)"),
+    numeric_cols = [
         display_names.get("change_pct", "涨跌幅%"),
-        display_names.get("pred_sell_reg", "Sell回归"),
-        display_names.get("pred_sell_cls", "Sell分类"),
-        display_names.get("pred_buy_reg", "Buy回归"),
-        display_names.get("pred_buy_cls", "Buy分类"),
+        display_names.get("pred_return", "预测收益"),
+        display_names.get("pred_prob", ">7%概率"),
+        display_names.get("combined_score", "综合得分"),
+        display_names.get("total_market_cap", "当前市值(亿)"),
+        display_names.get("regime_strength", "状态强度"),
+        display_names.get("rope_dir1_pct", "Rope+1占比"),
+        display_names.get("rope_dir_neg1_pct", "Rope-1占比"),
+        display_names.get("range_pos_01", "带宽位置"),
+        display_names.get("dsa_vwap_dev_pct", "DSA VWAP偏差%"),
+        display_names.get("dsa_dir_bars", "DSA方向bar数"),
+        display_names.get("range_width_pct", "带宽%"),
+        display_names.get("lower_value", "箱体下轨"),
+        display_names.get("upper_value", "箱体上轨"),
+        display_names.get("avg_amount_20d", "20日均额(亿)"),
     ]
-    numeric_cols_display = [c for c in numeric_cols_display if c in display_df_renamed.columns]
+    numeric_cols = [c for c in numeric_cols if c in display_df.columns]
 
-    display_df_renamed_reset = display_df_renamed.reset_index(drop=True)
-
-    col_remove, col_spacer = st.columns([1, 5])
-    with col_remove:
-        remove_code = st.text_input("移除股票代码", placeholder="如 000001.SZ", key="watchlist_remove_input")
-
-    if remove_code:
-        if st.button("移除", key="watchlist_remove_btn"):
-            remove_from_watchlist(session, remove_code.strip())
-            st.success(f"已移除 {remove_code.strip()}")
-            st.rerun()
-
+    is_batch_mode = st.session_state.get("watchlist_batch_mode", False)
     event = st.dataframe(
-        colorize_numeric_columns_simple(display_df_renamed_reset, numeric_cols_display),
+        colorize_numeric_columns_simple(display_df.reset_index(drop=True), numeric_cols),
         use_container_width=True,
         hide_index=True,
         on_select="rerun",
-        selection_mode="single-row",
+        selection_mode="multi-row" if is_batch_mode else "single-row",
         height=500,
     )
 
+    # 批量删除模式：多选后显示已选列表 + 批量删除按钮
+    if is_batch_mode:
+        if event.selection and event.selection.rows:
+            selected_rows = event.selection.rows
+            selected_df = df.iloc[selected_rows][["ts_code", "stock_name"]]
+            st.markdown(f"**已选 {len(selected_rows)} 只：**")
+            st.dataframe(
+                selected_df.reset_index(drop=True),
+                use_container_width=True,
+                hide_index=True,
+                height=min(200, 35 * len(selected_rows) + 38),
+            )
+            col_batch_del, _ = st.columns([1, 5])
+            with col_batch_del:
+                if st.button("🗑️ 批量删除选中", key="watchlist_batch_delete_btn", type="primary"):
+                    ts_codes_to_delete = df.iloc[selected_rows]["ts_code"].tolist()
+                    try:
+                        deleted = remove_batch_from_watchlist(session, ts_codes_to_delete)
+                        st.success(f"已批量删除 {deleted} 只自选股及其缓存")
+                        st.session_state["watchlist_batch_mode"] = False  # 退出批量删除模式
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"批量删除失败：{e}")
+        else:
+            st.info("请勾选要删除的自选股（可多选）")
+        return  # 批量删除模式下不显示单选详情
+
+    # 正常模式：选中行后显示删除按钮 + 详情
     if event.selection and event.selection.rows:
         selected_idx = event.selection.rows[0]
-        selected_row = display_df.iloc[selected_idx]
+        selected_row = df.iloc[selected_idx]
         ts_code = selected_row["ts_code"]
         stock_name = selected_row.get("stock_name", ts_code)
 
+        col_delete, col_spacer = st.columns([1, 5])
+        with col_delete:
+            if st.button(f"🗑️ 删除 {stock_name}", key=f"watchlist_del_{ts_code}"):
+                remove_from_watchlist(session, ts_code)
+                st.success(f"已删除 {stock_name} ({ts_code})")
+                st.rerun()
+
         st.markdown("---")
         st.markdown(f"### 📊 {stock_name} ({ts_code}) 详情")
-
         ts_code_full = _format_ts_code(ts_code)
         _render_stock_detail(session, ts_code_full, stock_name, key_prefix=f"wl_{ts_code}_")
 
 
-def render_backtest_page():
-    """渲染回测评估页面：净值曲线、交易明细、每日持仓、决策审计"""
-    data = _load_backtest_data()
 
-    eq_df = data["equity_curve"]
-    trade_df = data["trade_report"]
-    holdings_df = data["daily_holdings"]
-    audit_df = data["daily_audit"]
+# ==================== ATR GBDT 过滤器质量评估 ====================
+
+ATR_FQ_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "atr_experiment", "output", "filter_quality",
+)
+
+
+@st.cache_data(ttl=300)
+def _load_atr_filter_quality_data() -> dict:
+    """加载 ATR GBDT 过滤器质量评估 CSV"""
+    result = {}
+    for key, fname in [("daily_detail", "atr_daily_detail.csv"), ("summary", "atr_summary.csv")]:
+        fpath = os.path.join(ATR_FQ_DIR, fname)
+        if os.path.exists(fpath):
+            try:
+                df = pd.read_csv(fpath)
+                for col in ["date"]:
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col])
+                result[key] = df
+            except Exception:
+                result[key] = pd.DataFrame()
+        else:
+            result[key] = pd.DataFrame()
+    return result
+
+
+# 场景显示名称映射
+_SCENARIO_LABELS = {
+    ("baseline", "all"): "全候选池",
+    ("regression", "top5"): "回归Top5",
+    ("regression", "top10"): "回归Top10",
+    ("classification", "top5"): "分类Top5",
+    ("classification", "top10"): "分类Top10",
+    ("combined", "top5"): "综合Top5",
+    ("combined", "top10"): "综合Top10",
+    ("overlap", "top5"): "交集Top5",
+    ("overlap", "top10"): "交集Top10",
+}
+
+# 场景颜色映射
+_SCENARIO_COLORS = {
+    ("baseline", "all"): "#9E9E9E",
+    ("regression", "top5"): "#FF6B6B",
+    ("regression", "top10"): "#FF8A80",
+    ("classification", "top5"): "#42A5F5",
+    ("classification", "top10"): "#82B1FF",
+    ("combined", "top5"): "#66BB6A",
+    ("combined", "top10"): "#A5D6A7",
+    ("overlap", "top5"): "#FFA726",
+    ("overlap", "top10"): "#FFD54F",
+}
+
+
+def _render_atr_fq_tab1(daily_detail: pd.DataFrame, summary: pd.DataFrame):
+    """Tab1: 模型对比总览"""
+    if summary.empty:
+        st.info("暂无评估数据")
+        return
+
+    horizon = st.selectbox("选择持有期", [3, 5, 10, 20], index=1, key="atr_fq_tab1_horizon")
+    h_summary = summary[summary["horizon"] == horizon].copy()
+
+    if h_summary.empty:
+        st.info(f"无 {horizon} 日持有期数据")
+        return
+
+    # 汇总表
+    st.subheader(f"模型×场景 {horizon}日指标汇总")
+
+    display_rows = []
+    model_order = {"baseline": 0, "regression": 1, "classification": 2, "combined": 3, "overlap": 4}
+    h_summary["_order"] = h_summary["model"].map(model_order)
+    h_summary = h_summary.sort_values(["_order", "scenario"])
+
+    for _, row in h_summary.iterrows():
+        label = _SCENARIO_LABELS.get((row["model"], row["scenario"]), f"{row['model']}_{row['scenario']}")
+        display_rows.append({
+            "场景": label,
+            "平均收益": f"{row['avg_return']:.2%}" if pd.notna(row.get('avg_return')) else "-",
+            "胜率": f"{row['win_rate']:.1%}" if pd.notna(row.get('win_rate')) else "-",
+            "平均MFE": f"{row['avg_mfe']:.2%}" if pd.notna(row.get('avg_mfe')) else "-",
+            "平均MAE": f"{row['avg_mae']:.2%}" if pd.notna(row.get('avg_mae')) else "-",
+            "评估天数": int(row.get('n_days', 0)),
+            "均样本数": f"{row.get('n_avg', 0):.1f}",
+        })
+
+    st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+
+    # 对比分析：各模型 vs baseline
+    st.markdown("---")
+    st.subheader("各模型 vs 全候选池基线（收益差值）")
+
+    baseline_ret = h_summary[h_summary["model"] == "baseline"]["avg_return"].values
+    baseline_val = baseline_ret[0] if len(baseline_ret) > 0 else 0
+
+    diff_rows = []
+    for _, row in h_summary[h_summary["model"] != "baseline"].iterrows():
+        label = _SCENARIO_LABELS.get((row["model"], row["scenario"]), f"{row['model']}_{row['scenario']}")
+        diff = (row.get("avg_return", 0) - baseline_val) * 100
+        diff_rows.append({
+            "场景": label,
+            f"{horizon}日收益": f"{row['avg_return']:.2%}" if pd.notna(row.get('avg_return')) else "-",
+            "基线收益": f"{baseline_val:.2%}",
+            "超额收益": f"{diff:+.2f}%",
+        })
+
+    if diff_rows:
+        st.dataframe(pd.DataFrame(diff_rows), use_container_width=True, hide_index=True)
+
+
+def _render_atr_fq_tab2(daily_detail: pd.DataFrame):
+    """Tab2: TopK收益趋势"""
+    if daily_detail.empty:
+        st.info("暂无评估数据")
+        return
+
+    horizon = st.selectbox("选择持有期", [3, 5, 10, 20], index=1, key="atr_fq_tab2_horizon")
+    h_df = daily_detail[daily_detail["horizon"] == horizon].copy()
+
+    if h_df.empty:
+        st.info(f"无 {horizon} 日持有期数据")
+        return
+
+    # 收益趋势
+    st.subheader(f"各模型场景 {horizon}日平均收益趋势")
+
+    key_scenarios = [
+        ("baseline", "all"),
+        ("regression", "top5"),
+        ("classification", "top5"),
+        ("combined", "top5"),
+        ("overlap", "top5"),
+    ]
+
+    chart_data = h_df[h_df.apply(
+        lambda r: (r["model"], r["scenario"]) in key_scenarios, axis=1
+    )][["date", "model", "scenario", "avg_return"]].copy()
+    chart_data["label"] = chart_data.apply(
+        lambda r: _SCENARIO_LABELS.get((r["model"], r["scenario"]), r["model"]), axis=1
+    )
+    chart_data = chart_data[chart_data["avg_return"].notna()]
+
+    if not chart_data.empty:
+        base = alt.Chart(chart_data).encode(x=alt.X("date:T", title="日期"))
+        chart = None
+        for scenario_key in key_scenarios:
+            label = _SCENARIO_LABELS.get(scenario_key, str(scenario_key))
+            color = _SCENARIO_COLORS.get(scenario_key, "#999999")
+            s_data = base.transform_filter(alt.datum.label == label)
+            line = s_data.mark_line(color=color, strokeWidth=2).encode(
+                y=alt.Y("avg_return:Q", title=f"{horizon}日平均收益"),
+                tooltip=[alt.Tooltip("date:T", title="日期"),
+                         alt.Tooltip("avg_return:Q", title=label, format=".2%")],
+            )
+            chart = line if chart is None else chart + line
+
+        zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+            strokeDash=[4, 4], color="white", opacity=0.3
+        ).encode(y="y:Q")
+
+        st.altair_chart((chart + zero_line).properties(height=400, width="container"), use_container_width=True)
+
+    # 胜率趋势
+    st.markdown("---")
+    st.subheader(f"各模型场景 {horizon}日胜率趋势")
+
+    win_data = h_df[h_df.apply(
+        lambda r: (r["model"], r["scenario"]) in key_scenarios, axis=1
+    )][["date", "model", "scenario", "win_rate"]].copy()
+    win_data["label"] = win_data.apply(
+        lambda r: _SCENARIO_LABELS.get((r["model"], r["scenario"]), r["model"]), axis=1
+    )
+    win_data = win_data[win_data["win_rate"].notna()]
+
+    if not win_data.empty:
+        base2 = alt.Chart(win_data).encode(x=alt.X("date:T", title="日期"))
+        chart2 = None
+        for scenario_key in key_scenarios:
+            label = _SCENARIO_LABELS.get(scenario_key, str(scenario_key))
+            color = _SCENARIO_COLORS.get(scenario_key, "#999999")
+            s_data = base2.transform_filter(alt.datum.label == label)
+            line = s_data.mark_line(color=color, strokeWidth=2).encode(
+                y=alt.Y("win_rate:Q", title=f"{horizon}日胜率", axis=alt.Axis(format="%")),
+            )
+            chart2 = line if chart2 is None else chart2 + line
+        st.altair_chart(chart2.properties(height=350, width="container"), use_container_width=True)
+
+
+def _render_atr_fq_tab3(daily_detail: pd.DataFrame, summary: pd.DataFrame):
+    """Tab3: 模型对比柱状图"""
+    if summary.empty:
+        st.info("暂无评估数据")
+        return
+
+    horizon = st.selectbox("选择持有期", [3, 5, 10, 20], index=1, key="atr_fq_tab3_horizon")
+    h_summary = summary[summary["horizon"] == horizon].copy()
+
+    if h_summary.empty:
+        st.info(f"无 {horizon} 日持有期数据")
+        return
+
+    # 收益/MFE/MAE 分组柱状图
+    st.subheader(f"各模型场景 {horizon}日收益/MFE/MAE 对比")
+
+    bar_data = []
+    for _, row in h_summary.iterrows():
+        label = _SCENARIO_LABELS.get((row["model"], row["scenario"]), f"{row['model']}_{row['scenario']}")
+        if pd.notna(row.get("avg_return")):
+            bar_data.append({"场景": label, "指标": "平均收益", "值": row["avg_return"]})
+        if pd.notna(row.get("avg_mfe")):
+            bar_data.append({"场景": label, "指标": "平均MFE", "值": row["avg_mfe"]})
+        if pd.notna(row.get("avg_mae")):
+            bar_data.append({"场景": label, "指标": "平均MAE", "值": row["avg_mae"]})
+
+    if bar_data:
+        bar_df = pd.DataFrame(bar_data)
+        chart = alt.Chart(bar_df).mark_bar().encode(
+            x=alt.X("场景:N", title=""),
+            y=alt.Y("值:Q", title="收益率", axis=alt.Axis(format="%")),
+            color=alt.Color("指标:N", title="指标",
+                            scale=alt.Scale(range=["#4CAF50", "#2196F3", "#F44336"])),
+            xOffset="指标:N",
+            tooltip=[alt.Tooltip("场景:N", title="场景"),
+                     alt.Tooltip("指标:N", title="指标"),
+                     alt.Tooltip("值:Q", title="值", format=".2%")],
+        ).properties(height=400, width="container")
+        st.altair_chart(chart, use_container_width=True)
+
+    # 胜率柱状图
+    st.markdown("---")
+    st.subheader(f"各模型场景 {horizon}日胜率对比")
+
+    win_data = h_summary[h_summary["win_rate"].notna()].copy()
+    if not win_data.empty:
+        win_data["场景"] = win_data.apply(
+            lambda r: _SCENARIO_LABELS.get((r["model"], r["scenario"]), f"{r['model']}_{r['scenario']}"), axis=1
+        )
+        chart = alt.Chart(win_data).mark_bar(color="#42A5F5").encode(
+            x=alt.X("场景:N", title=""),
+            y=alt.Y("win_rate:Q", title="胜率", axis=alt.Axis(format="%")),
+            tooltip=[alt.Tooltip("场景:N", title="场景"),
+                     alt.Tooltip("win_rate:Q", title="胜率", format=".1%")],
+        ).properties(height=350, width="container")
+        st.altair_chart(chart, use_container_width=True)
+
+
+def _render_atr_fq_tab4(daily_detail: pd.DataFrame, summary: pd.DataFrame):
+    """Tab4: 交集分析"""
+    if daily_detail.empty:
+        st.info("暂无评估数据")
+        return
+
+    horizon = st.selectbox("选择持有期", [3, 5, 10, 20], index=1, key="atr_fq_tab4_horizon")
+    h_df = daily_detail[daily_detail["horizon"] == horizon].copy()
+
+    if h_df.empty:
+        st.info(f"无 {horizon} 日持有期数据")
+        return
+
+    # 交集 vs 单模型收益趋势
+    st.subheader(f"交集 vs 单模型 {horizon}日收益趋势")
+
+    compare_scenarios = [
+        ("baseline", "all"),
+        ("regression", "top5"),
+        ("classification", "top5"),
+        ("overlap", "top5"),
+    ]
+
+    trend_data = h_df[h_df.apply(
+        lambda r: (r["model"], r["scenario"]) in compare_scenarios, axis=1
+    )][["date", "model", "scenario", "avg_return"]].copy()
+    trend_data["label"] = trend_data.apply(
+        lambda r: _SCENARIO_LABELS.get((r["model"], r["scenario"]), r["model"]), axis=1
+    )
+    trend_data = trend_data[trend_data["avg_return"].notna()]
+
+    if not trend_data.empty:
+        base = alt.Chart(trend_data).encode(x=alt.X("date:T", title="日期"))
+        chart = None
+        for scenario_key in compare_scenarios:
+            label = _SCENARIO_LABELS.get(scenario_key, str(scenario_key))
+            color = _SCENARIO_COLORS.get(scenario_key, "#999999")
+            s_data = base.transform_filter(alt.datum.label == label)
+            line = s_data.mark_line(color=color, strokeWidth=2).encode(
+                y=alt.Y("avg_return:Q", title=f"{horizon}日平均收益"),
+                tooltip=[alt.Tooltip("date:T", title="日期"),
+                         alt.Tooltip("avg_return:Q", title=label, format=".2%")],
+            )
+            chart = line if chart is None else chart + line
+
+        zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+            strokeDash=[4, 4], color="white", opacity=0.3
+        ).encode(y="y:Q")
+
+        st.altair_chart((chart + zero_line).properties(height=400, width="container"), use_container_width=True)
+
+    # 交集 vs 单模型胜率趋势
+    st.markdown("---")
+    st.subheader(f"交集 vs 单模型 {horizon}日胜率趋势")
+
+    win_data = h_df[h_df.apply(
+        lambda r: (r["model"], r["scenario"]) in compare_scenarios, axis=1
+    )][["date", "model", "scenario", "win_rate"]].copy()
+    win_data["label"] = win_data.apply(
+        lambda r: _SCENARIO_LABELS.get((r["model"], r["scenario"]), r["model"]), axis=1
+    )
+    win_data = win_data[win_data["win_rate"].notna()]
+
+    if not win_data.empty:
+        base2 = alt.Chart(win_data).encode(x=alt.X("date:T", title="日期"))
+        chart2 = None
+        for scenario_key in compare_scenarios:
+            label = _SCENARIO_LABELS.get(scenario_key, str(scenario_key))
+            color = _SCENARIO_COLORS.get(scenario_key, "#999999")
+            s_data = base2.transform_filter(alt.datum.label == label)
+            line = s_data.mark_line(color=color, strokeWidth=2).encode(
+                y=alt.Y("win_rate:Q", title=f"{horizon}日胜率", axis=alt.Axis(format="%")),
+            )
+            chart2 = line if chart2 is None else chart2 + line
+        st.altair_chart(chart2.properties(height=350, width="container"), use_container_width=True)
+
+    # 交集统计表
+    st.markdown("---")
+    st.subheader("交集统计")
+
+    h_summary = summary[summary["horizon"] == horizon] if not summary.empty else pd.DataFrame()
+    overlap_rows = []
+    for k in [5, 10]:
+        sub = h_summary[(h_summary["model"] == "overlap") & (h_summary["scenario"] == f"top{k}")]
+        if not sub.empty:
+            row = sub.iloc[0]
+            overlap_rows.append({
+                "场景": f"交集Top{k}",
+                f"{horizon}日收益": f"{row['avg_return']:.2%}" if pd.notna(row.get('avg_return')) else "-",
+                "胜率": f"{row['win_rate']:.1%}" if pd.notna(row.get('win_rate')) else "-",
+                "平均MFE": f"{row['avg_mfe']:.2%}" if pd.notna(row.get('avg_mfe')) else "-",
+                "平均MAE": f"{row['avg_mae']:.2%}" if pd.notna(row.get('avg_mae')) else "-",
+                "评估天数": int(row.get('n_days', 0)),
+                "均样本数": f"{row.get('n_avg', 0):.1f}",
+            })
+
+    if overlap_rows:
+        st.dataframe(pd.DataFrame(overlap_rows), use_container_width=True, hide_index=True)
+
+
+def render_filter_quality_page():
+    """渲染 ATR GBDT 过滤器质量评估页面"""
+    data = _load_atr_filter_quality_data()
+    daily_detail = data["daily_detail"]
+    summary = data["summary"]
 
     if all(df.empty for df in data.values()):
-        st.warning("暂无回测数据，请先运行回测引擎生成产物")
+        st.warning("暂无 ATR GBDT 过滤器质量评估数据，请先运行评估引擎:\n"
+                   "`python atr_experiment/atr_filter_quality_evaluator.py "
+                   "--start-date 2026-01-05 --end-date 2026-05-25`")
         return
 
-    n_trades = len(trade_df)
-    n_holdings_dates = holdings_df["date"].nunique() if not holdings_df.empty and "date" in holdings_df.columns else 0
-    n_audit_dates = audit_df["decision_date"].nunique() if not audit_df.empty and "decision_date" in audit_df.columns else 0
-    s1, s2, s3 = st.columns(3)
-    with s1:
-        st.metric("交易笔数", f"{n_trades}")
-    with s2:
-        st.metric("持仓天数", f"{n_holdings_dates}")
-    with s3:
-        st.metric("决策天数", f"{n_audit_dates}")
+    # 顶部 KPI 指标卡
+    if not summary.empty:
+        c1, c2, c3, c4 = st.columns(4)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 净值曲线", "💰 交易明细", "📋 每日持仓", "🔍 决策审计"])
+        with c1:
+            pool_n = 0
+            if not daily_detail.empty:
+                pool_n = daily_detail.loc[
+                    (daily_detail["model"] == "baseline") & (daily_detail["horizon"] == 10), "n"
+                ].mean()
+            st.metric("候选池日均数量", f"{pool_n:.0f}" if pool_n > 0 else "-")
+
+        with c2:
+            excess = None
+            if not summary.empty:
+                overlap_5 = summary[(summary["model"] == "overlap") & (summary["scenario"] == "top5") & (summary["horizon"] == 10)]
+                baseline_10 = summary[(summary["model"] == "baseline") & (summary["horizon"] == 10)]
+                if not overlap_5.empty and not baseline_10.empty:
+                    excess = overlap_5.iloc[0]["avg_return"] - baseline_10.iloc[0]["avg_return"]
+            st.metric("交集Top5 10日超额收益", f"{excess:.2%}" if excess is not None else "-")
+
+        with c3:
+            win = None
+            if not overlap_5.empty:
+                win = overlap_5.iloc[0]["win_rate"]
+            st.metric("交集Top5 10日胜率", f"{win:.1%}" if win is not None else "-")
+
+        with c4:
+            mae_val = None
+            if not overlap_5.empty:
+                mae_val = overlap_5.iloc[0].get("avg_mae")
+            st.metric("交集Top5 10日平均MAE", f"{mae_val:.2%}" if mae_val is not None and pd.notna(mae_val) else "-")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 模型对比总览", "📈 TopK收益趋势", "📉 模型对比柱状图", "🔗 交集分析"])
 
     with tab1:
-        _render_backtest_tab1(eq_df)
+        _render_atr_fq_tab1(daily_detail, summary)
     with tab2:
-        _render_backtest_tab2(trade_df)
+        _render_atr_fq_tab2(daily_detail)
     with tab3:
-        _render_backtest_tab3(holdings_df)
+        _render_atr_fq_tab3(daily_detail, summary)
     with tab4:
-        _render_backtest_tab4(audit_df)
-
-
-def render_positions_page(session, sidebar):
-    """渲染实盘持仓页面：展示 QMT 持仓列表 + 汇总 + 个股详情展开。"""
-    st.header("📋 实盘持仓")
-
-    positions, mode = _fetch_qmt_positions()
-
-    if mode == "mock":
-        st.warning("⚠️ QMT 连接失败，显示模拟数据")
-    elif mode == "error":
-        st.error("❌ 无法获取持仓数据（QMT 连接失败且 Mock 不可用）")
-        return
-    elif mode == "live":
-        st.success(f"✅ 已连接 QMT 实盘")
-
-    if not positions:
-        st.info("当前无持仓")
-        return
-
-    rows = []
-    for p in positions:
-        rows.append({
-            "股票代码": p.stock_code,
-            "名称": p.instrument_name,
-            "持仓量": p.volume,
-            "可用量": p.can_use_volume,
-            "均价": p.avg_price,
-            "最新价": p.last_price,
-            "市值": p.market_value,
-            "盈亏率": p.profit_rate,
-        })
-    df = pd.DataFrame(rows)
-
-    ts_codes = [p.stock_code for p in positions]
-    pred_df, pred_stats = _load_latest_predictions(session, ts_codes)
-
-    # 显示模型评分日期分布
-    if pred_df.empty:
-        st.warning("⚠️ 所有持仓股均未找到模型评分数据（盘后任务可能未执行或数据格式不匹配）")
-    else:
-        dist = pred_stats.get("date_distribution", {})
-        if dist:
-            latest_date = list(dist.keys())[0]
-            latest_count = dist[latest_date]
-            total_found = pred_stats["found"]
-            if len(dist) == 1 and latest_count == total_found:
-                st.caption(f"📊 模型评分日期: {latest_date}（全部 {total_found} 只）")
-            else:
-                dist_parts = [f"{d}: {c}只" for d, c in dist.items()]
-                st.caption(f"📊 模型评分日期分布: {', '.join(dist_parts)}")
-
-        if pred_stats["missing"] > 0:
-            missing_str = ", ".join(pred_stats["missing_codes"])
-            st.warning(f"⚠️ {pred_stats['missing']} 只持仓股未找到预测数据: {missing_str}")
-
-    if not pred_df.empty:
-        df = df.merge(pred_df, left_on="股票代码", right_on="ts_code", how="left")
-        df = df.drop(columns=["ts_code"], errors="ignore")
-    for col_name in ["pred_sell_reg", "pred_sell_cls", "pred_buy_reg", "pred_buy_cls", "score"]:
-        if col_name not in df.columns:
-            df[col_name] = np.nan
-
-    # 按市值降序排序，同步重排 positions 保持索引一致
-    df["__orig_idx"] = range(len(df))
-    df = df.sort_values("市值", ascending=False).reset_index(drop=True)
-    positions = [positions[i] for i in df["__orig_idx"]]
-    df = df.drop(columns=["__orig_idx"])
-
-    total_mv = df["市值"].sum()
-    total_cost = (df["市值"] / (1 + df["盈亏率"])).sum()
-    total_pnl = total_mv - total_cost
-    total_pnl_rate = total_pnl / total_cost if total_cost > 0 else 0
-
-    col1, col2, col3, col_refresh = st.columns([1, 1, 1, 0.5])
-    with col1:
-        st.metric("总市值", f"¥{total_mv:,.0f}")
-    with col2:
-        st.metric("总盈亏", f"¥{total_pnl:,.0f}",
-                   delta=f"{total_pnl_rate:.2%}",
-                   delta_color="normal" if total_pnl >= 0 else "inverse")
-    with col3:
-        st.metric("持仓数", f"{len(positions)} 只")
-    with col_refresh:
-        if st.button("🔄 刷新", key="pos_refresh_btn"):
-            st.rerun()
-
-    st.markdown("---")
-
-    df_display = df.copy()
-
-    score_col_map = {
-        "pred_sell_reg": "卖出回归",
-        "pred_sell_cls": "卖出分类",
-        "pred_buy_reg": "买入回归",
-        "pred_buy_cls": "买入分类",
-    }
-    for src, dst in score_col_map.items():
-        df_display[dst] = df_display[src]
-
-    display_cols = ["股票代码", "名称", "持仓量", "可用量", "均价", "最新价", "市值", "盈亏率",
-                    "卖出回归", "卖出分类", "买入回归", "买入分类"]
-    df_display = df_display[display_cols]
-
-    numeric_cols = ["卖出回归", "卖出分类", "买入回归", "买入分类", "盈亏率"]
-
-    df_display_reset = df_display.reset_index(drop=True)
-    styled = colorize_numeric_columns_simple(df_display_reset, numeric_cols)
-
-    format_dict = {}
-    for col in ["盈亏率", "卖出回归", "卖出分类", "买入回归", "买入分类"]:
-        format_dict[col] = lambda x: f"{x:.2%}" if pd.notna(x) and x is not None else "-"
-    for col in ["均价", "最新价"]:
-        format_dict[col] = lambda x: f"{x:.2f}" if pd.notna(x) and x is not None else "-"
-    format_dict["市值"] = lambda x: f"¥{x:,.0f}" if pd.notna(x) and x is not None else "-"
-    format_dict["持仓量"] = lambda x: f"{x:,}" if pd.notna(x) and x is not None else "-"
-    format_dict["可用量"] = lambda x: f"{x:,}" if pd.notna(x) and x is not None else "-"
-    styled = styled.format(format_dict)
-
-    event = st.dataframe(
-        styled,
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-    )
-
-    st.markdown("---")
-
-    if event.selection and event.selection.rows:
-        selected_idx = event.selection.rows[0]
-        p = positions[selected_idx]
-        ts_code = p.stock_code
-        stock_name = p.instrument_name
-
-        st.subheader(f"📊 {stock_name} ({ts_code}) 详情")
-
-        col_info1, col_info2, col_info3, col_info4 = st.columns(4)
-        with col_info1:
-            st.metric("持仓量", f"{p.volume:,}")
-        with col_info2:
-            st.metric("可用量", f"{p.can_use_volume:,}")
-        with col_info3:
-            st.metric("均价", f"¥{p.avg_price:.2f}")
-        with col_info4:
-            st.metric("盈亏率", f"{p.profit_rate:.2%}",
-                       delta=f"¥{p.market_value - p.avg_price * p.volume:,.0f}",
-                       delta_color="normal" if p.profit_rate >= 0 else "inverse")
-
-        ts_code_full = _format_ts_code(ts_code)
-        _render_stock_detail(session, ts_code_full, stock_name, key_prefix=f"pos_{ts_code}_")
+        _render_atr_fq_tab4(daily_detail, summary)
 
 
 def render_financial_score_overview_page(session):
@@ -4460,7 +5374,7 @@ def main():
 
         with st.sidebar:
             st.header("📊 财务评分分析")
-            page = st.radio("页面", ["个股分析", "自选股", "实盘持仓", "Stop-Loss选股结果", "回测评估", "财务评分总览", "股东画像"], index=0)
+            page = st.radio("页面", ["个股分析", "自选股", "ATR选股", "ATR质量评估", "财务评分总览", "股东画像"], index=0)
 
         if page == "个股分析":
             if stock_list.empty:
@@ -4502,12 +5416,10 @@ def main():
                     _render_stock_page(session, matched_stocks, selected_option)
         elif page == "自选股":
             render_watchlist_page(session, st.sidebar)
-        elif page == "实盘持仓":
-            render_positions_page(session, st.sidebar)
-        elif page == "Stop-Loss选股结果":
-            render_stop_loss_selection_page(session, st.sidebar)
-        elif page == "回测评估":
-            render_backtest_page()
+        elif page == "ATR选股":
+            render_atr_selection_page(session, st.sidebar)
+        elif page == "ATR质量评估":
+            render_filter_quality_page()
         elif page == "财务评分总览":
             render_financial_score_overview_page(session)
         elif page == "股东画像":

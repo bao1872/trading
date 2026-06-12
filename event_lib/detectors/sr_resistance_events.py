@@ -60,6 +60,18 @@ def _detect_break_resistance_from_mid_zone(factors_df: pd.DataFrame) -> pd.Serie
     return (cross & (sr_pos <= 0.50)).astype(int)
 
 
+def _detect_break_strong_resistance_cluster(factors_df: pd.DataFrame) -> pd.Series:
+    return factors_df["evt_break_strong_resistance_cluster"].fillna(False).astype(int)
+
+
+def _detect_wick_break_resistance_cluster_fail(factors_df: pd.DataFrame) -> pd.Series:
+    return factors_df["evt_wick_break_resistance_cluster_fail"].fillna(False).astype(int)
+
+
+def _detect_close_above_resistance_cluster_upper(factors_df: pd.DataFrame) -> pd.Series:
+    return factors_df["evt_close_above_resistance_cluster_upper"].fillna(False).astype(int)
+
+
 register_event(
     name="evt_high_break_recent_resistance",
     category="SR压力事件",
@@ -138,6 +150,36 @@ register_event(
     description="中位突破压力",
     direction="positive",
     is_core=False,
+)
+
+register_event(
+    name="evt_break_strong_resistance_cluster",
+    category="SR压力事件",
+    detect_func=_detect_break_strong_resistance_cluster,
+    required_factors=["evt_break_strong_resistance_cluster"],
+    description="突破强压力簇",
+    direction="positive",
+    is_core=True,
+)
+
+register_event(
+    name="evt_wick_break_resistance_cluster_fail",
+    category="SR压力事件",
+    detect_func=_detect_wick_break_resistance_cluster_fail,
+    required_factors=["evt_wick_break_resistance_cluster_fail"],
+    description="强压力簇影线突破失败",
+    direction="negative",
+    is_core=True,
+)
+
+register_event(
+    name="evt_close_above_resistance_cluster_upper",
+    category="SR压力事件",
+    detect_func=_detect_close_above_resistance_cluster_upper,
+    required_factors=["evt_close_above_resistance_cluster_upper"],
+    description="收盘站上压力簇上界",
+    direction="positive",
+    is_core=True,
 )
 
 

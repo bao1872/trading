@@ -78,6 +78,7 @@ from features.bbmacd_viewer import compute_bbmacd
 from features.merged_dsa_atr_rope_bb_factors import compute_dsa, DSAConfig
 # 使用 PAVP 指标计算 VAH/VAL/POC（与vis页面一致）
 from features.pavp_tv_fixed_params_factors import compute_pavp
+from datasource.adj_factor import apply_adj_factor
 
 try:
     from config import DATABASE_URL
@@ -277,6 +278,8 @@ def get_kline_data_db(ts_code: str, freq: str, bars: int = 120, end_date: Option
     df = pd.read_sql(text(sql), engine, params=params)
     if not df.empty:
         df = df.sort_values('bar_time').set_index('bar_time')
+        suffix = '.SH' if symbol.startswith(('6', '9')) else '.SZ'
+        df = apply_adj_factor(df, f'{symbol}{suffix}', freq=freq)
     return df
 
 

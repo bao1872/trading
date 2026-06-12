@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-event_lib/detectors/stage_failure_events.py - 失败/风险事件检测
+event_lib/detectors/stage_failure_events.py - 风险破位事件检测
 
-Purpose: 基于阶段位置/成熟度因子列检测破位/出货/失败过滤事件。
+Purpose: 基于阶段位置/趋势/动量因子列检测破位不收回、趋势下行、弱反弹等风险事件。
 
 Registered Events:
-    - evt_fail_break_lower_no_reclaim: 跌破下沿不收回
-    - evt_fail_trend_down_confirm: 趋势确认向下
-    - evt_fail_weak_rebound: 反弹缩量不过中枢
-    - evt_fail_distribution_risk: 出货/派发风险高
-    - evt_stage_failure: 阶段假设失败
+    - evt_lower_break_no_reclaim: 跌破下沿不收回
+    - evt_trend_down_confirm: 趋势确认向下
+    - evt_weak_rebound: 反弹缩量不过中枢
+    - evt_distribution_risk: 高位放量滞涨
 """
 from event_lib.registry import register_event
 import pandas as pd
 
 
-def _detect_fail_break_lower_no_reclaim(factors_df: pd.DataFrame) -> pd.Series:
+def _detect_lower_break_no_reclaim(factors_df: pd.DataFrame) -> pd.Series:
     if "close" not in factors_df.columns or "stage_lower_boundary" not in factors_df.columns:
         return pd.Series(0, index=factors_df.index)
     close = factors_df["close"]
@@ -25,7 +24,7 @@ def _detect_fail_break_lower_no_reclaim(factors_df: pd.DataFrame) -> pd.Series:
     return (prev_below & curr_still_below).astype(int)
 
 
-def _detect_fail_trend_down_confirm(factors_df: pd.DataFrame) -> pd.Series:
+def _detect_trend_down_confirm(factors_df: pd.DataFrame) -> pd.Series:
     required = ["dsa_dir", "dsa_vwap_slope_atr_5", "bbmacd_sign"]
     if not all(c in factors_df.columns for c in required):
         return pd.Series(0, index=factors_df.index)
@@ -35,7 +34,7 @@ def _detect_fail_trend_down_confirm(factors_df: pd.DataFrame) -> pd.Series:
     return (dsa_down & slope_neg & bb_neg).astype(int)
 
 
-def _detect_fail_weak_rebound(factors_df: pd.DataFrame) -> pd.Series:
+def _detect_weak_rebound(factors_df: pd.DataFrame) -> pd.Series:
     required = ["close", "stage_mid_boundary"]
     if not all(c in factors_df.columns for c in required):
         return pd.Series(0, index=factors_df.index)
@@ -48,7 +47,7 @@ def _detect_fail_weak_rebound(factors_df: pd.DataFrame) -> pd.Series:
     return (below_mid & vol_shrink).astype(int)
 
 
-def _detect_fail_distribution_risk(factors_df: pd.DataFrame) -> pd.Series:
+def _detect_distribution_risk(factors_df: pd.DataFrame) -> pd.Series:
     required = ["dsa_pivot_pos_01", "vol_zscore_20", "close"]
     if not all(c in factors_df.columns for c in required):
         return pd.Series(0, index=factors_df.index)
@@ -58,16 +57,10 @@ def _detect_fail_distribution_risk(factors_df: pd.DataFrame) -> pd.Series:
     return (high_pos & vol_spike & price_stall).astype(int)
 
 
-def _detect_stage_failure(factors_df: pd.DataFrame) -> pd.Series:
-    if "failure_score" not in factors_df.columns:
-        return pd.Series(0, index=factors_df.index)
-    return (factors_df["failure_score"] > 0.6).astype(int)
-
-
 register_event(
-    name="evt_fail_break_lower_no_reclaim",
-    category="失败事件",
-    detect_func=_detect_fail_break_lower_no_reclaim,
+    name="evt_lower_break_no_reclaim",
+    category="风险破位事件",
+    detect_func=_detect_lower_break_no_reclaim,
     required_factors=["close", "stage_lower_boundary"],
     description="跌破下沿不收回（连续2 bar收盘低于下沿）",
     direction="negative",
@@ -75,9 +68,9 @@ register_event(
 )
 
 register_event(
-    name="evt_fail_trend_down_confirm",
-    category="失败事件",
-    detect_func=_detect_fail_trend_down_confirm,
+    name="evt_trend_down_confirm",
+    category="风险破位事件",
+    detect_func=_detect_trend_down_confirm,
     required_factors=["dsa_dir", "dsa_vwap_slope_atr_5", "bbmacd_sign"],
     description="趋势确认向下（DSA下行+斜率负+BBMACD负）",
     direction="negative",
@@ -85,9 +78,9 @@ register_event(
 )
 
 register_event(
-    name="evt_fail_weak_rebound",
-    category="失败事件",
-    detect_func=_detect_fail_weak_rebound,
+    name="evt_weak_rebound",
+    category="风险破位事件",
+    detect_func=_detect_weak_rebound,
     required_factors=["close", "stage_mid_boundary", "vol_zscore_20"],
     description="反弹缩量不过中枢",
     direction="negative",
@@ -95,21 +88,11 @@ register_event(
 )
 
 register_event(
-    name="evt_fail_distribution_risk",
-    category="失败事件",
-    detect_func=_detect_fail_distribution_risk,
+    name="evt_distribution_risk",
+    category="风险破位事件",
+    detect_func=_detect_distribution_risk,
     required_factors=["dsa_pivot_pos_01", "vol_zscore_20", "close"],
-    description="出货/派发风险高（高位+放量+滞涨）",
+    description="高位放量滞涨",
     direction="negative",
     is_core=False,
-)
-
-register_event(
-    name="evt_stage_failure",
-    category="失败事件",
-    detect_func=_detect_stage_failure,
-    required_factors=["failure_score"],
-    description="阶段假设失败（failure_score > 0.6）",
-    direction="negative",
-    is_core=True,
 )

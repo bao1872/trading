@@ -23,6 +23,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datasource.database import get_session, query_df
+from datasource.adj_factor import apply_adj_factor
 
 
 FREQ_MAP = {
@@ -51,7 +52,8 @@ def load_k_data(
     freq: str = 'd',
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    adj: Optional[str] = None
 ) -> Union[pd.DataFrame, Dict[str, Dict]]:
     """
     加载K线数据
@@ -62,6 +64,7 @@ def load_k_data(
         start_date: 开始日期
         end_date: 结束日期
         limit: 返回记录数限制
+        adj: 复权方式，'qfq' 前复权，None 不复权
 
     Returns:
         单只股票返回 DataFrame，多只股票返回 dict {code: {name, data}}
@@ -95,12 +98,16 @@ def load_k_data(
 
     if ts_code:
         df = df.set_index("bar_time")
+        if adj == 'qfq' and ts_code:
+            df = apply_adj_factor(df, ts_code, freq=db_freq)
         return df
 
     result = {}
     for code, group in df.groupby("ts_code"):
         group = group.set_index("bar_time")
         group = group.sort_index()
+        if adj == 'qfq':
+            group = apply_adj_factor(group, code, freq=db_freq)
         result[code] = {
             "name": code,
             "data": group
@@ -112,7 +119,8 @@ def load_k_data(
 def iter_k_data(
     freq: str = 'd',
     start_date: Optional[str] = None,
-    end_date: Optional[str] = None
+    end_date: Optional[str] = None,
+    adj: Optional[str] = None
 ):
     """
     迭代器方式逐股票加载K线数据（内存友好）
@@ -122,6 +130,7 @@ def iter_k_data(
         freq: 周期 ('daily', 'weekly', 'min60', 'min15')
         start_date: 开始日期
         end_date: 结束日期
+        adj: 复权方式，'qfq' 前复权，None 不复权
 
     Yields:
         (code, name, DataFrame) 元组
@@ -160,6 +169,8 @@ def iter_k_data(
         stock_df = df[df['ts_code'] == code].copy()
         stock_df = stock_df.drop(columns=[c for c in db_columns if c in stock_df.columns], errors="ignore")
         stock_df = stock_df.set_index("bar_time")
+        if adj == 'qfq':
+            stock_df = apply_adj_factor(stock_df, code, freq=db_freq)
         yield code, name_map.get(code, code), stock_df
 
 
@@ -168,7 +179,8 @@ def iter_k_data_with_names(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     name_map: Optional[dict] = None,
-    limit_stocks: Optional[int] = None
+    limit_stocks: Optional[int] = None,
+    adj: Optional[str] = None
 ):
     """
     迭代器方式逐股票加载K线数据（外部传入name_map，避免重复查询）
@@ -180,6 +192,7 @@ def iter_k_data_with_names(
         end_date: 结束日期
         name_map: 股票代码->名称的映射，None则自动从数据库加载
         limit_stocks: 限制股票数量（用于测试），None表示不限制
+        adj: 复权方式，'qfq' 前复权，None 不复权
 
     Yields:
         (code, name, DataFrame) 元组
@@ -233,6 +246,8 @@ def iter_k_data_with_names(
         stock_df = df[df['ts_code'] == code].copy()
         stock_df = stock_df.drop(columns=[c for c in db_columns if c in stock_df.columns], errors="ignore")
         stock_df = stock_df.set_index("bar_time")
+        if adj == 'qfq':
+            stock_df = apply_adj_factor(stock_df, code, freq=db_freq)
         yield code, name_map.get(code, code), stock_df
 
 
@@ -240,7 +255,8 @@ def load_k_data_as_dict(
     freq: str = 'd',
     limit_stocks: Optional[int] = None,
     start_date: Optional[str] = None,
-    end_date: Optional[str] = None
+    end_date: Optional[str] = None,
+    adj: Optional[str] = None
 ) -> Dict[str, Dict]:
     """
     加载K线数据为 dict 格式（兼容 backtrader 旧代码）
@@ -250,6 +266,7 @@ def load_k_data_as_dict(
         limit_stocks: 限制股票数量（用于测试）
         start_date: 开始日期
         end_date: 结束日期
+        adj: 复权方式，'qfq' 前复权，None 不复权
 
     Returns:
         dict {code: {'name': str, 'data': DataFrame}}
@@ -303,6 +320,8 @@ def load_k_data_as_dict(
         stock_df = stock_df.drop(columns=[c for c in db_columns if c in stock_df.columns], errors="ignore")
         stock_df = stock_df.set_index("bar_time")
         stock_df = stock_df.sort_index()
+        if adj == 'qfq':
+            stock_df = apply_adj_factor(stock_df, code, freq=db_freq)
         result[code] = {
             "name": name_map.get(code, code),
             "data": stock_df
@@ -315,7 +334,8 @@ def load_all_stock_data(
     freq: str,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    limit_stocks: Optional[int] = None
+    limit_stocks: Optional[int] = None,
+    adj: Optional[str] = None
 ) -> tuple:
     """
     一次性加载所有股票数据到DataFrame（统一实现，SSOT）
@@ -325,6 +345,7 @@ def load_all_stock_data(
         start_date: 开始日期
         end_date: 结束日期
         limit_stocks: 限制股票数量（用于测试），None表示不限制
+        adj: 复权方式，'qfq' 前复权，None 不复权
 
     Returns:
         (DataFrame, name_map) 元组
@@ -334,7 +355,7 @@ def load_all_stock_data(
 
     for code, name, df in iter_k_data_with_names(
         freq=freq, start_date=start_date, end_date=end_date,
-        name_map=None, limit_stocks=limit_stocks
+        name_map=None, limit_stocks=limit_stocks, adj=adj
     ):
         if df.empty or 'volume' not in df.columns:
             continue

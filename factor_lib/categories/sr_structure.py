@@ -76,6 +76,21 @@ _SR_FACTOR_COLUMNS = [
     "support_is_overused",
     "resistance_is_overused",
     "support_gap_pct",
+    "support_cluster_count",
+    "support_cluster_score",
+    "support_cluster_density",
+    "support_zone_low",
+    "support_zone_high",
+    "support_cluster_is_strong",
+    "resistance_cluster_count",
+    "resistance_cluster_score",
+    "resistance_zone_low",
+    "resistance_zone_high",
+    "resistance_cluster_is_strong",
+    "support_confluence_score",
+    "resistance_confluence_score",
+    "support_confluence_is_strong",
+    "resistance_confluence_is_strong",
 ]
 
 _COLUMN_MAP = {
@@ -182,6 +197,66 @@ def _compute_resistance_is_overused(df):
 
 def _compute_support_gap_pct(df):
     return compute_sr_structure_factors(df)["support_gap_pct"]
+
+
+def _compute_support_cluster_count(df):
+    return compute_sr_structure_factors(df)["support_cluster_count"]
+
+
+def _compute_support_cluster_score(df):
+    return compute_sr_structure_factors(df)["support_cluster_score"]
+
+
+def _compute_support_cluster_density(df):
+    return compute_sr_structure_factors(df)["support_cluster_density"]
+
+
+def _compute_support_zone_low(df):
+    return compute_sr_structure_factors(df)["support_zone_low"]
+
+
+def _compute_support_zone_high(df):
+    return compute_sr_structure_factors(df)["support_zone_high"]
+
+
+def _compute_support_cluster_is_strong(df):
+    return compute_sr_structure_factors(df)["support_cluster_is_strong"]
+
+
+def _compute_resistance_cluster_count(df):
+    return compute_sr_structure_factors(df)["resistance_cluster_count"]
+
+
+def _compute_resistance_cluster_score(df):
+    return compute_sr_structure_factors(df)["resistance_cluster_score"]
+
+
+def _compute_resistance_zone_low(df):
+    return compute_sr_structure_factors(df)["resistance_zone_low"]
+
+
+def _compute_resistance_zone_high(df):
+    return compute_sr_structure_factors(df)["resistance_zone_high"]
+
+
+def _compute_resistance_cluster_is_strong(df):
+    return compute_sr_structure_factors(df)["resistance_cluster_is_strong"]
+
+
+def _compute_support_confluence_score(df):
+    return compute_sr_structure_factors(df)["support_confluence_score"]
+
+
+def _compute_resistance_confluence_score(df):
+    return compute_sr_structure_factors(df)["resistance_confluence_score"]
+
+
+def _compute_support_confluence_is_strong(df):
+    return compute_sr_structure_factors(df)["support_confluence_is_strong"]
+
+
+def _compute_resistance_confluence_is_strong(df):
+    return compute_sr_structure_factors(df)["resistance_confluence_is_strong"]
 
 
 register_factor(
@@ -424,6 +499,171 @@ register_factor(
     description="flipped_support与pivot_support间距百分比",
     direction="neutral",
     is_core=False,
+)
+
+register_factor(
+    name="support_cluster_count",
+    category="SR结构类",
+    compute_func=_compute_support_cluster_count,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="支撑簇内水平位数量",
+    direction="positive",
+    is_core=True,
+)
+
+register_factor(
+    name="support_cluster_score",
+    category="SR结构类",
+    compute_func=_compute_support_cluster_score,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="支撑簇综合评分",
+    direction="positive",
+    is_core=True,
+)
+
+register_factor(
+    name="support_cluster_density",
+    category="SR结构类",
+    compute_func=_compute_support_cluster_density,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="支撑簇密度",
+    direction="positive",
+    is_core=False,
+)
+
+register_factor(
+    name="support_zone_low",
+    category="SR结构类",
+    compute_func=_compute_support_zone_low,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="支撑簇下界",
+    direction="neutral",
+    is_core=True,
+)
+
+register_factor(
+    name="support_zone_high",
+    category="SR结构类",
+    compute_func=_compute_support_zone_high,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="支撑簇上界",
+    direction="neutral",
+    is_core=True,
+)
+
+register_factor(
+    name="support_cluster_is_strong",
+    category="SR结构类",
+    compute_func=_compute_support_cluster_is_strong,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="支撑簇是否为强簇",
+    direction="positive",
+    is_core=True,
+)
+
+register_factor(
+    name="resistance_cluster_count",
+    category="SR结构类",
+    compute_func=_compute_resistance_cluster_count,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="压力簇内水平位数量",
+    direction="neutral",
+    is_core=True,
+)
+
+register_factor(
+    name="resistance_cluster_score",
+    category="SR结构类",
+    compute_func=_compute_resistance_cluster_score,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="压力簇综合评分",
+    direction="neutral",
+    is_core=True,
+)
+
+register_factor(
+    name="resistance_zone_low",
+    category="SR结构类",
+    compute_func=_compute_resistance_zone_low,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="压力簇下界",
+    direction="neutral",
+    is_core=True,
+)
+
+register_factor(
+    name="resistance_zone_high",
+    category="SR结构类",
+    compute_func=_compute_resistance_zone_high,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="压力簇上界",
+    direction="neutral",
+    is_core=True,
+)
+
+register_factor(
+    name="resistance_cluster_is_strong",
+    category="SR结构类",
+    compute_func=_compute_resistance_cluster_is_strong,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="压力簇是否为强簇",
+    direction="neutral",
+    is_core=True,
+)
+
+register_factor(
+    name="support_confluence_score",
+    category="SR结构类",
+    compute_func=_compute_support_confluence_score,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="支撑共振综合评分",
+    direction="positive",
+    is_core=True,
+)
+
+register_factor(
+    name="resistance_confluence_score",
+    category="SR结构类",
+    compute_func=_compute_resistance_confluence_score,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="压力共振综合评分",
+    direction="neutral",
+    is_core=True,
+)
+
+register_factor(
+    name="support_confluence_is_strong",
+    category="SR结构类",
+    compute_func=_compute_support_confluence_is_strong,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="支撑共振是否强共振",
+    direction="positive",
+    is_core=True,
+)
+
+register_factor(
+    name="resistance_confluence_is_strong",
+    category="SR结构类",
+    compute_func=_compute_resistance_confluence_is_strong,
+    source_module="features.sr_event_factor_lab",
+    source_function="compute_sr_factor_lab",
+    description="压力共振是否强共振",
+    direction="neutral",
+    is_core=True,
 )
 
 
