@@ -18,8 +18,7 @@
    - 执行时间：交易日 15:10（收盘后，含节假日判断）
    - 交易日检查：通过 datasource.trade_calendar.is_trading_day() 判断，非交易日自动跳过
    - 执行流程：
-        0. 清理预览数据
-        0.5. 复权因子增量更新（adj_factor，选股前复权数据依赖此步骤）
+        0. 复权因子增量更新（adj_factor，选股前复权数据依赖此步骤）
         1. 日线K线增量更新
         2. 周线K线增量更新
         3. ATR Rope 选股（seletion_atr.py）
@@ -522,117 +521,18 @@ def send_feishu_notification(title: str, content: str, is_error: bool = False):
         logger.warning(f"飞书通知发送失败：{e}")
 
 
-def _cleanup_preview_data(target_date_str: str) -> dict:
-    """清理预览任务产生的临时数据（14:25 未收盘数据）
-
-    删除当天由盘前预览任务写入的临时数据，确保 15:10 正式任务重新拉取收盘数据。
-
-    Args:
-        target_date_str: 目标日期字符串，格式 YYYY-MM-DD
-
-    Returns:
-        dict: 各表删除行数 {'stock_k_data': N, 'stop_loss_selection': N, 'stop_loss_predictions': N, 'atr_rope_selection': N, 'atr_rope_features': N, 'parquet_files': N}
-    """
-    from sqlalchemy import text
-    from datasource.database import get_engine
-
-    result = {}
-    engine = get_engine()
-
-    try:
-        with engine.begin() as conn:
-            kline_del = conn.execute(
-                text("DELETE FROM stock_k_data WHERE freq = 'd' AND bar_time::date = :d"),
-                {"d": target_date_str}
-            )
-            result['stock_k_data'] = kline_del.rowcount
-            logger.info(f"[清理预览数据] stock_k_data 日线删除 {kline_del.rowcount} 条 (date={target_date_str})")
-
-            sel_del = conn.execute(
-                text("DELETE FROM stop_loss_selection WHERE selection_date = :d"),
-                {"d": target_date_str}
-            )
-            result['stop_loss_selection'] = sel_del.rowcount
-            logger.info(f"[清理预览数据] stop_loss_selection 删除 {sel_del.rowcount} 条 (date={target_date_str})")
-
-            pred_del = conn.execute(
-                text("DELETE FROM stop_loss_predictions WHERE prediction_date = :d"),
-                {"d": target_date_str}
-            )
-            result['stop_loss_predictions'] = pred_del.rowcount
-            logger.info(f"[清理预览数据] stop_loss_predictions 删除 {pred_del.rowcount} 条 (date={target_date_str})")
-
-            # 清理 ATR 选股结果
-            atr_sel_del = conn.execute(
-                text("DELETE FROM atr_rope_selection WHERE selection_date = :d"),
-                {"d": target_date_str}
-            )
-            result['atr_rope_selection'] = atr_sel_del.rowcount
-            logger.info(f"[清理预览数据] atr_rope_selection 删除 {atr_sel_del.rowcount} 条 (date={target_date_str})")
-
-            # 清理 ATR 预测结果
-            atr_feat_del = conn.execute(
-                text("DELETE FROM atr_rope_features WHERE feature_date = :d"),
-                {"d": target_date_str}
-            )
-            result['atr_rope_features'] = atr_feat_del.rowcount
-            logger.info(f"[清理预览数据] atr_rope_features 删除 {atr_feat_del.rowcount} 条 (date={target_date_str})")
-
-            # 清理 ATR 周线选股结果
-            atr_week_del = conn.execute(
-                text("DELETE FROM atr_week_selection WHERE selection_date = :d"),
-                {"d": target_date_str}
-            )
-            result['atr_week_selection'] = atr_week_del.rowcount
-            logger.info(f"[清理预览数据] atr_week_selection 删除 {atr_week_del.rowcount} 条 (date={target_date_str})")
-    finally:
-        engine.dispose()
-
-    import glob
-    parquet_pattern = str(PROJECT_ROOT / "stop_experiment" / "output" / "prediction_store" / "**" / f"{target_date_str}.parquet")
-    parquet_files = glob.glob(parquet_pattern, recursive=True)
-    deleted_parquets = 0
-    for f in parquet_files:
-        try:
-            os.remove(f)
-            deleted_parquets += 1
-            logger.info(f"[清理预览数据] 删除 parquet: {f}")
-        except OSError as e:
-            logger.warning(f"[清理预览数据] 删除 parquet 失败: {f}, {e}")
-    result['parquet_files'] = deleted_parquets
-
-    legacy_path = PROJECT_ROOT / "stop_experiment" / "output" / "predictions" / f"{target_date_str}.parquet"
-    if legacy_path.exists():
-        try:
-            os.remove(str(legacy_path))
-            result['parquet_files'] += 1
-            logger.info(f"[清理预览数据] 删除 legacy parquet: {legacy_path}")
-        except OSError as e:
-            logger.warning(f"[清理预览数据] 删除 legacy parquet 失败: {e}")
-
-    logger.info(f"[清理预览数据] 汇总: {result}")
-    return result
-
-
 @trading_day_only
 def daily_update_and_selection_task():
     """每日数据更新与策略任务 - 已授权（交易日15:10执行）
 
     执行流程：
-    0. 清理预览数据（14:25 产生的临时数据）
-    0.5. 复权因子增量更新（adj_factor，选股前复权数据依赖此步骤）
+    0. 复权因子增量更新（adj_factor，选股前复权数据依赖此步骤）
     1. 日线K线增量更新
     2. 周线K线增量更新
-    3. 日线因子入库 [已停用]
-    4. 周线因子入库 [已停用]
-    5. DSA策略全流程 [已停用]
-    6. BSM选股 + BSM事件 [已停用]
-    7. Stop-Loss Clustering 选股 [已停用]
-    8. SLC 模型预测 [已停用]
-    9. ATR Rope 选股
-    10. ATR GBDT 双模型预测
-    11. ATR Rope 周线选股
-    12. DSA 选股
+    3. ATR Rope 选股
+    4. ATR GBDT 双模型预测
+    5. ATR Rope 周线选股
+    6. DSA 选股
     """
     today = datetime.now()
     today_str = today.strftime('%Y-%m-%d')
@@ -647,20 +547,8 @@ def daily_update_and_selection_task():
     )
 
     try:
-        # ===== Step 0：清理预览数据 =====
-        logger.info("[Step 0] 清理14:25预览任务产生的临时数据...")
-        try:
-            cleanup_result = _cleanup_preview_data(today_str)
-            total_deleted = sum(v for v in cleanup_result.values())
-            if total_deleted > 0:
-                logger.info(f"✅ 清理预览数据完成: {cleanup_result}")
-            else:
-                logger.info("无预览数据需要清理（可能未执行预览任务）")
-        except Exception as e:
-            logger.warning(f"清理预览数据失败（非致命，继续执行）: {e}")
-
-        # ===== Step 0.5：复权因子增量更新 =====
-        logger.info("[Step 0.5] 复权因子(adj_factor)增量更新...")
+        # ===== Step 0：复权因子增量更新 =====
+        logger.info("[Step 0] 复权因子(adj_factor)增量更新...")
         try:
             run_subprocess([
                 sys.executable, str(PROJECT_ROOT / "datasource" / "adj_factor.py"),
@@ -671,15 +559,15 @@ def daily_update_and_selection_task():
             logger.warning(f"复权因子增量更新失败（非致命，继续执行）: {e}")
             send_feishu_notification("复权因子增量更新失败", str(e), is_error=True)
 
-        # ===== Step 1/6：日线K线增量 =====
-        logger.info("[Step 1/6] 日线K线增量更新...")
+        # ===== Step 1：日线K线增量 =====
+        logger.info("[Step 1] 日线K线增量更新...")
         run_subprocess([
             sys.executable, str(PROJECT_ROOT / "app" / "build_dataset.py"),
             "--period", "d", "--update",
         ], "日线K线更新", timeout=3600)
 
-        # ===== Step 2/6：周线K线增量 =====
-        logger.info("[Step 2/6] 周线K线增量更新...")
+        # ===== Step 2：周线K线增量 =====
+        logger.info("[Step 2] 周线K线增量更新...")
         try:
             run_subprocess([
                 sys.executable, str(PROJECT_ROOT / "app" / "build_dataset.py"),

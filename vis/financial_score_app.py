@@ -1119,32 +1119,15 @@ TAB_FIELD_CONFIGS = {
         }
     },
     "自选股": {
-        "fields": ["ts_code", "stock_name", "change_pct",
-                   "pred_return", "pred_prob", "combined_score",
-                   "total_market_cap",
-                   "regime_strength", "rope_dir1_pct", "rope_dir_neg1_pct",
-                   "range_pos_01", "dsa_vwap_dev_pct", "dsa_dir_bars",
-                   "range_width_pct", "lower_value", "upper_value", "avg_amount_20d", "signal_type",
-                   "in_overlap_top5", "in_overlap_top10"],
+        "fields": ["ts_code", "stock_name", "change_pct", "offset_mean", "offset_std", "offset_percentile"],
         "types": {"ts_code": "string", "stock_name": "string",
-                  "change_pct": "numeric", "total_market_cap": "numeric",
-                  "pred_return": "numeric", "pred_prob": "numeric", "combined_score": "numeric",
-                  "regime_strength": "numeric", "rope_dir1_pct": "numeric", "rope_dir_neg1_pct": "numeric",
-                  "range_pos_01": "numeric", "dsa_vwap_dev_pct": "numeric", "dsa_dir_bars": "numeric",
-                  "range_width_pct": "numeric", "lower_value": "numeric", "upper_value": "numeric", "avg_amount_20d": "numeric", "signal_type": "string",
-                  "in_overlap_top5": "boolean", "in_overlap_top10": "boolean"},
-        "string_fields": ["ts_code", "stock_name", "signal_type"],
+                  "change_pct": "numeric", "offset_mean": "numeric",
+                  "offset_std": "numeric", "offset_percentile": "numeric"},
+        "string_fields": ["ts_code", "stock_name"],
         "display_names": {"ts_code": "股票代码", "stock_name": "股票名称",
                          "change_pct": "涨跌幅%",
-                         "pred_return": "预测收益", "pred_prob": ">7%概率", "combined_score": "综合得分",
-                         "total_market_cap": "当前市值(亿)",
-                         "regime_strength": "状态强度", "rope_dir1_pct": "Rope+1占比",
-                         "rope_dir_neg1_pct": "Rope-1占比", "range_pos_01": "带宽位置",
-                         "dsa_vwap_dev_pct": "DSA VWAP偏差%", "dsa_dir_bars": "DSA方向bar数",
-                         "range_width_pct": "带宽%", "lower_value": "箱体下轨", "upper_value": "箱体上轨",
-                         "avg_amount_20d": "20日均额(亿)",
-                         "signal_type": "信号类型",
-                         "in_overlap_top5": "交集T5", "in_overlap_top10": "交集T10"}
+                         "offset_mean": "偏移均值", "offset_std": "偏移标准差",
+                         "offset_percentile": "偏移百分位"}
     }
 }
 
@@ -1368,7 +1351,10 @@ def load_stop_loss_results(session, selection_date: str = None) -> pd.DataFrame:
 
 def compute_change_pct_for_date(session, prediction_date: str, ts_codes: list) -> dict:
     """
-    批量计算指定日期所有股票的涨跌幅
+    批量计算指定日期所有股票的涨跌幅（前复权）
+
+    使用 adj_factor 将不复权 close 转换为前复权价格后再计算涨跌幅，
+    确保除权除息日涨跌幅正确。
 
     Args:
         session: 数据库会话
@@ -1382,24 +1368,28 @@ def compute_change_pct_for_date(session, prediction_date: str, ts_codes: list) -
         return {}
     codes_str = ",".join([f"'{c}'" for c in ts_codes])
     sql = f"""
-        SELECT ts_code, bar_time, close
-        FROM stock_k_data
-        WHERE freq = 'd'
-          AND ts_code IN ({codes_str})
-          AND bar_time <= CAST(:prediction_date AS DATE)
-          AND bar_time >= (CAST(:prediction_date AS DATE) - INTERVAL '10 days')
-        ORDER BY ts_code, bar_time
+        SELECT k.ts_code, k.bar_time, k.close, a.adj_factor
+        FROM stock_k_data k
+        LEFT JOIN stock_adj_factor a ON a.ts_code = k.ts_code AND a.trade_date = k.bar_time
+        WHERE k.freq = 'd'
+          AND k.ts_code IN ({codes_str})
+          AND k.bar_time <= CAST(:prediction_date AS DATE)
+          AND k.bar_time >= (CAST(:prediction_date AS DATE) - INTERVAL '10 days')
+        ORDER BY k.ts_code, k.bar_time
     """
     try:
         kline = query_sql(session, sql, {"prediction_date": prediction_date})
         if kline.empty:
             return {}
         kline = kline.sort_values(["ts_code", "bar_time"])
-        kline["prev_close"] = kline.groupby("ts_code")["close"].shift(1)
-        latest = kline.dropna(subset=["prev_close"]).groupby("ts_code").last().reset_index()
+        # 前复权转换：前复权价格 = 不复权价格 × (adj_factor / 最新adj_factor)
+        latest_adj = kline.groupby("ts_code")["adj_factor"].transform("last")
+        kline["qfq_close"] = kline["close"] * (kline["adj_factor"] / latest_adj)
+        kline["prev_qfq_close"] = kline.groupby("ts_code")["qfq_close"].shift(1)
+        latest = kline.dropna(subset=["prev_qfq_close"]).groupby("ts_code").last().reset_index()
         latest["change_pct"] = np.where(
-            (latest["prev_close"] > 0) & (latest["close"] > 0),
-            np.round((latest["close"] - latest["prev_close"]) / latest["prev_close"] * 100, 2),
+            (latest["prev_qfq_close"] > 0) & (latest["qfq_close"] > 0),
+            np.round((latest["qfq_close"] - latest["prev_qfq_close"]) / latest["prev_qfq_close"] * 100, 2),
             0.0,
         )
         return dict(zip(latest["ts_code"], latest["change_pct"]))
@@ -1503,40 +1493,21 @@ SCENARIO_DISPLAY = {
 
 
 def load_watchlist_data(session) -> pd.DataFrame:
-    """加载自选股数据，关联 stock_pools 获取市值
+    """加载自选股数据，关联 dsa_selection 获取 offset 统计指标
 
     Returns:
-        DataFrame: 自选股列表（含市值、涨跌幅）
+        DataFrame: 自选股列表（含涨跌幅、偏移均值、偏移标准差、偏移百分位）
     """
     sql = """
         SELECT
             w.ts_code,
             w.stock_name,
-            p.total_market_cap / 100000000.0 AS total_market_cap,
-            f.feature_date,
-            f.signal_type,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.regime_strength END AS regime_strength,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.rope_dir1_pct END AS rope_dir1_pct,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.rope_dir_neg1_pct END AS rope_dir_neg1_pct,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.range_pos_01 END AS range_pos_01,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.dsa_vwap_dev_pct END AS dsa_vwap_dev_pct,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.dsa_dir_bars END AS dsa_dir_bars,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.range_width_pct END AS range_width_pct,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.lower_value END AS lower_value,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.upper_value END AS upper_value,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.avg_amount_20d END AS avg_amount_20d,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.pred_return END AS pred_return,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.pred_prob END AS pred_prob,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.combined_score END AS combined_score,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.in_overlap_top5 END AS in_overlap_top5,
-            CASE WHEN f.signal_type IS NOT NULL THEN f.in_overlap_top10 END AS in_overlap_top10
+            d.offset_mean,
+            d.offset_std,
+            d.offset_percentile
         FROM stock_watchlist w
-        LEFT JOIN stock_pools p ON p.ts_code = w.ts_code
-            OR p.ts_code = w.ts_code || '.SZ'
-            OR p.ts_code = w.ts_code || '.SH'
-            OR p.ts_code = w.ts_code || '.BJ'
-        LEFT JOIN atr_rope_features f ON f.ts_code = w.ts_code
-            AND f.feature_date = (SELECT MAX(feature_date) FROM atr_rope_features)
+        LEFT JOIN dsa_selection d ON d.ts_code = w.ts_code
+            AND d.selection_date = (SELECT MAX(selection_date) FROM dsa_selection)
         ORDER BY w.sort_order, w.added_date DESC
     """
     try:
@@ -3800,7 +3771,7 @@ def _get_score_color(value: float, min_val: float = 0, max_val: float = 100) -> 
 
 
 def render_watchlist_page(session, sidebar):
-    """渲染自选股页面：展示自选股列表（股票名称、代码、涨跌幅、市值）+ 添加/删除 + 个股详情展开"""
+    """渲染自选股页面：展示自选股列表（股票代码、名称、涨跌幅%、偏移均值、偏移标准差、偏移百分位）+ 添加/删除 + 个股详情展开"""
     st.header("⭐ 自选股")
 
     # 添加区域放在侧边栏
