@@ -29,6 +29,8 @@ Side Effects:
 import os
 import sys
 import tempfile
+import logging
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -38,13 +40,29 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+
+# ---------------------------------------------------------------------------
+# 日志配置
+# ---------------------------------------------------------------------------
+LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "monitoring.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("monitoring")
 from sqlalchemy import text
 
 from app.feishu_notifier import FeishuNotifier
 from datasource.database import get_session
 from datasource.pytdx_client import connect_pytdx, PERIOD_MAP
 from features.bollinger_features_plotly import bollinger
-from features.luxalgo_volume_profile_pytdx import (
+from features.luxalgo_volume_profile_pytdx_15m_aligned import (
     compute_volume_profile,
     VolumeProfileConfig,
     VolumeProfileResult,
@@ -127,7 +145,7 @@ def get_api():
         try:
             _API.get_security_count(1)
         except Exception:
-            print("pytdx 连接已断开，尝试重连...")
+            logger.warning("pytdx 连接已断开，尝试重连...")
             try:
                 _API.disconnect()
             except Exception:
@@ -245,7 +263,7 @@ def fetch_all_kline(ts_codes: List[str], freq: str, bars: int = 500,
                         kline = apply_adj_factor(kline, ts_code, freq=freq)
                     result[ts_code] = kline
         except Exception as e:
-            print(f"获取 {ts_code} {freq} K线失败: {e}")
+            logger.warning(f"获取 {ts_code} {freq} K线失败: {e}")
 
     return result
 
@@ -398,7 +416,7 @@ def compute_bb_snapshot(df: pd.DataFrame, freq: str = "d") -> Optional[dict]:
     try:
         bb_mid, bb_upper, bb_lower = bollinger(df, BB_WIN, BB_K)
     except Exception as e:
-        print(f"bollinger 计算失败: {e}")
+        logger.warning(f"bollinger 计算失败: {e}")
         return None
 
     # 附加到临时df以获取已完成bar
@@ -458,7 +476,7 @@ def detect_bb_signals(daily_df: pd.DataFrame, m1_df: pd.DataFrame = None,
     try:
         bb_mid, bb_upper, bb_lower = bollinger(daily_df, BB_WIN, BB_K)
     except Exception as e:
-        print(f"bollinger 计算失败: {e}")
+        logger.warning(f"bollinger 计算失败: {e}")
         return []
 
     tmp = daily_df.copy()
@@ -1036,43 +1054,43 @@ def run_monitor(dry_run: bool = False):
     Args:
         dry_run: True时仅打印检测结果，不发送通知
     """
-    print(f"[{datetime.now()}] 开始 布林带+节点集群 自选股监控")
+    logger.info("开始 布林带+节点集群 自选股监控")
 
     # 1. 获取自选股列表
     with get_session() as session:
         stocks = get_monitored_stocks(session)
 
     if not stocks:
-        print("无自选股")
+        logger.warning("无自选股")
         return
 
-    print(f"自选股数量: {len(stocks)}")
+    logger.info(f"自选股数量: {len(stocks)}")
     ts_codes = [s["ts_code"] for s in stocks]
 
     # 2. 计算当日涨跌幅
-    print("获取日K线计算涨跌幅...")
+    logger.info("获取日K线计算涨跌幅...")
     change_map = compute_daily_change_pct(ts_codes)
     for s in stocks:
         s['change_pct'] = change_map.get(s['ts_code'], 0.0)
 
     # 3. 拉取日线K线数据
     now = datetime.now().replace(second=0, microsecond=0)
-    print("开始获取日线行情数据...")
+    logger.info("开始获取日线行情数据...")
     daily_data = fetch_all_kline(ts_codes, 'd', bars=250,
                                  max_time=now + pd.Timedelta(days=1))
-    print(f"日线获取完成: {len(daily_data)}/{len(ts_codes)} 只股票")
+    logger.info(f"日线获取完成: {len(daily_data)}/{len(ts_codes)} 只股票")
 
     # 4. 拉取15分钟K线数据（用于volume profile计算）
-    print("开始获取15分钟行情数据...")
+    logger.info("开始获取15分钟行情数据...")
     ltf_data = fetch_all_kline(ts_codes, '15m', bars=8000,
                                 max_time=now + pd.Timedelta(minutes=15))
-    print(f"15分钟线获取完成: {len(ltf_data)}/{len(ts_codes)} 只股票")
+    logger.info(f"15分钟线获取完成: {len(ltf_data)}/{len(ts_codes)} 只股票")
 
     # 5. 拉取1分钟K线数据（用于盘中触及检测）
-    print("开始获取1分钟行情数据...")
+    logger.info("开始获取1分钟行情数据...")
     m1_data = fetch_all_kline(ts_codes, '1m', bars=2,
                                max_time=now + pd.Timedelta(minutes=1))
-    print(f"1分钟线获取完成: {len(m1_data)}/{len(ts_codes)} 只股票")
+    logger.info(f"1分钟线获取完成: {len(m1_data)}/{len(ts_codes)} 只股票")
 
     # 6. 逐只检测信号
     triggered_stocks = []
@@ -1120,7 +1138,7 @@ def run_monitor(dry_run: bool = False):
                 node_signals = detect_node_cluster_signals(m1_df, profile, freq="d")
                 all_signals.extend(node_signals)
             except Exception as e:
-                print(f"volume_profile 计算失败 {ts_code}: {e}")
+                logger.warning(f"volume_profile 计算失败 {ts_code}: {e}")
 
         if not all_signals:
             continue
@@ -1137,7 +1155,7 @@ def run_monitor(dry_run: bool = False):
         }
         triggered_stocks.append(item)
 
-    print(f"检测到 {len(triggered_stocks)} 只股票有触发信号")
+    logger.info(f"检测到 {len(triggered_stocks)} 只股票有触发信号")
 
     # 6. 发送通知（冷却过滤）
     if triggered_stocks:
@@ -1163,7 +1181,7 @@ def run_monitor(dry_run: bool = False):
         else:
             # 6a. 发送卡片消息
             card = generate_monitoring_card(stocks, triggered_stocks)
-            print("发送监控卡片...")
+            logger.info("发送监控卡片...")
             send_card_notification(
                 header_title=card["header_title"],
                 header_template=card["header_template"],
@@ -1182,7 +1200,7 @@ def run_monitor(dry_run: bool = False):
                 try:
                     bb_mid_s, bb_upper_s, bb_lower_s = bollinger(daily_df, BB_WIN, BB_K)
                 except Exception as e:
-                    print(f"bollinger 计算失败 {ts_code}: {e}")
+                    logger.warning(f"bollinger 计算失败 {ts_code}: {e}")
                     continue
 
                 png_path = render_monitoring_chart(
@@ -1196,7 +1214,7 @@ def run_monitor(dry_run: bool = False):
                 )
                 if png_path and os.path.exists(png_path):
                     try:
-                        print(f"发送 {stock_name} 行情图片...")
+                        logger.info(f"发送 {stock_name} 行情图片...")
                         send_chart_image(png_path)
                     finally:
                         try:
@@ -1204,9 +1222,9 @@ def run_monitor(dry_run: bool = False):
                         except OSError:
                             pass
     else:
-        print("无触发信号，不推送")
+        logger.info("无触发信号，不推送")
 
-    print(f"[{datetime.now()}] 检测完成")
+    logger.info("检测完成")
     close_api()
 
 
@@ -1236,7 +1254,7 @@ def start_scheduled_monitor():
 
     # 交易日检查
     if not is_trading_day():
-        print("今天不是交易日，监控不启动")
+        logger.info("今天不是交易日，监控不启动")
         return
 
     # 文件锁互斥：防止重复启动
@@ -1244,11 +1262,11 @@ def start_scheduled_monitor():
     try:
         fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (IOError, OSError):
-        print("另一个监控进程已在运行，退出")
+        logger.warning("另一个监控进程已在运行，退出")
         lock_fd.close()
         return
 
-    print(f"[{datetime.now()}] 监控系统启动，等待交易时段...")
+    logger.info("监控系统启动，等待交易时段...")
 
     try:
         while True:
@@ -1269,7 +1287,7 @@ def start_scheduled_monitor():
                 try:
                     run_monitor()
                 except Exception as e:
-                    print(f"❌ 监控执行失败：{e}")
+                    logger.error(f"监控执行失败：{e}", exc_info=True)
                 # 一轮完成后等待30秒再开始下一轮
                 import time as _time
                 _time.sleep(30)
@@ -1277,12 +1295,12 @@ def start_scheduled_monitor():
 
             if current_time > afternoon_end:
                 # 收盘后退出
-                print(f"[{datetime.now()}] 已收盘，监控系统退出")
+                logger.info("已收盘，监控系统退出")
                 break
 
             if morning_end < current_time < afternoon_start:
                 # 午休等待
-                print(f"[{datetime.now()}] 午休中，等待 13:00 恢复...")
+                logger.info("午休中，等待 13:00 恢复...")
                 wait_seconds = (
                     datetime(now.year, now.month, now.day, 13, 0) - now
                 ).total_seconds()
@@ -1293,7 +1311,7 @@ def start_scheduled_monitor():
 
             if current_time < morning_start:
                 # 开盘前等待
-                print(f"[{datetime.now()}] 等待开盘（9:30）...")
+                logger.info("等待开盘（9:30）...")
                 import time as _time
                 _time.sleep(30)
                 continue
@@ -1310,7 +1328,7 @@ def start_scheduled_monitor():
         except OSError:
             pass
 
-    print(f"[{datetime.now()}] 监控系统已停止")
+    logger.info("监控系统已停止")
 
 
 # ---------------------------------------------------------------------------
@@ -1451,7 +1469,7 @@ def test_last_triggered():
                     )
                     profile = compute_volume_profile(ltf_for_vp, cfg=vp_cfg)
             except Exception as e:
-                print(f"volume_profile 计算失败 {ts_code}: {e}")
+                logger.warning(f"volume_profile 计算失败 {ts_code}: {e}")
 
         if profile:
             cluster_prices = compute_node_cluster_prices(profile)

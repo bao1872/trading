@@ -40,7 +40,7 @@ from features.dynamic_swing_anchored_vwap import dynamic_swing_anchored_vwap, DS
 from features.atr_rope_with_factors_pytdx_plotly import (
     ATRRopeEngine, UP_COL, DOWN_COL, FLAT_COL, CHANNEL_LINE_COL, CHANNEL_FILL_COL
 )
-from features.luxalgo_volume_profile_pytdx import (
+from features.luxalgo_volume_profile_pytdx_15m_aligned import (
     compute_volume_profile,
     make_volume_profile_figure,
     VolumeProfileConfig,
@@ -3494,16 +3494,30 @@ def _render_volume_profile_tab(ts_code: str, stock_name: str, key_prefix: str):
         stock_name: 股票名称
         key_prefix: Streamlit widget key 前缀
     """
-    # 筹码峰固定参数
-    lookback = 360
-    rows = 100
-    value_area = 0.70
+    # 筹码峰固定参数（与 luxalgo_volume_profile_pytdx_15m_aligned.py CLI 一致）：
+    #   - 数据源: 日线K线确定价格范围 + 15m K线分配成交量（均前复权）
+    #   - 日线加载: 1500根（对应 CLI --tdx-count 1500）
+    #   - 15m加载: 全量（对应 CLI 自动估算约6784根）
+    #   - profile_lookback_length=360（对应 CLI --lookback 360）
+    #   - profile_number_of_rows=100（对应 CLI --rows 100）
+    #   - peaks_show="peaks"
+    #   - main_period="day"
+    #   对应 CLI: python luxalgo_volume_profile_pytdx_15m_aligned.py --tdx-code XXX --tdx-count 1500 --lookback 360 --rows 100
 
-    # 拉取数据：日线K线用于显示，15分钟K线用于 volume profile 计算（仅从DB读取）
+    # 拉取数据：日线K线用于显示和价格范围，15分钟K线用于 volume profile 成交量分配
     with st.spinner("正在加载行情数据..."):
         try:
-            daily_df = get_kline_data_from_db(ts_code, 'd', bars=lookback, adj='qfq')
-            ltf_df = get_kline_data_from_db(ts_code, '15m', bars=1500)
+            daily_df = get_kline_data_from_db(ts_code, 'd', bars=1500, adj='qfq')
+            # 15m数据：先加载不复权原始数据，再手动前复权（与日线价格对齐）
+            ltf_df = get_kline_data_from_db(ts_code, '15m', bars=7000)
+            if ltf_df is not None and isinstance(ltf_df, pd.DataFrame) and not ltf_df.empty:
+                from datasource.adj_factor import apply_adj_factor_intraday
+                # get_kline_data_from_db 会 reset_index，需恢复 DatetimeIndex 以便前复权
+                if 'bar_time' in ltf_df.columns:
+                    ltf_df = ltf_df.set_index('bar_time')
+                ltf_df = apply_adj_factor_intraday(ltf_df, ts_code)
+                # compute_volume_profile 需要 datetime 列
+                ltf_df['datetime'] = ltf_df.index
         except Exception as e:
             st.error(f"行情数据加载失败：{e}")
             return
@@ -3515,18 +3529,23 @@ def _render_volume_profile_tab(ts_code: str, stock_name: str, key_prefix: str):
         st.warning("15分钟数据不足，无法计算筹码分布")
         return
 
-    # 计算 volume profile（基于15分钟K线，使用全部15m数据）
+    # 确保 daily_df 有 datetime 列（compute_volume_profile 要求）
+    if 'datetime' not in daily_df.columns:
+        if 'bar_time' in daily_df.columns:
+            daily_df['datetime'] = pd.to_datetime(daily_df['bar_time'])
+        else:
+            daily_df['datetime'] = pd.to_datetime(daily_df.index)
+
+    # 计算 volume profile（日线价格范围 + 15m成交量分配）
     cfg = VolumeProfileConfig(
-        profile_lookback_length=len(ltf_df),
-        profile_number_of_rows=rows,
-        value_area_threshold=value_area,
+        profile_lookback_length=360,
+        profile_number_of_rows=100,
+        value_area_threshold=0.70,
         peaks_show="peaks",
-        peaks_detection_percent=0.09,
-        volume_node_threshold=0.01,
     )
 
     try:
-        result = compute_volume_profile(ltf_df, cfg=cfg)
+        result = compute_volume_profile(daily_df, cfg=cfg, profile_df=ltf_df, main_period="day")
     except Exception as e:
         st.error(f"筹码峰计算失败：{e}")
         return

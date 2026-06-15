@@ -161,7 +161,7 @@ def batch_fetch_adj_factor(ts_codes: list, start_date: str = None, end_date: str
 
 
 def incremental_update_adj_factor(ts_codes: list = None, sleep_sec: float = 0.3,
-                                  stale_threshold_days: int = 3) -> int:
+                                  stale_threshold_days: int = 5) -> int:
     """
     增量更新复权因子：只拉取数据库中缺失的最新部分
 
@@ -170,7 +170,7 @@ def incremental_update_adj_factor(ts_codes: list = None, sleep_sec: float = 0.3,
       （不发 tushare 请求，不 sleep），避免对已最新股票做无效请求
     - sleep_sec 默认 0.3s：200积分账户 tushare 限制 200次/分钟（≈ 0.3s/次）
     - 限流自动退避：检测到"频率超限"时 sleep 60 秒再重试该股票
-    - 全市场 5055 只股票 × 0.4s ≈ 34 分钟（会超时）→ 短路后仅 839 只 × 0.3s ≈ 4 分钟
+    - stale_threshold_days 默认 5：覆盖周末（周五→周一 diff=3）+ 1天缓冲
 
     Args:
         ts_codes: 股票代码列表，None 则自动获取全市场

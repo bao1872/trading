@@ -21,10 +21,9 @@
         0. 复权因子增量更新（adj_factor，选股前复权数据依赖此步骤）
         1. 日线K线增量更新
         2. 周线K线增量更新
-        3. ATR Rope 选股（seletion_atr.py）
-        4. ATR GBDT 双模型预测（daily_predict_pipeline.py）
-        5. ATR Rope 周线选股（selection_atr_week.py）
-        6. DSA 选股（selection_dsa.py）
+        2.5. 全量15分钟K线增量更新
+        3. DSA 选股（selection_dsa.py）
+        4. Node 选股（selection_node.py）
    - 配置：ENABLE_DAILY_WORKFLOW=true
    - 日志：scheduler.log 中搜索 "每日数据更新与选股"
    - 状态：✅ 已授权并启用
@@ -56,7 +55,8 @@
    - 触发器：Cron (交易日 16:30)
    - 执行时间：交易日 16:30（收盘后，保证次日缓存齐全）
    - 交易日检查：通过 datasource.trade_calendar.is_trading_day() 判断，非交易日自动跳过
-   - 功能：增量更新自选股的 15m K线 + tick 缓存（app.build_dataset.update_watchlist_15m + update_watchlist_tick）
+   - 功能：增量更新自选股的 tick 缓存（app.build_dataset.update_watchlist_tick）
+   - 注意：15m K线更新已由每日工作流 Step 2.5 覆盖，此处不再重复
    - 状态：✅ 已授权并启用
 
 ================================================================================
@@ -250,7 +250,7 @@ import sys
 import logging
 import subprocess
 import functools
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -529,10 +529,9 @@ def daily_update_and_selection_task():
     0. 复权因子增量更新（adj_factor，选股前复权数据依赖此步骤）
     1. 日线K线增量更新
     2. 周线K线增量更新
-    3. ATR Rope 选股
-    4. ATR GBDT 双模型预测
-    5. ATR Rope 周线选股
-    6. DSA 选股
+    2.5. 全量15分钟K线增量更新
+    3. DSA 选股
+    4. Node 选股
     """
     today = datetime.now()
     today_str = today.strftime('%Y-%m-%d')
@@ -577,43 +576,19 @@ def daily_update_and_selection_task():
             logger.warning(f"周线K线更新失败，继续: {e}")
             send_feishu_notification("周线K线更新失败", str(e), is_error=True)
 
-        # ===== Step 3：ATR Rope 选股 =====
-        logger.info("[Step 3] ATR Rope 选股...")
+        # ===== Step 2.5：全量15分钟K线增量 =====
+        logger.info("[Step 2.5] 全量15分钟K线增量更新...")
         try:
             run_subprocess([
-                sys.executable, str(PROJECT_ROOT / "selection" / "seletion_atr.py"),
-                today_str,
-            ], "ATR Rope选股", timeout=3600)
-            logger.info("✅ ATR Rope 选股完成")
+                sys.executable, str(PROJECT_ROOT / "app" / "build_dataset.py"),
+                "--period", "15m_all", "--update",
+            ], "15mK线更新", timeout=7200)
         except Exception as e:
-            logger.error(f"ATR Rope 选股失败: {e}")
-            send_feishu_notification("ATR Rope选股失败", str(e), is_error=True)
+            logger.warning(f"15mK线更新失败，继续: {e}")
+            send_feishu_notification("15mK线更新失败", str(e), is_error=True)
 
-        # Step 4: ATR GBDT 预测
-        try:
-            run_subprocess([
-                sys.executable, str(PROJECT_ROOT / "atr_experiment" / "daily_predict_pipeline.py"),
-                today_str,
-            ], "ATR GBDT预测", timeout=1800)
-            logger.info("✅ ATR GBDT 预测完成")
-        except Exception as e:
-            logger.error(f"ATR GBDT 预测失败: {e}")
-            send_feishu_notification("ATR GBDT预测失败", str(e), is_error=True)
-
-        # ===== Step 5：ATR Rope 周线选股 =====
-        logger.info("[Step 5] ATR Rope 周线选股...")
-        try:
-            run_subprocess([
-                sys.executable, str(PROJECT_ROOT / "selection" / "selection_atr_week.py"),
-                today_str,
-            ], "ATR Rope周线选股", timeout=3600)
-            logger.info("✅ ATR Rope 周线选股完成")
-        except Exception as e:
-            logger.error(f"ATR Rope 周线选股失败: {e}")
-            send_feishu_notification("ATR Rope周线选股失败", str(e), is_error=True)
-
-        # ===== Step 6：DSA 选股 =====
-        logger.info("[Step 6] DSA 选股...")
+        # ===== Step 3：DSA 选股 =====
+        logger.info("[Step 3] DSA 选股...")
         try:
             run_subprocess([
                 sys.executable, str(PROJECT_ROOT / "selection" / "selection_dsa.py"),
@@ -623,6 +598,18 @@ def daily_update_and_selection_task():
         except Exception as e:
             logger.error(f"DSA 选股失败: {e}")
             send_feishu_notification("DSA选股失败", str(e), is_error=True)
+
+        # ===== Step 4：Node 选股 =====
+        logger.info("[Step 4] Node 选股...")
+        try:
+            run_subprocess([
+                sys.executable, str(PROJECT_ROOT / "selection" / "selection_node.py"),
+                today_str,
+            ], "Node选股", timeout=3600)
+            logger.info("✅ Node 选股完成")
+        except Exception as e:
+            logger.error(f"Node 选股失败: {e}")
+            send_feishu_notification("Node选股失败", str(e), is_error=True)
 
         # 完成
         end_time = datetime.now()
@@ -648,8 +635,9 @@ def daily_update_and_selection_task():
 def watchlist_cache_refresh_task():
     """自选股缓存定时刷新任务（16:30 收盘后执行）
 
-    增量更新自选股的 15 分钟 K 线 + tick 缓存数据，保证次日开盘时缓存齐全。
-    通过 app.build_dataset._load_watchlist_df / update_watchlist_15m / update_watchlist_tick 实现。
+    增量更新自选股的 tick 缓存数据，保证次日开盘时缓存齐全。
+    15m K线更新已由每日工作流 Step 2.5（全量15分钟K线增量更新）覆盖，此处不再重复。
+    通过 app.build_dataset._load_watchlist_df / update_watchlist_tick 实现。
     """
     today = datetime.now()
     today_str = today.strftime('%Y-%m-%d')
@@ -659,30 +647,17 @@ def watchlist_cache_refresh_task():
     logger.info("=" * 60)
 
     try:
-        from app.build_dataset import _load_watchlist_df, update_watchlist_15m, update_watchlist_tick
+        from app.build_dataset import _load_watchlist_df, update_watchlist_tick
         watchlist_df = _load_watchlist_df()
         if watchlist_df is None or watchlist_df.empty:
             logger.warning("自选股列表为空，跳过缓存刷新")
             return
 
         n_stocks = len(watchlist_df)
-        logger.info(f"共 {n_stocks} 只自选股，开始更新 15m K线 + tick 缓存...")
-
-        # 更新 15 分钟 K 线缓存
-        logger.info("[1/2] 增量更新 15m K线缓存...")
-        try:
-            update_watchlist_15m(watchlist_df=watchlist_df, quiet=True)
-            logger.info("✅ 15m K线 缓存更新完成")
-        except Exception as e:
-            logger.error(f"❌ 15m K线 缓存更新失败：{e}", exc_info=True)
-            send_feishu_notification(
-                "自选股 15m K线 缓存更新失败",
-                f"时间：{today_str} 16:30\n错误：{str(e)}",
-                is_error=True
-            )
+        logger.info(f"共 {n_stocks} 只自选股，开始更新 tick 缓存...")
 
         # 更新 tick 缓存
-        logger.info("[2/2] 增量更新 tick 缓存...")
+        logger.info("[1/1] 增量更新 tick 缓存...")
         try:
             update_watchlist_tick(watchlist_df=watchlist_df, quiet=True)
             logger.info("✅ tick 缓存更新完成")
@@ -719,10 +694,14 @@ def start_bb_node_monitor_task():
     - 收盘 15:00：自动退出
 
     文件锁互斥（/tmp/bb_node_monitor.lock）防止重复启动。
+    子进程输出重定向到 logs/monitoring_subprocess.log。
 
     调用方式：
         python app/monitoring.py --schedule
     """
+    global _monitor_restart_count
+    _monitor_restart_count = 0  # 每日重置重启计数
+
     from pathlib import Path
 
     now = datetime.now()
@@ -739,22 +718,36 @@ def start_bb_node_monitor_task():
         return
 
     try:
+        # 确保日志目录存在
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(exist_ok=True)
+        monitor_log = log_dir / "monitoring_subprocess.log"
+
         # 启动 monitoring.py --schedule 子进程（内部负责循环 + 午休 + 收盘退出）
+        # stdout/stderr 重定向到日志文件，确保错误可追溯
+        log_fh = open(monitor_log, 'a', encoding='utf-8')
         proc = subprocess.Popen(
             [sys.executable, str(PROJECT_ROOT / "app" / "monitoring.py"), "--schedule"],
             cwd=str(PROJECT_ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=log_fh,
+            stderr=log_fh,
             text=True,
         )
 
+        # 保存子进程引用，供存活检查使用
+        global _monitor_proc, _monitor_log_fh
+        _monitor_proc = proc
+        _monitor_log_fh = log_fh
+
         logger.info(f"✅ BB+节点监控子进程已启动 (PID: {proc.pid})")
+        logger.info(f"   日志文件: {monitor_log}")
         logger.info(f"   内部循环：9:30-11:30 / 13:00-15:00，每轮 30 秒 sleep")
 
         send_feishu_notification(
             "BB+节点 监控已启动",
             f"启动时间：{now_str}\n"
             f"进程 PID：{proc.pid}\n"
+            f"日志文件: {monitor_log}\n"
             f"内部循环：每 30 秒一轮\n"
             f"午休暂停：11:30 - 13:00\n"
             f"自动退出：15:00"
@@ -765,6 +758,99 @@ def start_bb_node_monitor_task():
         send_feishu_notification(
             "BB+节点 监控启动失败",
             f"时间：{now_str}\n错误：{str(e)}",
+            is_error=True
+        )
+
+
+# 全局子进程引用
+_monitor_proc = None
+_monitor_log_fh = None
+_MONITOR_MAX_RESTARTS = 3
+_monitor_restart_count = 0
+
+
+def check_monitor_alive():
+    """检查监控子进程是否存活，若已退出且在交易时段内则自动重启"""
+    global _monitor_proc, _monitor_log_fh, _monitor_restart_count
+
+    if _monitor_proc is None:
+        return
+
+    # 检查进程是否仍在运行
+    if _monitor_proc.poll() is None:
+        return  # 仍在运行
+
+    exit_code = _monitor_proc.returncode
+    logger.warning(f"监控子进程已退出 (PID: {_monitor_proc.pid}, 退出码: {exit_code})")
+
+    # 关闭日志文件句柄
+    if _monitor_log_fh:
+        try:
+            _monitor_log_fh.close()
+        except Exception:
+            pass
+        _monitor_log_fh = None
+
+    _monitor_proc = None
+
+    # 检查是否在交易时段
+    now = datetime.now()
+    current_time = now.time()
+    in_trading = (
+        time(9, 30) <= current_time <= time(11, 30) or
+        time(13, 0) <= current_time <= time(15, 0)
+    )
+
+    if not in_trading:
+        logger.info("不在交易时段，不重启监控子进程")
+        return
+
+    # 检查重启次数
+    if _monitor_restart_count >= _MONITOR_MAX_RESTARTS:
+        logger.error(f"监控子进程已连续重启 {_monitor_restart_count} 次，不再重启")
+        send_feishu_notification(
+            "BB+节点 监控多次崩溃",
+            f"已连续重启 {_monitor_restart_count} 次均失败，停止重试\n"
+            f"退出码: {exit_code}",
+            is_error=True
+        )
+        return
+
+    # 自动重启
+    _monitor_restart_count += 1
+    logger.info(f"尝试重启监控子进程 (第 {_monitor_restart_count} 次)...")
+
+    try:
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(exist_ok=True)
+        monitor_log = log_dir / "monitoring_subprocess.log"
+
+        log_fh = open(monitor_log, 'a', encoding='utf-8')
+        proc = subprocess.Popen(
+            [sys.executable, str(PROJECT_ROOT / "app" / "monitoring.py"), "--schedule"],
+            cwd=str(PROJECT_ROOT),
+            stdout=log_fh,
+            stderr=log_fh,
+            text=True,
+        )
+
+        _monitor_proc = proc
+        _monitor_log_fh = log_fh
+
+        logger.info(f"✅ 监控子进程已重启 (PID: {proc.pid}, 第 {_monitor_restart_count} 次)")
+        send_feishu_notification(
+            "BB+节点 监控已重启",
+            f"重启时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"新进程 PID：{proc.pid}\n"
+            f"第 {_monitor_restart_count} 次重启\n"
+            f"上次退出码: {exit_code}",
+        )
+
+    except Exception as e:
+        logger.error(f"❌ 监控子进程重启失败：{e}", exc_info=True)
+        send_feishu_notification(
+            "BB+节点 监控重启失败",
+            f"时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n错误：{str(e)}",
             is_error=True
         )
 
@@ -859,6 +945,16 @@ def main():
             job_id='task_bb_node_monitor_start',
             hour=9,
             minute=30,
+            day_of_week='mon-fri',
+        )
+        # 监控子进程存活检查（交易时段每5分钟检查一次）
+        scheduler.register_task(
+            name='BB节点监控存活检查',
+            func=check_monitor_alive,
+            trigger='cron',
+            job_id='task_bb_node_monitor_healthcheck',
+            hour='9-14',
+            minute='*/5',
             day_of_week='mon-fri',
         )
     else:

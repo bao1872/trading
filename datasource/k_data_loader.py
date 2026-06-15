@@ -99,7 +99,11 @@ def load_k_data(
     if ts_code:
         df = df.set_index("bar_time")
         if adj == 'qfq' and ts_code:
-            df = apply_adj_factor(df, ts_code, freq=db_freq)
+            if db_freq in ('d', 'w'):
+                df = apply_adj_factor(df, ts_code, freq=db_freq)
+            else:
+                from datasource.adj_factor import apply_adj_factor_intraday
+                df = apply_adj_factor_intraday(df, ts_code)
         return df
 
     result = {}
@@ -107,7 +111,11 @@ def load_k_data(
         group = group.set_index("bar_time")
         group = group.sort_index()
         if adj == 'qfq':
-            group = apply_adj_factor(group, code, freq=db_freq)
+            if db_freq in ('d', 'w'):
+                group = apply_adj_factor(group, code, freq=db_freq)
+            else:
+                from datasource.adj_factor import apply_adj_factor_intraday
+                group = apply_adj_factor_intraday(group, code)
         result[code] = {
             "name": code,
             "data": group

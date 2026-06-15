@@ -7,7 +7,7 @@
 数据规格（在 PERIOD_CONFIG 中配置）：
     - 日线：1300 bar
     - 周线：500 bar
-    - 15分钟线：1500 bar（仅自选股）
+    - 15分钟线：14400 bar（全量股票，覆盖约2年）
 
 保存路径：
     PostgreSQL 远程数据库 (config.DATABASE_URL)
@@ -31,8 +31,14 @@
     # 回补自选股15分钟K线数据（1500 bar）
     python app/build_dataset.py --period 15m
 
+    # 回补全量股票15分钟K线数据（14400 bar，覆盖约2年）
+    python app/build_dataset.py --period 15m_all
+
     # 增量更新自选股15分钟K线
     python app/build_dataset.py --update --period 15m
+
+    # 增量更新全量股票15分钟K线
+    python app/build_dataset.py --update --period 15m_all
 
     # 刷新自选股Tick缓存（汇总+PVDI因子）
     python app/build_dataset.py --period tick
@@ -47,9 +53,10 @@
     - 插入最新的本周数据，确保周线数据始终最新且不会重复
 
 15分钟线更新逻辑：
-    - 仅处理自选股（stock_watchlist 表）
+    - 自选股模式（--period 15m）：仅处理自选股（stock_watchlist 表），增量更新
+    - 全量模式（--period 15m_all）：处理全市场股票，增量更新
     - 增量更新：查询每只股票最新bar_time，拉取缺失部分
-    - 首次回补：拉取1500根15分钟K线
+    - 首次回补：拉取14400根15分钟K线（覆盖约2年）
 
 Tick缓存更新逻辑：
     - 仅处理自选股（stock_watchlist 表）
@@ -89,7 +96,8 @@ from datasource.database import get_session, bulk_upsert
 PERIOD_CONFIG = {
     "d": {"bars": 1300, "desc": "日线"},
     "w": {"bars": 500, "desc": "周线"},
-    "15m": {"bars": 1500, "desc": "15分钟线"},
+    "15m": {"bars": 14400, "desc": "15分钟线（自选股）"},
+    "15m_all": {"bars": 14400, "desc": "15分钟线（全量股票）"},
 }
 
 
@@ -508,6 +516,163 @@ def update_watchlist_15m(watchlist_df: pd.DataFrame = None, bar_count: int = 150
         print(f"⚠️  无新数据需要更新")
 
 
+# ---------------------------------------------------------------------------
+# 全量15分钟K线增量更新（原 tools/backfill_15m_data.py 逻辑已合并至此）
+# ---------------------------------------------------------------------------
+
+_15M_BAR_COUNT = 14400  # 首次回补拉取的K线数量（覆盖约2年）
+_15M_BATCH_SIZE = 100   # 每批保存的股票数量
+
+
+def _get_all_stock_codes() -> list:
+    """从数据库获取全市场股票代码列表（排除北交所）"""
+    from sqlalchemy import text
+    with get_session() as session:
+        result = session.execute(
+            text("SELECT DISTINCT ts_code FROM stock_k_data WHERE freq = 'd'")
+        ).fetchall()
+    codes = []
+    for (ts_code,) in result:
+        symbol = ts_code.split(".")[0]
+        if symbol.startswith("8") or symbol.startswith("4"):
+            continue
+        codes.append(symbol)
+    return codes
+
+
+def _get_15m_max_times() -> dict:
+    """查询每只股票15m数据的最新bar_time"""
+    from sqlalchemy import text
+    with get_session() as session:
+        result = session.execute(
+            text("SELECT ts_code, MAX(bar_time) as max_time "
+                 "FROM stock_k_data WHERE freq = '15m' GROUP BY ts_code")
+        ).fetchall()
+    max_time_map = {}
+    for ts_code, max_time in result:
+        if max_time:
+            code = ts_code.split(".")[0]
+            max_time_map[code] = pd.to_datetime(max_time)
+    return max_time_map
+
+
+def _save_15m_batch(data_cache: dict) -> int:
+    """将一批15m数据保存到数据库"""
+    if not data_cache:
+        return 0
+
+    all_dfs = []
+    for code, stock_data in data_cache.items():
+        df = stock_data.get("data")
+        if df is None or df.empty:
+            continue
+
+        df = df.copy()
+        df.index = pd.to_datetime(df.index)
+        df = df[~df.index.isna()]
+        df = df.sort_index()
+
+        ts_code = _code_to_symbol(code)
+        df["ts_code"] = ts_code
+        df["freq"] = "15m"
+        df["bar_time"] = df.index
+        df["name"] = stock_data.get("name", "")
+
+        df_for_db = df.reset_index(drop=True)
+        df_for_db = df_for_db[["ts_code", "freq", "bar_time", "open", "high", "low", "close", "volume"]]
+        df_for_db["bar_time"] = pd.to_datetime(df_for_db["bar_time"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        all_dfs.append(df_for_db)
+
+    if not all_dfs:
+        return 0
+
+    combined_df = pd.concat(all_dfs, ignore_index=True)
+    total_rows = len(combined_df)
+
+    with get_session() as session:
+        batch_size = 50000
+        total_batches = (total_rows + batch_size - 1) // batch_size
+        saved_count = 0
+        for i in range(total_batches):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, total_rows)
+            batch_df = combined_df.iloc[start_idx:end_idx]
+            bulk_upsert(session, "stock_k_data", batch_df, unique_keys=["ts_code", "freq", "bar_time"])
+            saved_count += len(batch_df)
+
+    return saved_count
+
+
+def update_all_15m(bar_count: int = _15M_BAR_COUNT, stock_codes: list = None):
+    """全量股票15分钟K线增量更新
+
+    已有数据的股票只拉取新增部分（最新30根），首次拉取 bar_count 根。
+
+    Args:
+        bar_count: 首次回补时拉取的K线数量（默认14400，覆盖约2年）
+        stock_codes: 股票代码列表（为None时自动获取全市场）
+    """
+    if stock_codes is None:
+        stock_codes = _get_all_stock_codes()
+
+    print("=" * 70)
+    print("全市场15分钟K线数据入库")
+    print(f"  股票数量: {len(stock_codes)}")
+    print(f"  每只拉取: {bar_count} 根K线（约 {bar_count / 16 / 250:.1f} 年）")
+    print("=" * 70)
+
+    max_time_map = _get_15m_max_times()
+    print(f"  已有15m数据: {len(max_time_map)} 只股票\n")
+
+    api = connect_pytdx()
+    total_saved = 0
+    total_new_bars = 0
+    error_count = 0
+
+    try:
+        for i, symbol in enumerate(tqdm(stock_codes, desc="15m数据入库", unit="只")):
+            stock_max_time = max_time_map.get(symbol)
+
+            try:
+                if stock_max_time:
+                    # 增量：只拉取最新30根，过滤已有数据
+                    df = get_kline_data(api, symbol, "15m", 30)
+                    if df.empty:
+                        continue
+                    df = df.set_index("datetime")
+                    df = df[df.index > stock_max_time]
+                    if df.empty:
+                        continue
+                else:
+                    # 首次：全量拉取
+                    df = get_kline_data(api, symbol, "15m", bar_count)
+                    if df.empty or len(df) < 10:
+                        continue
+                    df = df.set_index("datetime")
+
+                # 每只股票拉取后立即保存，避免批量保存失败丢失数据
+                data_cache = {symbol: {"name": "", "data": df}}
+                saved = _save_15m_batch(data_cache)
+                total_saved += saved
+                total_new_bars += len(df)
+
+            except Exception:
+                error_count += 1
+                continue
+
+    finally:
+        api.disconnect()
+
+    print("\n" + "=" * 70)
+    print("15m数据入库完成")
+    print(f"  处理股票: {len(stock_codes)} 只")
+    print(f"  新增数据: {total_new_bars} 条K线")
+    print(f"  保存记录: {total_saved} 条")
+    print(f"  错误数量: {error_count} 只")
+    print("=" * 70)
+
+
 def update_watchlist_tick(watchlist_df: pd.DataFrame = None, n_days: int = 30, quiet: bool = False):
     """刷新自选股Tick缓存（汇总+PVDI因子）
 
@@ -605,8 +770,8 @@ def main():
     parser.add_argument("--update", action="store_true", help="增量更新到当天")
     parser.add_argument("--force", action="store_true", help="强制更新，忽略时间限制（如周五15:00限制）")
     parser.add_argument("--limit", type=int, default=None, help="限制处理的股票数量（用于测试）")
-    parser.add_argument("--period", type=str, choices=["d", "w", "15m", "tick"], default=None,
-                        help="只回补指定周期: d=日线, w=周线, 15m=15分钟线, tick=Tick缓存")
+    parser.add_argument("--period", type=str, choices=["d", "w", "15m", "15m_all", "tick"], default=None,
+                        help="只回补指定周期: d=日线, w=周线, 15m=15分钟线(自选股), 15m_all=15分钟线(全量), tick=Tick缓存")
     args = parser.parse_args()
 
     from datasource.database import query_df
@@ -660,6 +825,9 @@ def main():
             do_weekly()
         elif args.period == "15m":
             update_watchlist_15m(bar_count=cfg["bars"])
+        elif args.period == "15m_all":
+            codes = [row['ts_code'].split('.')[0] for _, row in cache_df.iterrows()] if args.limit else None
+            update_all_15m(bar_count=cfg["bars"], stock_codes=codes)
 
         print(f"\n{'='*70}")
         print(f"✅ {cfg['desc']} 回补完成")
@@ -687,15 +855,18 @@ def main():
             print(f"{'='*70}\n")
         elif args.period == "15m":
             update_watchlist_15m()
+        elif args.period == "15m_all":
+            update_all_15m()
         elif args.period == "tick":
             update_watchlist_tick()
         else:
             print("\n❌ 错误：--update 模式必须指定 --period 参数")
             print("示例：")
-            print("  python app/build_dataset.py --update --period d    # 更新日线")
-            print("  python app/build_dataset.py --update --period w    # 更新周线")
-            print("  python app/build_dataset.py --update --period 15m  # 更新15分钟线")
-            print("  python app/build_dataset.py --period tick          # 刷新Tick缓存")
+            print("  python app/build_dataset.py --update --period d        # 更新日线")
+            print("  python app/build_dataset.py --update --period w        # 更新周线")
+            print("  python app/build_dataset.py --update --period 15m      # 更新自选股15分钟线")
+            print("  python app/build_dataset.py --update --period 15m_all  # 更新全量15分钟线")
+            print("  python app/build_dataset.py --period tick              # 刷新Tick缓存")
             return
     else:
         print(f"\n{'='*70}")

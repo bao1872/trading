@@ -18,10 +18,13 @@ Data sources:
 - CSV OHLCV input, same as the earlier version
 - pytdx A-share K-line input via --tdx-code / --tdx-period / --tdx-count
 
-Main limitation versus TradingView:
-- Pine's request.security_lower_tf can pull lower-timeframe bars automatically. Offline Python cannot
-  do that unless you fetch/provide the same lower-timeframe bars. With pytdx, use --tdx-period 1m/5m/etc.
-  when you want a closer match to TradingView lower-timeframe volume allocation.
+Pine timeframe behavior reproduced here:
+- --tdx-period is the main/chart timeframe and controls Profile Lookback Length.
+- When the effective Pine lookback is <= 700, pytdx automatically fetches lower-timeframe bars
+  for volume allocation, matching request.security_lower_tf.
+- The original Pine daily-chart mapping is 60m; this version intentionally changes only that mapping
+  to 15m. Thus the default is 360 daily bars for the range/candles, with 15m bars for the profile.
+- When the effective Pine lookback is > 700, the profile uses the main bars, matching the Pine branch.
 """
 
 from __future__ import annotations
@@ -174,62 +177,182 @@ def _tv_gradient(color: str, ratio: float, min_alpha: float = 0.05, max_alpha: f
     return _rgba_with_alpha(color, alpha)
 
 
-def compute_volume_profile(df: pd.DataFrame, cfg: VolumeProfileConfig = VolumeProfileConfig()) -> VolumeProfileResult:
-    data = _normalize_columns(df)
+def _prepare_profile_bars(
+    main_data: pd.DataFrame,
+    main_window: pd.DataFrame,
+    start_index: int,
+    profile_df: Optional[pd.DataFrame],
+    main_period: str,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Select lower-timeframe bars belonging to the selected main-bar window.
 
-    lookback = min(max(int(cfg.profile_lookback_length), 10), 5000)
-    # Pine uses vp_profileLength := input - 1, and processes from last_bar_index - vp_profileLength.
-    lookback = min(lookback, len(data) - 1)
-    window = data.iloc[-lookback:].copy().reset_index(drop=True)
-    start_index = len(data) - len(window)
-    last_index = len(data) - 1
+    Pine determines the profile price range from the main/chart bars, but allocates
+    volume using request.security_lower_tf bars.  This helper reproduces that split
+    and maps every lower-timeframe bar to its parent main bar for Developing POC.
+    """
+    if profile_df is None:
+        return main_window.copy().reset_index(drop=True), np.arange(len(main_window), dtype=int)
 
-    lowest_price = float(window["low"].min())
-    highest_price = float(window["high"].max())
+    profile_data = _normalize_columns(profile_df).sort_values("datetime").reset_index(drop=True)
+    main_times = pd.to_datetime(main_window["datetime"], errors="coerce").reset_index(drop=True)
+    profile_times = pd.to_datetime(profile_data["datetime"], errors="coerce")
+    if main_times.isna().any() or profile_times.isna().all():
+        raise ValueError("Datetime values are required when lower-timeframe profile data is used.")
+
+    period_key = str(main_period).lower()
+    daily_like = period_key in {"day", "d"}
+    main_is_midnight = bool((main_times.dt.normalize() == main_times).all())
+
+    if daily_like and main_is_midnight:
+        # Some feeds label daily bars at midnight. Match intraday bars by trading date.
+        main_dates = main_times.dt.normalize()
+        profile_dates = profile_times.dt.normalize()
+        date_to_pos = {date: pos for pos, date in enumerate(main_dates)}
+        mask = profile_dates.isin(date_to_pos)
+        selected = profile_data.loc[mask].copy().reset_index(drop=True)
+        selected_dates = pd.to_datetime(selected["datetime"]).dt.normalize()
+        parent_positions = selected_dates.map(date_to_pos).to_numpy(dtype=int)
+    else:
+        # pytdx normally labels bars by their ending timestamp.  A lower bar belongs
+        # to the first selected main bar whose ending timestamp is >= the lower bar.
+        end_time = main_times.iloc[-1]
+        if start_index > 0:
+            previous_main_time = pd.to_datetime(main_data.loc[start_index - 1, "datetime"])
+            time_mask = (profile_times > previous_main_time) & (profile_times <= end_time)
+        else:
+            time_mask = profile_times <= end_time
+
+        candidate = profile_data.loc[time_mask].copy().reset_index(drop=True)
+        candidate_times = pd.to_datetime(candidate["datetime"]).to_numpy(dtype="datetime64[ns]")
+        main_time_values = main_times.to_numpy(dtype="datetime64[ns]")
+        parent_positions = np.searchsorted(main_time_values, candidate_times, side="left")
+        valid = (parent_positions >= 0) & (parent_positions < len(main_window))
+        selected = candidate.loc[valid].copy().reset_index(drop=True)
+        parent_positions = parent_positions[valid].astype(int)
+
+    if selected.empty:
+        raise ValueError(
+            "No lower-timeframe bars overlap the selected main-period lookback. "
+            "Increase --profile-count or verify the pytdx timestamps."
+        )
+    return selected, parent_positions
+
+
+def compute_volume_profile(
+    df: pd.DataFrame,
+    cfg: VolumeProfileConfig = VolumeProfileConfig(),
+    profile_df: Optional[pd.DataFrame] = None,
+    main_period: str = "day",
+) -> VolumeProfileResult:
+    main_data = _normalize_columns(df)
+
+    # Pine input 360 is converted internally to 359, then processes indices
+    # last_bar_index-359 ... last_bar_index: 360 main bars in total.
+    requested_lookback = min(max(int(cfg.profile_lookback_length), 10), 5000)
+    lookback = min(requested_lookback, len(main_data))
+    main_window = main_data.iloc[-lookback:].copy().reset_index(drop=True)
+    start_index = len(main_data) - len(main_window)
+    last_index = len(main_data) - 1
+
+    # Highest/lowest price are deliberately taken from main/chart bars, as in Pine.
+    lowest_price = float(main_window["low"].min())
+    highest_price = float(main_window["high"].max())
     rows = int(np.clip(cfg.profile_number_of_rows, 30, 130))
     price_range = highest_price - lowest_price
     if price_range <= 0:
         raise ValueError("Highest and lowest prices are equal; cannot build a volume profile.")
     price_step = price_range / rows
 
+    # Volume is deliberately allocated from lower-timeframe bars when supplied.
+    profile_window, parent_positions = _prepare_profile_bars(
+        main_data=main_data,
+        main_window=main_window,
+        start_index=start_index,
+        profile_df=profile_df,
+        main_period=main_period,
+    )
+
     total_volume = np.zeros(rows, dtype=float)
     bullish_volume = np.zeros(rows, dtype=float)
+    dev_points: list[dict[str, float | int]] = []
 
-    # Developing POC path, equivalent in purpose to the Pine polyline.
-    dev_points = []
+    # --- Vectorised volume allocation (replaces iterrows loop) ---
+    if len(profile_window) > 0:
+        lows = profile_window["low"].to_numpy(dtype=float)
+        highs = profile_window["high"].to_numpy(dtype=float)
+        vols = profile_window["volume"].to_numpy(dtype=float)
+        closes = profile_window["close"].to_numpy(dtype=float)
+        opens = profile_window["open"].to_numpy(dtype=float)
+        polarity = closes > opens  # bullish bar mask
 
-    for i, row in window.iterrows():
-        level_high = float(row["high"])
-        level_low = float(row["low"])
-        vol = float(row["volume"])
-        polarity = bool(row["close"] > row["open"])
+        # Bars where high == low (single-price bars)
+        eq_mask = highs <= lows
+        eq_slots = np.clip(np.floor((lows - lowest_price) / price_step).astype(int), 0, rows - 1)
+        np.add.at(total_volume, eq_slots[eq_mask], vols[eq_mask])
+        np.add.at(bullish_volume, eq_slots[eq_mask & polarity], vols[eq_mask & polarity])
 
-        if level_high <= level_low:
-            # Degenerate bar: put full volume in the containing slot.
-            slot = int(np.clip(math.floor((level_low - lowest_price) / price_step), 0, rows - 1))
-            total_volume[slot] += vol
-            if polarity:
-                bullish_volume[slot] += vol
-        else:
-            start_slot = max(math.floor((level_low - lowest_price) / price_step), 0)
-            end_slot = min(math.floor((level_high - lowest_price) / price_step), rows - 1)
-            for price_level_index in range(start_slot, end_slot + 1):
-                price_level = lowest_price + price_level_index * price_step
-                prop = _overlap_proportion(level_low, level_high, price_level, price_step)
-                add = vol * prop
-                total_volume[price_level_index] += add
-                if polarity:
-                    bullish_volume[price_level_index] += add
+        # Bars where high > low (range bars) — fully vectorised
+        rng_mask = ~eq_mask
+        if rng_mask.any():
+            rng_lows = lows[rng_mask]
+            rng_highs = highs[rng_mask]
+            rng_vols = vols[rng_mask]
+            rng_polarity = polarity[rng_mask]
+            n_rng = len(rng_lows)
 
+            rng_start = np.clip(np.floor((rng_lows - lowest_price) / price_step).astype(int), 0, rows - 1)
+            rng_end = np.clip(np.floor((rng_highs - lowest_price) / price_step).astype(int), 0, rows - 1)
+
+            # Build (bar, slot) index pairs for all range bars
+            slot_counts = rng_end - rng_start + 1  # number of slots per bar
+            bar_indices = np.repeat(np.arange(n_rng), slot_counts)
+            slot_offsets = np.concatenate([np.arange(int(c)) for c in slot_counts])
+            slot_indices = rng_start[bar_indices] + slot_offsets
+
+            # Price levels for each (bar, slot) pair
+            price_levels = lowest_price + slot_indices * price_step
+            lo = rng_lows[bar_indices]
+            hi = rng_highs[bar_indices]
+            denom = hi - lo
+
+            # Vectorised _overlap_proportion (4 branches)
+            cond1 = (lo >= price_levels) & (hi > price_levels + price_step)
+            cond2 = (hi <= price_levels + price_step) & (lo < price_levels)
+            cond3 = (lo >= price_levels) & (hi <= price_levels + price_step)
+            # cond4 = default: price_step / denom
+
+            prop = np.where(cond1, (price_levels + price_step - lo) / denom,
+                   np.where(cond2, (hi - price_levels) / denom,
+                   np.where(cond3, 1.0,
+                            price_step / denom)))
+            # Guard zero denom
+            prop = np.where(denom > 0, prop, 0.0)
+
+            adds = rng_vols[bar_indices] * prop
+            np.add.at(total_volume, slot_indices, adds)
+
+            # Bullish volume for bullish bars only
+            bull_mask = rng_polarity[bar_indices]
+            if bull_mask.any():
+                np.add.at(bullish_volume, slot_indices[bull_mask], adds[bull_mask])
+
+        # Developing POC tracking
         if cfg.poc_show == "developing":
-            poc_i = int(np.argmax(total_volume)) if total_volume.max() > 0 else -1
-            if poc_i >= 0:
-                dev_points.append(
-                    {
-                        "x": start_index + i,
-                        "poc": lowest_price + (poc_i + 0.5) * price_step,
-                    }
-                )
+            pp = parent_positions
+            is_parent_end = np.zeros(len(pp), dtype=bool)
+            is_parent_end[-1] = True
+            if len(pp) > 1:
+                is_parent_end[:-1] = pp[1:] != pp[:-1]
+            end_indices = np.where(is_parent_end)[0]
+            for idx in end_indices:
+                if total_volume.max() > 0:
+                    poc_i = int(np.argmax(total_volume))
+                    dev_points.append(
+                        {
+                            "x": start_index + int(pp[idx]),
+                            "poc": lowest_price + (poc_i + 0.5) * price_step,
+                        }
+                    )
 
     bearish_volume = np.abs(2 * bullish_volume - total_volume)
     max_vol = float(total_volume.max())
@@ -257,7 +380,7 @@ def compute_volume_profile(df: pd.DataFrame, cfg: VolumeProfileConfig = VolumePr
     price_low = lowest_price + np.arange(rows) * price_step
     price_high = lowest_price + (np.arange(rows) + 1) * price_step
     price_mid = lowest_price + (np.arange(rows) + 0.5) * price_step
-    profile_df = pd.DataFrame(
+    profile_table = pd.DataFrame(
         {
             "row": np.arange(rows),
             "price_low": price_low,
@@ -276,10 +399,10 @@ def compute_volume_profile(df: pd.DataFrame, cfg: VolumeProfileConfig = VolumePr
         }
     )
 
-    _detect_nodes(profile_df, cfg)
+    _detect_nodes(profile_table, cfg)
 
     return VolumeProfileResult(
-        profile_df=profile_df,
+        profile_df=profile_table,
         lowest_price=lowest_price,
         highest_price=highest_price,
         price_step=price_step,
@@ -293,7 +416,6 @@ def compute_volume_profile(df: pd.DataFrame, cfg: VolumeProfileConfig = VolumePr
         last_index=last_index,
         developing_poc=pd.DataFrame(dev_points) if dev_points else None,
     )
-
 
 def _detect_nodes(profile_df: pd.DataFrame, cfg: VolumeProfileConfig) -> None:
     vols = profile_df["total_volume"].to_numpy(dtype=float)
@@ -558,6 +680,58 @@ TDX_PERIOD_MAP: dict[str, int] = {
     "1m": 7,
 }
 
+
+
+def pine_lower_timeframe(main_period: str, profile_lookback_length: int) -> Optional[str]:
+    """Replicate calculateTimeframe(2), except daily 60m is intentionally 15m.
+
+    Pine uses the current/main bars instead of request.security_lower_tf when its
+    internal profile length is above 700.  The internal value is input-1.
+    pytdx has no seconds bars, so a 1m main chart falls back to 1m data.
+    """
+    effective_pine_length = max(int(profile_lookback_length) - 1, 0)
+    if effective_pine_length > 700:
+        return None
+
+    key = str(main_period).lower()
+    mapping = {
+        "1m": "1m",      # Pine requests seconds; unavailable in pytdx.
+        "5m": "1m",
+        "15m": "1m",
+        "30m": "5m",
+        "60m": "5m",
+        "1h": "5m",
+        "day": "15m",    # Intentional change from the original Pine's 60m.
+        "d": "15m",
+        "week": "day",
+        "w": "day",
+        "month": "day",
+        "m": "day",
+    }
+    return mapping.get(key)
+
+
+def estimate_profile_bar_count(main_period: str, lookback: int) -> int:
+    """Estimate lower bars needed to cover the selected main-bar lookback."""
+    key = str(main_period).lower()
+    bars_per_main = {
+        "1m": 1,
+        "5m": 5,
+        "15m": 15,
+        "30m": 6,
+        "60m": 12,
+        "1h": 12,
+        "day": 16,
+        "d": 16,
+        "week": 6,
+        "w": 6,
+        "month": 24,
+        "m": 24,
+    }.get(key, 16)
+    # Add a buffer for suspensions, holidays, partial sessions and timestamp boundaries.
+    return max(800, int(math.ceil(max(lookback, 10) * bars_per_main * 1.15)) + bars_per_main * 10)
+
+
 TDX_DEFAULT_SERVERS: list[tuple[str, int]] = [
     ("119.147.212.81", 7709),
     ("14.215.128.18", 7709),
@@ -696,13 +870,19 @@ def write_html(
     output_html: str | Path,
     cfg: VolumeProfileConfig = VolumeProfileConfig(),
     title: str = "LuxAlgo-style Volume Profile with Node Detection",
+    profile_df: Optional[pd.DataFrame] = None,
+    main_period: str = "day",
 ) -> VolumeProfileResult:
-    result = compute_volume_profile(df, cfg)
+    result = compute_volume_profile(
+        df,
+        cfg,
+        profile_df=profile_df,
+        main_period=main_period,
+    )
     fig = make_volume_profile_figure(df, result, cfg, title=title)
     output_html = Path(output_html)
     fig.write_html(str(output_html), include_plotlyjs="cdn", full_html=True)
     return result
-
 
 def _demo_data(n: int = 520, seed: int = 7) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
@@ -717,20 +897,46 @@ def _demo_data(n: int = 520, seed: int = 7) -> pd.DataFrame:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Generate a TradingView-style LuxAlgo Volume Profile HTML from CSV or pytdx A-share data.")
-    p.add_argument("--csv", type=str, help="Input OHLCV CSV. Required columns: datetime/date/time, open, high, low, close, volume.")
+    p = argparse.ArgumentParser(
+        description=(
+            "Generate a TradingView-style LuxAlgo Volume Profile HTML. "
+            "The main period controls the chart/lookback; lower-timeframe bars control volume allocation."
+        )
+    )
+    p.add_argument("--csv", type=str, help="Input main-period OHLCV CSV. CSV mode uses the same bars for profile allocation.")
     p.add_argument("--tdx-code", type=str, help="Use pytdx as data source. Example: 600519, 300750, SH000001, SZ399001.")
-    p.add_argument("--tdx-period", type=str, default="day", choices=list(TDX_PERIOD_MAP.keys()), help="pytdx period: 1m, 5m, 15m, 30m, 60m/1h, day, week, month.")
-    p.add_argument("--tdx-count", type=int, default=800, help="Number of pytdx bars to fetch before applying lookback.")
+    p.add_argument(
+        "--tdx-period",
+        type=str,
+        default="day",
+        choices=list(TDX_PERIOD_MAP.keys()),
+        help="Main/chart period. Default day. This period controls the lookback range and candlesticks.",
+    )
+    p.add_argument("--tdx-count", type=int, default=800, help="Number of main-period pytdx bars to fetch before lookback.")
+    p.add_argument(
+        "--profile-period",
+        type=str,
+        default="auto",
+        choices=["auto", "main", *TDX_PERIOD_MAP.keys()],
+        help=(
+            "Profile allocation period. auto reproduces Pine calculateTimeframe(2), "
+            "except a daily main chart uses 15m instead of the original 60m."
+        ),
+    )
+    p.add_argument(
+        "--profile-count",
+        type=int,
+        help="Optional number of lower-timeframe bars to fetch. Default is estimated from lookback.",
+    )
     p.add_argument("--tdx-market", type=int, choices=[0, 1], help="Optional pytdx market override: 0=SZ, 1=SH.")
     p.add_argument("--tdx-server", type=str, help="Optional fixed TDX server IP.")
     p.add_argument("--tdx-port", type=int, default=7709, help="TDX server port, default 7709.")
     p.add_argument("--output", type=str, default="volume_profile.html", help="Output HTML path.")
-    p.add_argument("--lookback", type=int, default=360, help="Profile lookback length.")
-    p.add_argument("--rows", type=int, default=100, help="Profile number of rows, 30-130.")
+    p.add_argument("--lookback", type=int, default=360, help="Profile lookback in MAIN-period bars.")
+    p.add_argument("--rows", type=int, default=100, help="Profile number of price rows, 30-130.")
     p.add_argument("--value-area", type=float, default=70.0, help="Value area percentage, e.g. 70.")
     p.add_argument("--placement", choices=["right", "left"], default="right")
-    p.add_argument("--poc", choices=["developing", "regular", "none"], default="regular")
+    p.add_argument("--poc", choices=["developing", "regular", "none"], default="none")
     p.add_argument("--vah", action="store_true", help="Show VAH line.")
     p.add_argument("--val", action="store_true", help="Show VAL line.")
     p.add_argument("--peaks", choices=["peaks", "clusters", "none"], default="peaks")
@@ -740,32 +946,89 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--threshold", type=float, default=1.0, help="Volume node threshold percent.")
     p.add_argument("--highest", type=int, default=0, help="Highlight highest N volume nodes.")
     p.add_argument("--lowest", type=int, default=0, help="Highlight lowest N unique volume nodes.")
-    p.add_argument("--demo", action="store_true", help="Generate HTML from synthetic demo data.")
+    p.add_argument("--demo", action="store_true", help="Generate HTML from synthetic main-period demo data.")
+    p.add_argument("--db-code", type=str, help="Use database as data source with qfq. Example: 000608.SZ, 600519.SH.")
     return p
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
-    source_count = sum(bool(x) for x in [args.csv, args.demo, args.tdx_code])
+    source_count = sum(bool(x) for x in [args.csv, args.demo, args.tdx_code, args.db_code])
     if source_count != 1:
-        raise SystemExit("Choose exactly one data source: --tdx-code, --csv, or --demo.")
+        raise SystemExit("Choose exactly one data source: --tdx-code, --db-code, --csv, or --demo.")
+
+    profile_df: Optional[pd.DataFrame] = None
+    profile_period_label = "main"
 
     if args.demo:
         df = _demo_data()
         source_title = "Synthetic demo"
+        main_period = args.tdx_period
     elif args.tdx_code:
+        main_period = args.tdx_period
         df = fetch_pytdx_bars(
             code=args.tdx_code,
-            period=args.tdx_period,
+            period=main_period,
             count=args.tdx_count,
             market=args.tdx_market,
             server=args.tdx_server,
             port=args.tdx_port,
         )
-        source_title = f"pytdx {normalize_tdx_code(args.tdx_code)} {args.tdx_period}"
+
+        if args.profile_period == "auto":
+            requested_profile_period = pine_lower_timeframe(main_period, args.lookback)
+        elif args.profile_period == "main":
+            requested_profile_period = None
+        else:
+            requested_profile_period = args.profile_period
+
+        if requested_profile_period is not None and requested_profile_period != main_period:
+            profile_count = args.profile_count or estimate_profile_bar_count(main_period, args.lookback)
+            profile_df = fetch_pytdx_bars(
+                code=args.tdx_code,
+                period=requested_profile_period,
+                count=profile_count,
+                market=args.tdx_market,
+                server=args.tdx_server,
+                port=args.tdx_port,
+            )
+            profile_period_label = requested_profile_period
+        else:
+            profile_period_label = main_period
+
+        source_title = (
+            f"pytdx {normalize_tdx_code(args.tdx_code)} "
+            f"main={main_period}, profile={profile_period_label}"
+        )
+    elif args.db_code:
+        # 从数据库加载前复权数据
+        from datasource.k_data_loader import load_k_data
+        from datasource.adj_factor import apply_adj_factor_intraday
+
+        ts_code = args.db_code
+        main_period = "day"
+
+        # 日线前复权
+        df = load_k_data(ts_code, freq='d', adj='qfq')
+        if df.empty or len(df) < 10:
+            raise SystemExit(f"数据库日线数据不足: {ts_code}")
+        df['datetime'] = df.index
+
+        # 15m前复权
+        ltf_raw = load_k_data(ts_code, freq='15m', adj=None)
+        if ltf_raw.empty or len(ltf_raw) < 10:
+            raise SystemExit(f"数据库15m数据不足: {ts_code}")
+        ltf_raw = apply_adj_factor_intraday(ltf_raw, ts_code)
+        ltf_raw['datetime'] = ltf_raw.index
+        profile_df = ltf_raw
+        profile_period_label = "15m"
+
+        source_title = f"DB(qfq) {ts_code} main=day, profile=15m"
     else:
         df = read_csv(args.csv)
         source_title = Path(args.csv).name
+        main_period = args.tdx_period
+
     cfg = VolumeProfileConfig(
         profile_lookback_length=args.lookback,
         profile_number_of_rows=args.rows,
@@ -782,9 +1045,21 @@ def main() -> None:
         highest_n_volume_nodes=args.highest,
         lowest_n_volume_nodes=args.lowest,
     )
-    result = write_html(df, args.output, cfg, title=f"LuxAlgo-style Volume Profile - {source_title}")
+    result = write_html(
+        df,
+        args.output,
+        cfg,
+        title=f"LuxAlgo-style Volume Profile - {source_title}",
+        profile_df=profile_df,
+        main_period=main_period,
+    )
     print(f"HTML written: {args.output}")
-    print(f"Rows loaded: {len(df)}")
+    print(f"Main period: {main_period}")
+    print(f"Main bars loaded: {len(df)}")
+    print(f"Profile allocation period: {profile_period_label}")
+    if profile_df is not None:
+        print(f"Lower-timeframe bars fetched: {len(profile_df)}")
+    print(f"Profile lookback: {min(args.lookback, len(df))} main-period bars")
     print(f"POC={result.poc_price:.6g}, VAH={result.vah_price:.6g}, VAL={result.val_price:.6g}")
 
 
