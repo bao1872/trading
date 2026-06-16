@@ -31,9 +31,9 @@ from __future__ import annotations
 
 import argparse
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Literal, Optional
+from typing import Iterable, List, Literal, Optional
 import socket
 
 import numpy as np
@@ -67,7 +67,7 @@ class VolumeProfileConfig:
     profile_background: bool = False
 
     peaks_show: Literal["peaks", "clusters", "none"] = "peaks"
-    peaks_detection_percent: float = 0.09
+    peaks_detection_percent: float = 0.05
     troughs_show: Literal["troughs", "clusters", "none"] = "none"
     troughs_detection_percent: float = 0.07
     volume_node_threshold: float = 0.01
@@ -90,6 +90,10 @@ class VolumeProfileConfig:
     profile_background_color: str = "rgba(41,98,255,0.05)"
 
 
+# SSOT 规则：所有 node/peak 特征的计算逻辑必须在此模块内完成，
+# 通过 VolumeProfileResult 的字段（all_peak_prices, peak_df 等）对外提供。
+# 严禁在模块外部对 profile_df 进行 is_peak 过滤、price_mid 提取、
+# 参考价比较等 node 特征计算。外部代码只能读取 VolumeProfileResult 的字段。
 @dataclass
 class VolumeProfileResult:
     profile_df: pd.DataFrame
@@ -105,6 +109,9 @@ class VolumeProfileResult:
     start_index: int
     last_index: int
     developing_poc: Optional[pd.DataFrame]
+    # --- peak/node 聚合字段，由 _detect_nodes 计算后填充，禁止外部重复计算 ---
+    all_peak_prices: List[float] = field(default_factory=list)
+    peak_df: Optional[pd.DataFrame] = None
 
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -401,6 +408,12 @@ def compute_volume_profile(
 
     _detect_nodes(profile_table, cfg)
 
+    # 填充 peak/node 聚合字段（SSOT：所有 node 特征在此计算，禁止外部重复计算）
+    peak_rows = profile_table[profile_table["is_peak"]]
+    all_peak_prices = sorted(
+        set(round(float(p), 4) for p in peak_rows["price_mid"] if np.isfinite(p))
+    ) if not peak_rows.empty else []
+
     return VolumeProfileResult(
         profile_df=profile_table,
         lowest_price=lowest_price,
@@ -415,6 +428,8 @@ def compute_volume_profile(
         start_index=start_index,
         last_index=last_index,
         developing_poc=pd.DataFrame(dev_points) if dev_points else None,
+        all_peak_prices=all_peak_prices,
+        peak_df=peak_rows.reset_index(drop=True) if not peak_rows.empty else None,
     )
 
 def _detect_nodes(profile_df: pd.DataFrame, cfg: VolumeProfileConfig) -> None:
@@ -472,6 +487,46 @@ def _detect_nodes(profile_df: pd.DataFrame, cfg: VolumeProfileConfig) -> None:
             if len(non_duplicate_order) >= int(cfg.lowest_n_volume_nodes):
                 break
         profile_df.loc[non_duplicate_order, "is_lowest_node"] = True
+
+
+def extract_nearest_nodes(
+    result: VolumeProfileResult,
+    reference_price: float,
+) -> dict:
+    """从 VolumeProfileResult 提取参考价格上方/下方最近的 peak 节点（SSOT 权威实现）
+
+    禁止在外部重新计算 peak 节点，必须通过此函数或 VolumeProfileResult 字段获取。
+
+    Args:
+        result: VolumeProfileResult 对象（含 peak_df 和 all_peak_prices）
+        reference_price: 参考价格（收盘价/day_high/day_low，由调用方决定语义）
+
+    Returns:
+        dict: {
+            'nearest_above_node_price': float or None,
+            'nearest_below_node_price': float or None,
+            'all_peak_prices': List[float],
+        }
+    """
+    peak_df = result.peak_df
+    if peak_df is None or peak_df.empty:
+        return {
+            "nearest_above_node_price": None,
+            "nearest_below_node_price": None,
+            "all_peak_prices": [],
+        }
+
+    above = peak_df[peak_df["price_mid"] > reference_price]
+    below = peak_df[peak_df["price_mid"] <= reference_price]
+
+    nearest_above = round(float(above["price_mid"].min()), 4) if not above.empty else None
+    nearest_below = round(float(below["price_mid"].max()), 4) if not below.empty else None
+
+    return {
+        "nearest_above_node_price": nearest_above,
+        "nearest_below_node_price": nearest_below,
+        "all_peak_prices": result.all_peak_prices,
+    }
 
 
 def make_volume_profile_figure(

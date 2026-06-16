@@ -76,6 +76,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import create_engine, text
 import pandas as pd
+import numpy as np
 from datetime import datetime, date
 from typing import Dict, Optional, List
 from collections import defaultdict
@@ -178,39 +179,42 @@ def check_recent_limit_up(daily_df: pd.DataFrame, loc: int, limit_pct: float) ->
 # Node 触碰检测
 # ---------------------------------------------------------------------------
 
-def check_node_touch(profile_df: pd.DataFrame, day_low: float, day_high: float) -> Dict:
+def check_node_touch(vp_result: 'VolumeProfileResult', day_low: float, day_high: float) -> Dict:
     """
     检查当日 [day_low, day_high] 是否触碰任何 Peak Node。
 
     触碰定义：当日价格区间与 Node 价格区间有重叠
       day_low <= node_price_high AND day_high >= node_price_low
 
+    Args:
+        vp_result: VolumeProfileResult 对象（含 peak_df, poc_price, vah_price, val_price）
+        day_low: 当日最低价
+        day_high: 当日最高价
+
     Returns:
         dict with keys: touched, peak_node_count, touched_node_prices,
                         nearest_above_node_price, nearest_below_node_price,
                         poc_price, vah_price, val_price
     """
-    peak_rows = profile_df[profile_df['is_peak']].copy()
+    from features.luxalgo_volume_profile_pytdx_15m_aligned import extract_nearest_nodes
 
+    peak_df = vp_result.peak_df
     touched_nodes = []
-    for _, row in peak_rows.iterrows():
-        if day_low <= row['price_high'] and day_high >= row['price_low']:
-            touched_nodes.append(row)
+    if peak_df is not None and not peak_df.empty:
+        for _, row in peak_df.iterrows():
+            if day_low <= row['price_high'] and day_high >= row['price_low']:
+                touched_nodes.append(row)
 
-    # POC
-    poc_row = profile_df[profile_df['is_poc']]
-    poc_price = float(poc_row['price_mid'].iloc[0]) if not poc_row.empty else None
+    # 直接使用 VolumeProfileResult 已有字段，禁止从 profile_df 重复计算
+    poc_price = vp_result.poc_price if not np.isnan(vp_result.poc_price) else None
+    vah_price = vp_result.vah_price if not np.isnan(vp_result.vah_price) else None
+    val_price = vp_result.val_price if not np.isnan(vp_result.val_price) else None
 
-    # Value Area
-    va_rows = profile_df[profile_df['is_value_area']]
-    vah_price = float(va_rows['price_high'].max()) if not va_rows.empty else None
-    val_price = float(va_rows['price_low'].min()) if not va_rows.empty else None
-
-    # 上下方最近 Node（基于 price_mid 与当日价格区间的关系）
-    above = peak_rows[peak_rows['price_mid'] > day_high]
-    below = peak_rows[peak_rows['price_mid'] < day_low]
-    nearest_above = round(float(above['price_mid'].min()), 4) if not above.empty else None
-    nearest_below = round(float(below['price_mid'].max()), 4) if not below.empty else None
+    # 上下方最近 Node：调用 SSOT，分别以 day_high/day_low 为参考
+    above_info = extract_nearest_nodes(vp_result, reference_price=day_high)
+    below_info = extract_nearest_nodes(vp_result, reference_price=day_low)
+    nearest_above = above_info['nearest_above_node_price']
+    nearest_below = below_info['nearest_below_node_price']
 
     return {
         'touched': len(touched_nodes) > 0,
@@ -301,13 +305,14 @@ def compute_volume_profile_15m(
             peaks_show="peaks",
             profile_lookback_length=VP_LOOKBACK,
             profile_number_of_rows=VP_ROWS,
+            peaks_detection_percent=0.05,  # 与 UI/monitoring 保持一致
         )
         vp_result = compute_volume_profile(
             daily_for_vp, cfg,
             profile_df=ltf_for_vp,
             main_period="day",
         )
-        return check_node_touch(vp_result.profile_df, day_low, day_high)
+        return check_node_touch(vp_result, day_low, day_high)
 
     except Exception as e:
         logger.debug(f"Volume Profile计算异常 {ts_code}: {e}")
@@ -506,6 +511,7 @@ def backfill_stock_events(ts_code: str, start_date: date, end_date: date) -> Lis
                         peaks_show="peaks",
                         profile_lookback_length=VP_LOOKBACK,
                         profile_number_of_rows=VP_ROWS,
+                        peaks_detection_percent=0.05,  # 与 UI/monitoring 保持一致
                     )
                     sub_daily = daily_df.loc[:trade_dt]
                     # 只截取lookback范围内的日线和15m数据，避免传入全量数据导致VP内部处理慢
@@ -522,7 +528,7 @@ def backfill_stock_events(ts_code: str, start_date: date, end_date: date) -> Lis
                         profile_df=sub_ltf_vp,
                         main_period="day",
                     )
-                    node_info = check_node_touch(vp_result.profile_df, today_low, today_high)
+                    node_info = check_node_touch(vp_result, today_low, today_high)
                 except Exception as e:
                     logger.debug(f"VP计算异常 {ts_code} {trade_dt}: {e}")
 

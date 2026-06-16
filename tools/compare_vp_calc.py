@@ -148,6 +148,7 @@ def compare(ts_code: str, end_date: date, verbose: bool = False):
         peaks_show="peaks",
         profile_lookback_length=VP_LOOKBACK,
         profile_number_of_rows=VP_ROWS,
+        peaks_detection_percent=0.05,  # 与 UI/monitoring 保持一致
     )
 
     # 方式1: selection_limit_up.py 的数据准备方式
@@ -174,8 +175,8 @@ def compare(ts_code: str, end_date: date, verbose: bool = False):
     pdf1 = vp_result1.profile_df
     pdf2 = vp_result2.profile_df
 
-    print(f"  方式1 profile_df: {len(pdf1)} 行, peaks={pdf1['is_peak'].sum()}")
-    print(f"  方式2 profile_df: {len(pdf2)} 行, peaks={pdf2['is_peak'].sum()}")
+    print(f"  方式1 profile_df: {len(pdf1)} 行, peaks={len(vp_result1.all_peak_prices)}")
+    print(f"  方式2 profile_df: {len(pdf2)} 行, peaks={len(vp_result2.all_peak_prices)}")
 
     # 对比 POC/VAH/VAL
     print(f"\n  POC: 方式1={vp_result1.poc_price:.4f}, 方式2={vp_result2.poc_price:.4f}, 差异={abs(vp_result1.poc_price-vp_result2.poc_price):.6f}")
@@ -186,21 +187,23 @@ def compare(ts_code: str, end_date: date, verbose: bool = False):
     print(f"  最低价: 方式1={vp_result1.lowest_price:.4f}, 方式2={vp_result2.lowest_price:.4f}")
     print(f"  最高价: 方式1={vp_result1.highest_price:.4f}, 方式2={vp_result2.highest_price:.4f}")
 
-    # 对比 peak 行
-    peaks1 = pdf1[pdf1['is_peak']]
-    peaks2 = pdf2[pdf2['is_peak']]
+    # 对比 peak 行（使用 VolumeProfileResult.peak_df，SSOT）
+    peaks1 = vp_result1.peak_df
+    peaks2 = vp_result2.peak_df
 
     print(f"\n  Peak行对比:")
-    print(f"    方式1 peak价格: {peaks1['price_mid'].tolist()}")
-    print(f"    方式2 peak价格: {peaks2['price_mid'].tolist()}")
+    print(f"    方式1 peak价格: {vp_result1.all_peak_prices}")
+    print(f"    方式2 peak价格: {vp_result2.all_peak_prices}")
 
     if verbose:
-        print(f"\n  方式1 peak详情:")
-        for _, row in peaks1.iterrows():
-            print(f"    price_mid={row['price_mid']:.4f}, total_vol={row['total_volume']:.2f}, bull={row['bullish_volume']:.2f}, bear={row['bearish_volume']:.2f}")
-        print(f"\n  方式2 peak详情:")
-        for _, row in peaks2.iterrows():
-            print(f"    price_mid={row['price_mid']:.4f}, total_vol={row['total_volume']:.2f}, bull={row['bullish_volume']:.2f}, bear={row['bearish_volume']:.2f}")
+        if peaks1 is not None and not peaks1.empty:
+            print(f"\n  方式1 peak详情:")
+            for _, row in peaks1.iterrows():
+                print(f"    price_mid={row['price_mid']:.4f}, total_vol={row['total_volume']:.2f}, bull={row['bullish_volume']:.2f}, bear={row['bearish_volume']:.2f}")
+        if peaks2 is not None and not peaks2.empty:
+            print(f"\n  方式2 peak详情:")
+            for _, row in peaks2.iterrows():
+                print(f"    price_mid={row['price_mid']:.4f}, total_vol={row['total_volume']:.2f}, bull={row['bullish_volume']:.2f}, bear={row['bearish_volume']:.2f}")
 
     # =========================================================================
     # 4. extract_node_clusters 结果对比
@@ -210,8 +213,8 @@ def compare(ts_code: str, end_date: date, verbose: bool = False):
     current_price = float(daily_method1['close'].iloc[-1])
     print(f"  当前价格: {current_price}")
 
-    nodes1 = extract_node_clusters(pdf1, current_price)
-    nodes2 = extract_node_clusters(pdf2, current_price)
+    nodes1 = extract_node_clusters(vp_result1, current_price)
+    nodes2 = extract_node_clusters(vp_result2, current_price)
 
     print(f"\n  方式1 节点信息:")
     for k, v in nodes1.items():
@@ -259,7 +262,7 @@ def compare(ts_code: str, end_date: date, verbose: bool = False):
     pdf_full = vp_result_full.profile_df
 
     current_price_full = float(daily_full['close'].iloc[-1])
-    nodes_full = extract_node_clusters(pdf_full, current_price_full)
+    nodes_full = extract_node_clusters(vp_result_full, current_price_full)
 
     print(f"  日线数据量: {len(daily_full)} 条")
     print(f"  15m数据量: {len(ltf_full)} 条")
@@ -267,8 +270,8 @@ def compare(ts_code: str, end_date: date, verbose: bool = False):
     print(f"  POC: {vp_result_full.poc_price:.4f}")
     print(f"  VAH: {vp_result_full.vah_price:.4f}")
     print(f"  VAL: {vp_result_full.val_price:.4f}")
-    print(f"  Peak行数: {pdf_full['is_peak'].sum()}")
-    print(f"  Peak价格: {pdf_full[pdf_full['is_peak']]['price_mid'].tolist()}")
+    print(f"  Peak行数: {len(vp_result_full.all_peak_prices)}")
+    print(f"  Peak价格: {vp_result_full.all_peak_prices}")
 
     print(f"\n  CLI模式节点信息:")
     for k, v in nodes_full.items():

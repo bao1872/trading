@@ -51,9 +51,8 @@ CREATE INDEX IF NOT EXISTS idx_adj_factor_ts_date ON stock_adj_factor(ts_code, t
 
 def ensure_adj_factor_table():
     """确保 stock_adj_factor 表存在"""
-    from config import DATABASE_URL
-    from sqlalchemy import create_engine
-    engine = create_engine(DATABASE_URL)
+    from datasource.database import get_engine
+    engine = get_engine()
     with engine.begin() as conn:
         conn.execute(text(ADJ_FACTOR_DDL))
 
@@ -179,8 +178,7 @@ def incremental_update_adj_factor(ts_codes: list = None, sleep_sec: float = 0.3,
     Returns:
         更新的记录数
     """
-    from config import DATABASE_URL
-    from sqlalchemy import create_engine
+    from datasource.database import get_engine
     from tqdm import tqdm
     import re
 
@@ -192,7 +190,7 @@ def incremental_update_adj_factor(ts_codes: list = None, sleep_sec: float = 0.3,
             pool_df = query_df(session, "stock_pools", columns=["ts_code"])
             ts_codes = pool_df["ts_code"].tolist()
 
-    engine = create_engine(DATABASE_URL)
+    engine = get_engine()
 
     batch_size = 50
     total = 0
@@ -285,12 +283,11 @@ def apply_adj_factor(df: pd.DataFrame, ts_code: str, freq: str = "d") -> pd.Data
     if df.empty:
         return df
 
-    from config import DATABASE_URL
-    from sqlalchemy import create_engine
+    from datasource.database import get_engine
 
     ensure_adj_factor_table()
 
-    engine = create_engine(DATABASE_URL)
+    engine = get_engine()
 
     with engine.begin() as conn:
         adj_df = pd.read_sql(
@@ -358,12 +355,11 @@ def apply_adj_factor_intraday(df: pd.DataFrame, ts_code: str) -> pd.DataFrame:
     if df.empty:
         return df
 
-    from config import DATABASE_URL
-    from sqlalchemy import create_engine
+    from datasource.database import get_engine
 
     ensure_adj_factor_table()
 
-    engine = create_engine(DATABASE_URL)
+    engine = get_engine()
 
     with engine.begin() as conn:
         adj_df = pd.read_sql(
@@ -420,12 +416,11 @@ def test_adj_factor(ts_code: str):
     """
     from tushare_data.config import TS_TOKEN
     import tushare as ts
-    from config import DATABASE_URL
-    from sqlalchemy import create_engine
+    from datasource.database import get_engine
 
     ensure_adj_factor_table()
 
-    engine = create_engine(DATABASE_URL)
+    engine = get_engine()
 
     with engine.begin() as conn:
         db_df = pd.read_sql(

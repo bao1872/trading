@@ -19,6 +19,7 @@ Side Effects:
 """
 import os
 import sys
+import logging
 import importlib.util
 import datetime
 from typing import Dict, List, Optional
@@ -1119,13 +1120,23 @@ TAB_FIELD_CONFIGS = {
         }
     },
     "自选股": {
-        "fields": ["ts_code", "stock_name", "change_pct", "offset_mean", "offset_std", "offset_percentile"],
-        "types": {"ts_code": "string", "stock_name": "string",
-                  "change_pct": "numeric", "offset_mean": "numeric",
-                  "offset_std": "numeric", "offset_percentile": "numeric"},
-        "string_fields": ["ts_code", "stock_name"],
-        "display_names": {"ts_code": "股票代码", "stock_name": "股票名称",
+        "fields": ["ts_code", "stock_name", "hype_logic", "change_pct",
+                   "nearest_above_node_price", "nearest_below_node_price",
+                   "node_deviation_pct",
+                   "offset_mean", "offset_std", "offset_percentile"],
+        "types": {"ts_code": "string", "stock_name": "string", "hype_logic": "string",
+                  "change_pct": "numeric",
+                  "nearest_above_node_price": "numeric",
+                  "nearest_below_node_price": "numeric",
+                  "node_deviation_pct": "numeric",
+                  "offset_mean": "numeric", "offset_std": "numeric",
+                  "offset_percentile": "numeric"},
+        "string_fields": ["ts_code", "stock_name", "hype_logic"],
+        "display_names": {"ts_code": "股票代码", "stock_name": "股票名称", "hype_logic": "炒作逻辑",
                          "change_pct": "涨跌幅%",
+                         "nearest_above_node_price": "上方节点",
+                         "nearest_below_node_price": "下方节点",
+                         "node_deviation_pct": "节点偏移率%",
                          "offset_mean": "偏移均值", "offset_std": "偏移标准差",
                          "offset_percentile": "偏移百分位"}
     }
@@ -1341,7 +1352,7 @@ def load_stop_loss_results(session, selection_date: str = None) -> pd.DataFrame:
     try:
         df = query_sql(session, sql, {"prediction_date": selection_date})
         if not df.empty and "ts_code" in df.columns:
-            change_map = compute_change_pct_for_date(session, selection_date, df["ts_code"].tolist())
+            change_map = _compute_change_pct_cached(selection_date, tuple(df["ts_code"].tolist()))
             df["change_pct"] = df["ts_code"].map(change_map).fillna(0.0)
         return df
     except Exception as e:
@@ -1349,9 +1360,16 @@ def load_stop_loss_results(session, selection_date: str = None) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def compute_change_pct_for_date(session, prediction_date: str, ts_codes: list) -> dict:
-    """
-    批量计算指定日期所有股票的涨跌幅（前复权）
+@st.cache_data(ttl=300, show_spinner=False)
+def _compute_change_pct_cached(prediction_date: str, ts_codes: tuple) -> dict:
+    """缓存层：按日期+股票代码元组缓存涨跌幅计算结果"""
+    from datasource.database import get_session
+    with get_session() as session:
+        return _compute_change_pct_impl(session, prediction_date, list(ts_codes))
+
+
+def _compute_change_pct_impl(session, prediction_date: str, ts_codes: list) -> dict:
+    """批量计算指定日期所有股票的涨跌幅（前复权）
 
     使用 adj_factor 将不复权 close 转换为前复权价格后再计算涨跌幅，
     确保除权除息日涨跌幅正确。
@@ -1383,10 +1401,12 @@ def compute_change_pct_for_date(session, prediction_date: str, ts_codes: list) -
             return {}
         kline = kline.sort_values(["ts_code", "bar_time"])
         # 前复权转换：前复权价格 = 不复权价格 × (adj_factor / 最新adj_factor)
+        # 当日 adj_factor 可能为 NULL（尚未更新），用 ffill 向前填充
+        kline["adj_factor"] = kline.groupby("ts_code")["adj_factor"].ffill()
         latest_adj = kline.groupby("ts_code")["adj_factor"].transform("last")
         kline["qfq_close"] = kline["close"] * (kline["adj_factor"] / latest_adj)
         kline["prev_qfq_close"] = kline.groupby("ts_code")["qfq_close"].shift(1)
-        latest = kline.dropna(subset=["prev_qfq_close"]).groupby("ts_code").last().reset_index()
+        latest = kline.dropna(subset=["prev_qfq_close", "qfq_close"]).groupby("ts_code").last().reset_index()
         latest["change_pct"] = np.where(
             (latest["prev_qfq_close"] > 0) & (latest["qfq_close"] > 0),
             np.round((latest["qfq_close"] - latest["prev_qfq_close"]) / latest["prev_qfq_close"] * 100, 2),
@@ -1435,7 +1455,7 @@ def load_sr_selection_results(session, selection_date: str = None, freq: str = "
     try:
         df = query_sql(session, sql, {"selection_date": selection_date, "freq": freq})
         if not df.empty and "ts_code" in df.columns:
-            change_map = compute_change_pct_for_date(session, selection_date, df["ts_code"].tolist())
+            change_map = _compute_change_pct_cached(selection_date, tuple(df["ts_code"].tolist()))
             df["change_pct"] = df["ts_code"].map(change_map).fillna(0.0)
         return df
     except Exception as e:
@@ -1493,15 +1513,16 @@ SCENARIO_DISPLAY = {
 
 
 def load_watchlist_data(session) -> pd.DataFrame:
-    """加载自选股数据，关联 dsa_selection 获取 offset 统计指标
+    """加载自选股数据，关联 dsa_selection 获取偏移指标，实时计算节点价格
 
     Returns:
-        DataFrame: 自选股列表（含涨跌幅、偏移均值、偏移标准差、偏移百分位）
+        DataFrame: 自选股列表（含涨跌幅、节点价格、偏移率、偏移统计指标）
     """
     sql = """
         SELECT
             w.ts_code,
             w.stock_name,
+            w.hype_logic,
             d.offset_mean,
             d.offset_std,
             d.offset_percentile
@@ -1515,25 +1536,152 @@ def load_watchlist_data(session) -> pd.DataFrame:
         if not df.empty and "ts_code" in df.columns:
             full_codes = [_format_ts_code(c) for c in df["ts_code"].tolist()]
             today_str = datetime.date.today().strftime("%Y-%m-%d")
-            change_map = compute_change_pct_for_date(session, today_str, full_codes)
+            change_map = _compute_change_pct_cached(today_str, tuple(full_codes))
             df["change_pct"] = df["ts_code"].map(
                 {c: change_map.get(_format_ts_code(c), 0.0) for c in df["ts_code"].tolist()}
             ).fillna(0.0)
+            # 实时计算节点价格（调用 SSOT）
+            node_map = _compute_node_prices_batch(tuple(df["ts_code"].tolist()))
+            df["nearest_above_node_price"] = df["ts_code"].map(
+                {c: node_map.get(c, {}).get("nearest_above_node_price") for c in df["ts_code"].tolist()}
+            )
+            df["nearest_below_node_price"] = df["ts_code"].map(
+                {c: node_map.get(c, {}).get("nearest_below_node_price") for c in df["ts_code"].tolist()}
+            )
+            df["today_close"] = df["ts_code"].map(
+                {c: node_map.get(c, {}).get("today_close") for c in df["ts_code"].tolist()}
+            )
+            df["touched_node_price"] = df["ts_code"].map(
+                {c: node_map.get(c, {}).get("touched_node_price") for c in df["ts_code"].tolist()}
+            )
+            # 计算节点偏移率：以最近一次K线碰触的节点为参考
+            df["node_deviation_pct"] = df.apply(_calc_node_deviation, axis=1)
         return df
     except Exception as e:
         st.error(f"加载自选股数据失败: {e}")
         return pd.DataFrame()
 
 
-def add_to_watchlist(session, ts_code: str, stock_name: str):
+def _find_touched_node_price(daily_df: pd.DataFrame, above_price, below_price, current_close: float) -> Optional[float]:
+    """从最近K线往前回溯，找到最近一次碰触上方或下方节点的K线，返回被碰触的节点价格
+
+    碰触定义：K线 high ≥ above_price → 碰触上方节点；K线 low ≤ below_price → 碰触下方节点。
+    同一根K线同时碰触上下节点时，取距离当前价更近的节点。
+    """
+    if above_price is None and below_price is None:
+        return None
+
+    highs = daily_df["high"].to_numpy(dtype=float)
+    lows = daily_df["low"].to_numpy(dtype=float)
+
+    touched_above = above_price is not None and highs >= above_price
+    touched_below = below_price is not None and lows <= below_price
+
+    # 从末尾往前找第一个碰触
+    for i in range(len(daily_df) - 1, -1, -1):
+        if touched_above[i] and touched_below[i]:
+            return above_price if abs(current_close - above_price) <= abs(current_close - below_price) else below_price
+        elif touched_above[i]:
+            return above_price
+        elif touched_below[i]:
+            return below_price
+
+    return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _compute_node_prices_batch(ts_codes: tuple) -> dict:
+    """批量计算自选股的上方/下方节点价格及最近碰触节点（调用 SSOT extract_nearest_nodes）
+
+    与筹码峰标签页使用完全相同的计算路径：日线价格范围 + 15分钟成交量分配。
+
+    Args:
+        ts_codes: 股票代码元组（用于缓存 hash）
+
+    Returns:
+        dict: {ts_code: {nearest_above_node_price, nearest_below_node_price, today_close, touched_node_price}}
+    """
+    from features.luxalgo_volume_profile_pytdx_15m_aligned import (
+        compute_volume_profile,
+        VolumeProfileConfig,
+        extract_nearest_nodes,
+    )
+    from datasource.adj_factor import apply_adj_factor_intraday
+
+    cfg = VolumeProfileConfig(
+        profile_lookback_length=360,
+        profile_number_of_rows=100,
+        value_area_threshold=0.70,
+        peaks_show="peaks",
+    )
+    result_map = {}
+
+    for ts_code in ts_codes:
+        try:
+            daily_df = get_kline_data_from_db(ts_code, "d", bars=1500, adj="qfq")
+            if daily_df.empty or len(daily_df) < 60:
+                continue
+
+            # 加载15分钟数据并前复权（与筹码峰标签页一致）
+            ltf_df = get_kline_data_from_db(ts_code, "15m", bars=7000)
+            if ltf_df is not None and isinstance(ltf_df, pd.DataFrame) and not ltf_df.empty:
+                if "bar_time" in ltf_df.columns:
+                    ltf_df = ltf_df.set_index("bar_time")
+                ltf_df = apply_adj_factor_intraday(ltf_df, ts_code)
+                ltf_df["datetime"] = ltf_df.index
+
+            # 确保 daily_df 有 datetime 列
+            if "datetime" not in daily_df.columns:
+                if "bar_time" in daily_df.columns:
+                    daily_df["datetime"] = pd.to_datetime(daily_df["bar_time"])
+                else:
+                    daily_df["datetime"] = pd.to_datetime(daily_df.index)
+
+            vp = compute_volume_profile(daily_df, cfg=cfg, profile_df=ltf_df, main_period="day")
+            current_close = float(daily_df["close"].iloc[-1])
+            nodes = extract_nearest_nodes(vp, reference_price=current_close)
+
+            above_price = round(nodes["nearest_above_node_price"], 2) if nodes["nearest_above_node_price"] is not None else None
+            below_price = round(nodes["nearest_below_node_price"], 2) if nodes["nearest_below_node_price"] is not None else None
+
+            # 回溯K线找最近碰触的节点
+            touched_node_price = _find_touched_node_price(daily_df, above_price, below_price, current_close)
+
+            result_map[ts_code] = {
+                "nearest_above_node_price": above_price,
+                "nearest_below_node_price": below_price,
+                "today_close": current_close,
+                "touched_node_price": touched_node_price,
+            }
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"节点价格计算失败 {ts_code}: {type(e).__name__}: {e}")
+            continue
+
+    return result_map
+
+
+def _calc_node_deviation(row) -> Optional[float]:
+    """计算节点偏移率：以最近一次K线碰触的节点为参考
+
+    偏移率 = (当前价 - 被碰触节点价) / 被碰触节点价 × 100%
+    被碰触节点由 _find_touched_node_price 回溯K线确定。
+    """
+    close = row.get("today_close")
+    touched = row.get("touched_node_price")
+    if close is None or touched is None:
+        return None
+    return round((close - touched) / touched * 100, 2)
+
+
+def add_to_watchlist(session, ts_code: str, stock_name: str, hype_logic: str = ''):
     """添加股票到自选股列表（幂等，已存在则跳过）"""
     from sqlalchemy import text
     sql = text("""
-        INSERT INTO stock_watchlist (ts_code, stock_name, is_monitored)
-        VALUES (:ts_code, :stock_name, TRUE)
+        INSERT INTO stock_watchlist (ts_code, stock_name, is_monitored, hype_logic)
+        VALUES (:ts_code, :stock_name, TRUE, :hype_logic)
         ON CONFLICT (ts_code) DO NOTHING
     """)
-    session.execute(sql, {"ts_code": ts_code, "stock_name": stock_name})
+    session.execute(sql, {"ts_code": ts_code, "stock_name": stock_name, "hype_logic": hype_logic})
     session.commit()
 
 
@@ -3558,9 +3706,9 @@ def _render_volume_profile_tab(ts_code: str, stock_name: str, key_prefix: str):
     except Exception as e:
         st.error(f"图表渲染失败：{e}")
 
-    # 显示筹码峰价格信息
-    if result.profile_df is not None and not result.profile_df.empty:
-        peak_rows = result.profile_df[result.profile_df["is_peak"]]
+    # 显示筹码峰价格信息（使用 result.peak_df，SSOT：禁止外部 is_peak 过滤）
+    if result.peak_df is not None and not result.peak_df.empty:
+        peak_rows = result.peak_df
         if not peak_rows.empty:
             st.subheader("筹码峰价格")
             peak_data = []
@@ -3879,6 +4027,11 @@ def render_watchlist_page(session, sidebar):
     available_cols = [display_names[f] for f in config["fields"] if display_names[f] in display_df.columns]
     display_df = display_df[available_cols]
 
+    # 节点价格和偏移率保持数值类型，用 Styler 格式化显示
+    above_col = display_names.get("nearest_above_node_price", "上方节点")
+    below_col = display_names.get("nearest_below_node_price", "下方节点")
+    dev_col = display_names.get("node_deviation_pct", "节点偏移率%")
+
     numeric_cols = [
         display_names.get("change_pct", "涨跌幅%"),
         display_names.get("pred_return", "预测收益"),
@@ -3895,10 +4048,21 @@ def render_watchlist_page(session, sidebar):
         display_names.get("lower_value", "箱体下轨"),
         display_names.get("upper_value", "箱体上轨"),
         display_names.get("avg_amount_20d", "20日均额(亿)"),
+        above_col, below_col, dev_col,
     ]
     numeric_cols = [c for c in numeric_cols if c in display_df.columns]
 
     is_batch_mode = st.session_state.get("watchlist_batch_mode", False)
+
+    # 构建 column_config：节点价格保留2位小数，偏移率带正负号和%
+    col_config = {}
+    if above_col in display_df.columns:
+        col_config[above_col] = st.column_config.NumberColumn(format="%.2f")
+    if below_col in display_df.columns:
+        col_config[below_col] = st.column_config.NumberColumn(format="%.2f")
+    if dev_col in display_df.columns:
+        col_config[dev_col] = st.column_config.NumberColumn(format="%+.2f%%")
+
     event = st.dataframe(
         colorize_numeric_columns_simple(display_df.reset_index(drop=True), numeric_cols),
         use_container_width=True,
@@ -3906,6 +4070,7 @@ def render_watchlist_page(session, sidebar):
         on_select="rerun",
         selection_mode="multi-row" if is_batch_mode else "single-row",
         height=500,
+        column_config=col_config,
     )
 
     # 批量删除模式：多选后显示已选列表 + 批量删除按钮

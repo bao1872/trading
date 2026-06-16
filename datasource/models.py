@@ -866,7 +866,8 @@ CREATE TABLE IF NOT EXISTS stock_watchlist (
     core_driver VARCHAR(100) DEFAULT '',
     second_deriv_type TEXT DEFAULT '',
     key_strength TEXT DEFAULT '',
-    main_risk TEXT DEFAULT ''
+    main_risk TEXT DEFAULT '',
+    hype_logic TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_watchlist_ts_code ON stock_watchlist(ts_code);
 """

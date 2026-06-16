@@ -108,7 +108,7 @@ TRIGGER_EMOJI = {k: v["emoji"] for k, v in EVENT_COLOR_MAP.items()}
 VP_LOOKBACK = 360
 VP_ROWS = 100
 VP_VALUE_AREA_PCT = 0.70
-VP_PEAK_DETECTION_PCT = 0.09
+VP_PEAK_DETECTION_PCT = 0.05
 VP_NODE_THRESHOLD_PCT = 0.01
 
 # 通知冷却：同一信号在冷却期内不重复推送
@@ -291,6 +291,7 @@ def get_monitored_stocks(session) -> list:
             w.second_deriv_type,
             w.key_strength,
             w.main_risk,
+            w.hype_logic,
             p.total_market_cap / 100000000.0 AS total_market_cap,
             pred.pred_sell_reg,
             pred.pred_sell_cls,
@@ -325,6 +326,7 @@ def get_monitored_stocks(session) -> list:
             'second_deriv_type': row['second_deriv_type'] or '',
             'key_strength': row['key_strength'] or '',
             'main_risk': row['main_risk'] or '',
+            'hype_logic': row['hype_logic'] or '',
             'total_market_cap': round(float(row['total_market_cap']), 1) if row['total_market_cap'] else 0.0,
             'pred_sell_reg': round(float(row['pred_sell_reg']), 3) if row['pred_sell_reg'] is not None else None,
             'pred_sell_cls': round(float(row['pred_sell_cls']), 3) if row['pred_sell_cls'] is not None else None,
@@ -549,28 +551,14 @@ def detect_bb_signals(daily_df: pd.DataFrame, m1_df: pd.DataFrame = None,
 def compute_node_cluster_prices(result: VolumeProfileResult) -> List[float]:
     """从 VolumeProfileResult 提取节点集群对应的价格列表
 
-    使用 profile_df 中 is_peak=True 的行，取 price_mid。
-    与新模块默认 peaks_show="peaks" 保持一致。
+    直接使用 result.all_peak_prices（SSOT：由 compute_volume_profile 计算）。
 
     Args:
         result: compute_volume_profile() 返回的 VolumeProfileResult
     Returns:
         去重排序后的价格列表
     """
-    if result.profile_df is None or result.profile_df.empty:
-        return []
-
-    peak_rows = result.profile_df[result.profile_df["is_peak"]]
-    if peak_rows.empty:
-        return []
-
-    prices = []
-    for _, row in peak_rows.iterrows():
-        p = float(row["price_mid"])
-        if np.isfinite(p):
-            prices.append(round(p, 4))
-
-    return sorted(set(prices))
+    return result.all_peak_prices
 
 
 def detect_node_cluster_signals(m1_df: pd.DataFrame, profile: VolumeProfileResult,
@@ -814,7 +802,7 @@ def render_monitoring_chart(
 
     # 筹码峰价格标签 + 多空量标签（右侧标注）
     if profile_anchor is not None:
-        peak_rows = profile.profile_df[profile.profile_df["is_peak"]]
+        peak_rows = profile.peak_df if profile.peak_df is not None else pd.DataFrame()
         label_x = profile_anchor + 1
         for _, row in peak_rows.iterrows():
             price_mid = float(row["price_mid"])
@@ -992,6 +980,11 @@ def generate_monitoring_card(all_stocks: List[Dict],
         title_md = f"**{name} {code}**  {priority}  {score}分\n涨跌 {change_str}%  市值 {cap:.0f}亿"
         elements.append({"tag": "markdown", "content": title_md})
 
+        # 炒作逻辑（仅非空时显示）
+        hype_logic = stock.get('hype_logic', '')
+        if hype_logic:
+            elements.append({"tag": "markdown", "content": f"💡 {hype_logic}"})
+
         # 触发信号详情
         for sig in signals:
             emoji = TRIGGER_EMOJI.get(sig["trigger_type"], "📌")
@@ -1108,33 +1101,44 @@ def run_monitor(dry_run: bool = False):
         all_signals.extend(bb_signals)
 
         # 6b. 节点集群信号检测
+        # 与 UI（筹码峰标签页/自选股表格）使用完全一致的计算方式：
+        #   日线作为主周期（价格范围+lookback），15分钟线作为 profile_df（成交量分配）
         ltf_df = ltf_data.get(ts_code)
         node_signals = []
         profile = None
         if ltf_df is not None and not ltf_df.empty and len(daily_df) >= 2:
             try:
-                # compute_volume_profile 需要 DataFrame 带 datetime 列（非索引）
-                ltf_for_vp = ltf_df.reset_index()
+                # 准备日线数据（需 datetime 列）
+                daily_for_vp = daily_df.reset_index()
+                if "datetime" not in daily_for_vp.columns:
+                    for col in ["index", "date", "time"]:
+                        if col in daily_for_vp.columns:
+                            daily_for_vp = daily_for_vp.rename(columns={col: "datetime"})
+                            break
+                if "datetime" not in daily_for_vp.columns:
+                    raise ValueError("日线无法确定 datetime 列")
 
-                # reset_index 后列名可能是 "index" 而非 "datetime"
+                # 准备15分钟数据（需 datetime 列）
+                ltf_for_vp = ltf_df.reset_index()
                 if "datetime" not in ltf_for_vp.columns:
                     for col in ["index", "date", "time"]:
                         if col in ltf_for_vp.columns:
                             ltf_for_vp = ltf_for_vp.rename(columns={col: "datetime"})
                             break
-
                 if "datetime" not in ltf_for_vp.columns:
-                    raise ValueError("无法确定 datetime 列")
+                    raise ValueError("15分钟线无法确定 datetime 列")
 
                 vp_cfg = VolumeProfileConfig(
-                    profile_lookback_length=len(ltf_for_vp),
+                    profile_lookback_length=VP_LOOKBACK,
                     profile_number_of_rows=VP_ROWS,
                     value_area_threshold=VP_VALUE_AREA_PCT,
                     peaks_show="peaks",
                     peaks_detection_percent=VP_PEAK_DETECTION_PCT,
                     volume_node_threshold=VP_NODE_THRESHOLD_PCT,
                 )
-                profile = compute_volume_profile(ltf_for_vp, cfg=vp_cfg)
+                profile = compute_volume_profile(
+                    daily_for_vp, cfg=vp_cfg, profile_df=ltf_for_vp, main_period="day"
+                )
                 node_signals = detect_node_cluster_signals(m1_df, profile, freq="d")
                 all_signals.extend(node_signals)
             except Exception as e:
@@ -1446,28 +1450,43 @@ def test_last_triggered():
                     'low': cur_low,
                 })
 
-        # 4b. 检测节点集群信号
+        # 4b. 检测节点集群信号（与 UI 使用完全一致的计算方式）
         ltf_df = ltf_data.get(ts_code)
         node_triggered_bars = []
         profile = None
         if ltf_df is not None and not ltf_df.empty and len(daily_df) >= 2:
             try:
+                # 准备日线数据（需 datetime 列）
+                daily_for_vp = daily_df.reset_index()
+                if 'datetime' not in daily_for_vp.columns:
+                    for col in ["index", "date", "time"]:
+                        if col in daily_for_vp.columns:
+                            daily_for_vp = daily_for_vp.rename(columns={col: "datetime"})
+                            break
+                if 'datetime' not in daily_for_vp.columns:
+                    raise ValueError("日线无法确定 datetime 列")
+
+                # 准备15分钟数据（需 datetime 列）
                 ltf_for_vp = ltf_df.reset_index()
                 if 'datetime' not in ltf_for_vp.columns:
                     for col in ["index", "date", "time"]:
                         if col in ltf_for_vp.columns:
                             ltf_for_vp = ltf_for_vp.rename(columns={col: "datetime"})
                             break
-                if 'datetime' in ltf_for_vp.columns:
-                    vp_cfg = VolumeProfileConfig(
-                        profile_lookback_length=VP_LOOKBACK,
-                        profile_number_of_rows=VP_ROWS,
-                        value_area_threshold=VP_VALUE_AREA_PCT,
-                        peaks_show="peaks",
-                        peaks_detection_percent=VP_PEAK_DETECTION_PCT,
-                        volume_node_threshold=VP_NODE_THRESHOLD_PCT,
-                    )
-                    profile = compute_volume_profile(ltf_for_vp, cfg=vp_cfg)
+                if 'datetime' not in ltf_for_vp.columns:
+                    raise ValueError("15分钟线无法确定 datetime 列")
+
+                vp_cfg = VolumeProfileConfig(
+                    profile_lookback_length=VP_LOOKBACK,
+                    profile_number_of_rows=VP_ROWS,
+                    value_area_threshold=VP_VALUE_AREA_PCT,
+                    peaks_show="peaks",
+                    peaks_detection_percent=VP_PEAK_DETECTION_PCT,
+                    volume_node_threshold=VP_NODE_THRESHOLD_PCT,
+                )
+                profile = compute_volume_profile(
+                    daily_for_vp, cfg=vp_cfg, profile_df=ltf_for_vp, main_period="day"
+                )
             except Exception as e:
                 logger.warning(f"volume_profile 计算失败 {ts_code}: {e}")
 
