@@ -277,11 +277,16 @@ def apply_adj_factor(df: pd.DataFrame, ts_code: str, freq: str = "d") -> pd.Data
     Returns:
         前复权后的 DataFrame（volume 不变，OHLC 调整）
     """
+    import logging
+    _log = logging.getLogger("adj_factor")
+
     if freq not in ("d", "w"):
         return df
 
     if df.empty:
         return df
+
+    high_before = float(df["high"].max())
 
     from datasource.database import get_engine
 
@@ -298,12 +303,16 @@ def apply_adj_factor(df: pd.DataFrame, ts_code: str, freq: str = "d") -> pd.Data
         )
 
     if adj_df.empty:
+        _log.warning(f"[前复权] {ts_code} adj_factor 表无数据，跳过复权 "
+                     f"(high_max={high_before:.2f})")
         return df
 
     adj_df["trade_date"] = pd.to_datetime(adj_df["trade_date"])
 
     latest_adj = float(adj_df["adj_factor"].iloc[-1])
     if latest_adj == 0:
+        _log.warning(f"[前复权] {ts_code} latest_adj=0，跳过复权 "
+                     f"(high_max={high_before:.2f})")
         return df
 
     adj_map = dict(zip(adj_df["trade_date"], adj_df["adj_factor"]))
@@ -315,6 +324,7 @@ def apply_adj_factor(df: pd.DataFrame, ts_code: str, freq: str = "d") -> pd.Data
     df["_adj"] = df.index.normalize().map(adj_map)
 
     missing_adj = df["_adj"].isna()
+    missing_count = int(missing_adj.sum())
     if missing_adj.any():
         adj_sorted = adj_df.set_index("trade_date")["adj_factor"].sort_index()
         for idx in df.index[missing_adj]:
@@ -331,6 +341,11 @@ def apply_adj_factor(df: pd.DataFrame, ts_code: str, freq: str = "d") -> pd.Data
             df[col] = df[col] * ratio
 
     df = df.drop(columns=["_adj"])
+
+    high_after = float(df["high"].max())
+    _log.info(f"[前复权] {ts_code} freq={freq} latest_adj={latest_adj:.4f} "
+              f"adj_records={len(adj_df)} missing_dates={missing_count} "
+              f"high_max: {high_before:.2f} -> {high_after:.2f}")
 
     return df
 
@@ -352,8 +367,13 @@ def apply_adj_factor_intraday(df: pd.DataFrame, ts_code: str) -> pd.DataFrame:
     Returns:
         前复权后的 DataFrame（volume 不变，OHLC 调整）
     """
+    import logging
+    _log = logging.getLogger("adj_factor")
+
     if df.empty:
         return df
+
+    high_before = float(df["high"].max())
 
     from datasource.database import get_engine
 
@@ -370,12 +390,16 @@ def apply_adj_factor_intraday(df: pd.DataFrame, ts_code: str) -> pd.DataFrame:
         )
 
     if adj_df.empty:
+        _log.warning(f"[前复权-分钟] {ts_code} adj_factor 表无数据，跳过复权 "
+                     f"(high_max={high_before:.2f})")
         return df
 
     adj_df["trade_date"] = pd.to_datetime(adj_df["trade_date"])
 
     latest_adj = float(adj_df["adj_factor"].iloc[-1])
     if latest_adj == 0:
+        _log.warning(f"[前复权-分钟] {ts_code} latest_adj=0，跳过复权 "
+                     f"(high_max={high_before:.2f})")
         return df
 
     adj_map = dict(zip(adj_df["trade_date"], adj_df["adj_factor"]))
@@ -387,6 +411,7 @@ def apply_adj_factor_intraday(df: pd.DataFrame, ts_code: str) -> pd.DataFrame:
     df["_adj"] = df.index.normalize().map(adj_map)
 
     missing_adj = df["_adj"].isna()
+    missing_count = int(missing_adj.sum())
     if missing_adj.any():
         adj_sorted = adj_df.set_index("trade_date")["adj_factor"].sort_index()
         for idx in df.index[missing_adj]:
@@ -403,6 +428,11 @@ def apply_adj_factor_intraday(df: pd.DataFrame, ts_code: str) -> pd.DataFrame:
             df[col] = df[col] * ratio
 
     df = df.drop(columns=["_adj"])
+
+    high_after = float(df["high"].max())
+    _log.info(f"[前复权-分钟] {ts_code} latest_adj={latest_adj:.4f} "
+              f"adj_records={len(adj_df)} missing_dates={missing_count} "
+              f"high_max: {high_before:.2f} -> {high_after:.2f}")
 
     return df
 

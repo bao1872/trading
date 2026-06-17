@@ -711,23 +711,44 @@ def start_bb_node_monitor_task():
     logger.info(f"启动 BB+节点 自选股监控子进程 - {now_str}")
     logger.info("=" * 60)
 
-    # 文件锁互斥检查（验证对应进程是否真正存活）
+    # 文件锁互斥检查（读取 PID 并验证进程是否存活）
     lock_file = "/tmp/bb_node_monitor.lock"
     if Path(lock_file).exists():
-        # 读取锁文件中的 PID，验证进程是否存活
+        should_skip = True
         try:
-            lock_pid = int(Path(lock_file).read_text().strip())
-            import os
+            pid_str = Path(lock_file).read_text().strip()
+            if pid_str:
+                old_pid = int(pid_str)
+                os.kill(old_pid, 0)  # 验证进程是否存活（不发送信号）
+                # 进程存活，跳过启动
+                logger.warning(f"锁文件 {lock_file} 存在且进程 {old_pid} 存活，跳过启动")
+            else:
+                # 锁文件为空，删除并继续
+                logger.warning(f"锁文件 {lock_file} 存在但无 PID，删除并继续")
+                os.unlink(lock_file)
+                should_skip = False
+        except (ValueError, ProcessLookupError):
+            # PID 无效或进程不存在，删除残留锁文件并继续
+            logger.warning(f"锁文件 {lock_file} 存在但进程不存在，删除残留锁文件")
             try:
-                os.kill(lock_pid, 0)  # 检查进程是否存在（不发送信号）
-                logger.warning(f"锁文件 {lock_file} 已存在且进程 {lock_pid} 仍在运行，跳过启动")
-                return
-            except (ProcessLookupError, OSError):
-                logger.warning(f"锁文件 {lock_file} 存在但进程 {lock_pid} 已退出，清理残留锁文件")
-                Path(lock_file).unlink(missing_ok=True)
-        except (ValueError, FileNotFoundError):
-            logger.warning(f"锁文件 {lock_file} 存在但无法读取 PID，清理残留锁文件")
-            Path(lock_file).unlink(missing_ok=True)
+                os.unlink(lock_file)
+            except OSError:
+                pass
+            should_skip = False
+        except PermissionError:
+            # 进程存在但无权限发送信号，视为存活
+            logger.warning(f"锁文件 {lock_file} 存在且进程 {pid_str} 存活（无权限验证），跳过启动")
+        except OSError:
+            # 其他 OS 错误，删除锁文件并继续
+            logger.warning(f"锁文件 {lock_file} 检查异常，删除并继续")
+            try:
+                os.unlink(lock_file)
+            except OSError:
+                pass
+            should_skip = False
+
+        if should_skip:
+            return
 
     try:
         # 确保日志目录存在
