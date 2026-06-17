@@ -1574,8 +1574,8 @@ def _find_touched_node_price(daily_df: pd.DataFrame, above_price, below_price, c
     highs = daily_df["high"].to_numpy(dtype=float)
     lows = daily_df["low"].to_numpy(dtype=float)
 
-    touched_above = above_price is not None and highs >= above_price
-    touched_below = below_price is not None and lows <= below_price
+    touched_above = (highs >= above_price) if above_price is not None else np.zeros(len(daily_df), dtype=bool)
+    touched_below = (lows <= below_price) if below_price is not None else np.zeros(len(daily_df), dtype=bool)
 
     # 从末尾往前找第一个碰触
     for i in range(len(daily_df) - 1, -1, -1):
