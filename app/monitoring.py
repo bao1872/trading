@@ -261,6 +261,10 @@ def fetch_all_kline(ts_codes: List[str], freq: str, bars: int = 500,
                     if freq in ('d', 'w'):
                         from datasource.adj_factor import apply_adj_factor
                         kline = apply_adj_factor(kline, ts_code, freq=freq)
+                    # 分钟级数据做前复权，与日线前复权价格对齐
+                    elif freq in ('15m', '30m', '60m', '1m', '5m'):
+                        from datasource.adj_factor import apply_adj_factor_intraday
+                        kline = apply_adj_factor_intraday(kline, ts_code)
                     result[ts_code] = kline
         except Exception as e:
             logger.warning(f"获取 {ts_code} {freq} K线失败: {e}")
@@ -1269,6 +1273,10 @@ def start_scheduled_monitor():
         logger.warning("另一个监控进程已在运行，退出")
         lock_fd.close()
         return
+
+    # 写入当前 PID，供 scheduler 验证进程是否存活
+    lock_fd.write(str(os.getpid()))
+    lock_fd.flush()
 
     logger.info("监控系统启动，等待交易时段...")
 

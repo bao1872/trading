@@ -711,11 +711,23 @@ def start_bb_node_monitor_task():
     logger.info(f"启动 BB+节点 自选股监控子进程 - {now_str}")
     logger.info("=" * 60)
 
-    # 文件锁互斥检查
+    # 文件锁互斥检查（验证对应进程是否真正存活）
     lock_file = "/tmp/bb_node_monitor.lock"
     if Path(lock_file).exists():
-        logger.warning(f"锁文件 {lock_file} 已存在，跳过启动（已有监控进程在运行）")
-        return
+        # 读取锁文件中的 PID，验证进程是否存活
+        try:
+            lock_pid = int(Path(lock_file).read_text().strip())
+            import os
+            try:
+                os.kill(lock_pid, 0)  # 检查进程是否存在（不发送信号）
+                logger.warning(f"锁文件 {lock_file} 已存在且进程 {lock_pid} 仍在运行，跳过启动")
+                return
+            except (ProcessLookupError, OSError):
+                logger.warning(f"锁文件 {lock_file} 存在但进程 {lock_pid} 已退出，清理残留锁文件")
+                Path(lock_file).unlink(missing_ok=True)
+        except (ValueError, FileNotFoundError):
+            logger.warning(f"锁文件 {lock_file} 存在但无法读取 PID，清理残留锁文件")
+            Path(lock_file).unlink(missing_ok=True)
 
     try:
         # 确保日志目录存在
